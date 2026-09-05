@@ -98,5 +98,350 @@ function Get-PythonVersion {
     }
 }
 
-Export-ModuleMember -Function Invoke-CommandLine, Find-Executable, `
-    Compare-VersionAtLeast, Get-PythonVersion
+# where.exe x64dbg resolves the Chocolatey SHIM (C:\ProgramData\chocolatey\bin\
+# x64dbg.exe). Deriving a release root from that yields C:\ProgramData\chocolatey,
+# which is wrong, so real install paths are probed first and shims are rejected.
+$Script:X64dbgCandidates = @(
+    'C:\Tools\x64dbg\release\x64\x64dbg.exe',
+    'C:\ProgramData\chocolatey\lib\x64dbg.vm\tools\release\x64\x64dbg.exe',
+    'C:\ProgramData\chocolatey\lib\x64dbg\tools\release\x64\x64dbg.exe'
+)
+
+# FLARE-VM's Chocolatey package unzips one level deeper than a manual install:
+# ...\lib\ghidra\tools\ghidra_<version>_PUBLIC.
+$Script:GhidraSearchRoots = @(
+    'C:\Tools',
+    'C:\ProgramData\chocolatey\lib\ghidra\tools',
+    'C:\ProgramData\chocolatey\lib\ghidra.vm\tools'
+)
+
+function Test-FileContainsAscii {
+    <#
+    .SYNOPSIS
+        True when a file contains the given ASCII string. Exists as a mock seam.
+    .DESCRIPTION
+        Streams the file in overlapping chunks rather than loading it whole:
+        binaryninja.exe is tens of megabytes and this box has 8 GB of RAM.
+        The overlap stops a match being missed across a chunk boundary.
+    .PARAMETER Path
+        File to scan.
+    .PARAMETER Value
+        ASCII string to look for.
+    .EXAMPLE
+        Test-FileContainsAscii -Path 'binaryninja.exe' -Value 'ui.mcp.enabled'
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Value
+    )
+
+    $chunkSize = 1MB
+    $overlap = $Value.Length
+    $stream = [IO.File]::OpenRead($Path)
+    try {
+        $buffer = New-Object byte[] ($chunkSize + $overlap)
+        $carried = 0
+        while ($true) {
+            $read = $stream.Read($buffer, $carried, $chunkSize)
+            if ($read -le 0) { return $false }
+            $total = $carried + $read
+            if ([Text.Encoding]::ASCII.GetString($buffer, 0, $total).Contains($Value)) {
+                return $true
+            }
+            $carried = [Math]::Min($overlap, $total)
+            [Array]::Copy($buffer, $total - $carried, $buffer, 0, $carried)
+        }
+    } finally {
+        $stream.Dispose()
+    }
+}
+
+function Get-AppxInstallLocation {
+    <#
+    .SYNOPSIS
+        Returns an AppX package's install location, or $null. Exists as a mock seam.
+    .PARAMETER Name
+        The package name, e.g. Microsoft.WinDbg.
+    .EXAMPLE
+        Get-AppxInstallLocation -Name 'Microsoft.WinDbg'
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Name)
+
+    try {
+        $pkg = Get-AppxPackage -Name $Name -ErrorAction Stop | Select-Object -First 1
+        if ($pkg) { return $pkg.InstallLocation }
+        return $null
+    } catch {
+        return $null
+    }
+}
+
+function Find-X64dbgRoot {
+    <#
+    .SYNOPSIS
+        Locates the x64dbg 'release' directory containing the x32 and x64 subtrees.
+    .DESCRIPTION
+        Returns the release root, not the executable, because the MCP plugin must
+        be installed into both release\x32\plugins and release\x64\plugins.
+    .EXAMPLE
+        Find-X64dbgRoot
+    #>
+    [CmdletBinding()]
+    param()
+
+    $exe = $null
+    foreach ($c in $Script:X64dbgCandidates) {
+        if (Test-Path -LiteralPath $c) { $exe = $c; break }
+    }
+    if (-not $exe) {
+        $found = Find-Executable -Name 'x64dbg'
+        if ($found -and $found -notlike '*\chocolatey\bin\*') { $exe = $found }
+    }
+    if (-not $exe) { return $null }
+
+    # <root>\release\x64\x64dbg.exe -> <root>\release
+    return (Split-Path -Parent (Split-Path -Parent $exe))
+}
+
+function Find-GhidraRoot {
+    <#
+    .SYNOPSIS
+        Locates the Ghidra installation directory.
+    .DESCRIPTION
+        GHIDRA_INSTALL_DIR wins when set, but it is not set on a stock FLARE VM,
+        so the Chocolatey and Tools layouts are searched as well.
+    .EXAMPLE
+        Find-GhidraRoot
+    #>
+    [CmdletBinding()]
+    param()
+
+    if ($env:GHIDRA_INSTALL_DIR -and (Test-Path -LiteralPath $env:GHIDRA_INSTALL_DIR)) {
+        return $env:GHIDRA_INSTALL_DIR
+    }
+    foreach ($base in $Script:GhidraSearchRoots) {
+        if (-not (Test-Path -LiteralPath $base)) { continue }
+        $hit = Get-ChildItem -LiteralPath $base -Directory -Filter 'ghidra_*' `
+            -ErrorAction SilentlyContinue |
+            Sort-Object Name -Descending | Select-Object -First 1
+        if ($hit) { return $hit.FullName }
+    }
+    return $null
+}
+
+function Get-GhidraVersion {
+    <#
+    .SYNOPSIS
+        Extracts the Ghidra version from its installation directory name.
+    .DESCRIPTION
+        The version governs extension compatibility, so a null here means the
+        GhidraMCP version gate cannot be evaluated and must not be guessed.
+    .PARAMETER GhidraRoot
+        The Ghidra install directory.
+    .EXAMPLE
+        Get-GhidraVersion -GhidraRoot 'C:\...\ghidra_12.1.2_PUBLIC'
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$GhidraRoot)
+
+    if ((Split-Path -Leaf $GhidraRoot) -match 'ghidra_(\d+\.\d+(\.\d+)?)') {
+        return [version]$Matches[1]
+    }
+    return $null
+}
+
+function Find-BinaryNinjaRoot {
+    <#
+    .SYNOPSIS
+        Locates the Binary Ninja installation directory.
+    .EXAMPLE
+        Find-BinaryNinjaRoot
+    #>
+    [CmdletBinding()]
+    param()
+
+    # Program Files first: %LOCALAPPDATA%\Vector35 does not exist on this host,
+    # and where.exe resolves the Chocolatey shim rather than the real binary.
+    foreach ($c in @("$env:ProgramFiles\Vector35\BinaryNinja",
+            "$env:LOCALAPPDATA\Vector35\BinaryNinja")) {
+        if (Test-Path -LiteralPath $c) { return $c }
+    }
+    $exe = Find-Executable -Name 'binaryninja'
+    if ($exe -and $exe -notlike '*\chocolatey\bin\*') { return (Split-Path -Parent $exe) }
+    return $null
+}
+
+function Get-BinaryNinjaSettingsPath {
+    <#
+    .SYNOPSIS
+        Returns the path to Binary Ninja's user settings.json.
+    .DESCRIPTION
+        Confirmed on the host (open item O3). The file may not exist yet on a
+        fresh install; callers must handle that, and the merge creates it.
+    .EXAMPLE
+        Get-BinaryNinjaSettingsPath
+    #>
+    [CmdletBinding()]
+    param()
+    return (Join-Path $env:APPDATA 'Binary Ninja\settings.json')
+}
+
+function Test-BinaryNinjaMcpCapable {
+    <#
+    .SYNOPSIS
+        True when this Binary Ninja build ships the built-in MCP server.
+    .DESCRIPTION
+        Vector 35 documents no minimum version, so this gates on the capability
+        itself: the ui.mcp.enabled setting key is present in the executable.
+        A false result means "upgrade Binary Ninja", never "broken server".
+    .PARAMETER BinaryNinjaRoot
+        The Binary Ninja install directory, or $null when it is not installed.
+    .EXAMPLE
+        Test-BinaryNinjaMcpCapable -BinaryNinjaRoot $inv.BinaryNinjaRoot
+    #>
+    [CmdletBinding()]
+    param([AllowNull()][string]$BinaryNinjaRoot)
+
+    if (-not $BinaryNinjaRoot) { return $false }
+    $exe = Join-Path $BinaryNinjaRoot 'binaryninja.exe'
+    if (-not (Test-Path -LiteralPath $exe)) { return $false }
+    try {
+        return (Test-FileContainsAscii -Path $exe -Value 'ui.mcp.enabled')
+    } catch {
+        return $false
+    }
+}
+
+function Find-CdbPath {
+    <#
+    .SYNOPSIS
+        Locates cdb.exe, including inside the WinDbg MSIX package.
+    .DESCRIPTION
+        On a current FLARE VM, WinDbg installs as an AppX package whose bin
+        directory is NOT on PATH, so where.exe alone reports cdb as missing.
+        The package path embeds its version and must never be hardcoded.
+    .EXAMPLE
+        Find-CdbPath
+    #>
+    [CmdletBinding()]
+    param()
+
+    $onPath = Find-Executable -Name 'cdb'
+    if ($onPath) { return $onPath }
+
+    $appx = Get-AppxInstallLocation -Name 'Microsoft.WinDbg'
+    if ($appx) {
+        $candidate = Join-Path $appx 'amd64\cdb.exe'
+        if (Test-Path -LiteralPath $candidate) { return $candidate }
+    }
+
+    $kit = 'C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe'
+    if (Test-Path -LiteralPath $kit) { return $kit }
+    return $null
+}
+
+function Get-JavaVersion {
+    <#
+    .SYNOPSIS
+        Returns the JDK version, or $null if it cannot be determined.
+    .DESCRIPTION
+        java -version writes to stderr, which Invoke-CommandLine merges into its
+        output. Handles both 'openjdk version "25"' and legacy '1.8.0_xxx'.
+
+        Modern JDKs report a single-component version. [version] requires at
+        least major.minor, so a bare '25' is padded to '25.0' rather than being
+        thrown away - which is exactly what a bare cast did, silently, via the
+        catch below.
+    .PARAMETER JavaPath
+        Path to java.exe.
+    .EXAMPLE
+        Get-JavaVersion -JavaPath 'C:\Program Files\OpenJDK\jdk-25\bin\java.exe'
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$JavaPath)
+
+    try {
+        $out = Invoke-CommandLine -FilePath $JavaPath -Arguments @('-version')
+        $text = (@($out) -join ' ')
+        if ($text -notmatch 'version\s+"(\d+)(\.\d+)?(\.\d+)?') { return $null }
+
+        $parts = @($Matches[1])
+        if ($Matches[2]) { $parts += $Matches[2].TrimStart('.') }
+        if ($Matches[3]) { $parts += $Matches[3].TrimStart('.') }
+        while ($parts.Count -lt 2) { $parts += '0' }
+        return [version]($parts -join '.')
+    } catch {
+        return $null
+    }
+}
+
+function Get-MachineFact {
+    <#
+    .SYNOPSIS
+        Collects RAM, free disk, VM status, and elevation. Exists as a mock seam.
+    .EXAMPLE
+        Get-MachineFact
+    #>
+    [CmdletBinding()]
+    param()
+
+    $cs = Get-CimInstance Win32_ComputerSystem
+    $disk = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'"
+    $id = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+    $vmHints = @('VMware', 'VirtualBox', 'Virtual Machine', 'KVM', 'QEMU', 'Xen')
+
+    [PSCustomObject]@{
+        FreeDiskGb       = [math]::Round($disk.FreeSpace / 1GB, 1)
+        TotalRamGb       = [math]::Round($cs.TotalPhysicalMemory / 1GB, 1)
+        IsVirtualMachine = [bool]($vmHints | Where-Object {
+                $cs.Model -like "*$_*" -or $cs.Manufacturer -like "*$_*" })
+        IsAdministrator  = $id.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    }
+}
+
+function Get-HostInventory {
+    <#
+    .SYNOPSIS
+        Builds the complete host inventory consumed by every later phase.
+    .DESCRIPTION
+        Absent tools are reported as $null, never as an error. Phase 0 decides
+        which absences are fatal; this function only observes.
+    .EXAMPLE
+        Get-HostInventory | Format-List
+    #>
+    [CmdletBinding()]
+    param()
+
+    $python = Find-Executable -Name 'python'
+    $java = Find-Executable -Name 'java'
+    $ghidra = Find-GhidraRoot
+    $bnRoot = Find-BinaryNinjaRoot
+    $facts = Get-MachineFact
+
+    [PSCustomObject]@{
+        Python                  = $python
+        PythonVersion           = if ($python) { Get-PythonVersion -PythonPath $python } else { $null }
+        Jdk                     = $java
+        JdkVersion              = if ($java) { Get-JavaVersion -JavaPath $java } else { $null }
+        Cdb                     = Find-CdbPath
+        Uv                      = Find-Executable -Name 'uv'
+        X64dbgRoot              = Find-X64dbgRoot
+        GhidraRoot              = $ghidra
+        GhidraVersion           = if ($ghidra) { Get-GhidraVersion -GhidraRoot $ghidra } else { $null }
+        BinaryNinjaRoot         = $bnRoot
+        BinaryNinjaSettingsPath = Get-BinaryNinjaSettingsPath
+        BinaryNinjaMcpCapable   = Test-BinaryNinjaMcpCapable -BinaryNinjaRoot $bnRoot
+        ClaudeCode              = Find-Executable -Name 'claude'
+        FreeDiskGb              = $facts.FreeDiskGb
+        TotalRamGb              = $facts.TotalRamGb
+        IsVirtualMachine        = $facts.IsVirtualMachine
+        IsAdministrator         = $facts.IsAdministrator
+    }
+}
+
+Export-ModuleMember -Function Invoke-CommandLine, Find-Executable, Compare-VersionAtLeast, `
+    Get-PythonVersion, Test-FileContainsAscii, Get-AppxInstallLocation, Find-X64dbgRoot, `
+    Find-GhidraRoot, Get-GhidraVersion, Find-BinaryNinjaRoot, Get-BinaryNinjaSettingsPath, `
+    Test-BinaryNinjaMcpCapable, Find-CdbPath, Get-JavaVersion, Get-MachineFact, Get-HostInventory

@@ -763,6 +763,8 @@ git commit -m "Add executable and version discovery primitives"
 - Consumes: `Find-Executable`, `Get-PythonVersion`, `Invoke-CommandLine` from Task 3.
 - Produces: `Find-X64dbgRoot`, `Find-GhidraRoot`, `Find-BinaryNinjaRoot` — each returning a path or `$null`; `Get-BinaryNinjaSettingsPath` returning a path string; `Get-HostInventory` returning the full inventory object described in Task 3.
 
+Named `Get-MachineFact`, singular, not `Get-MachineFacts` — PSScriptAnalyzer's `PSUseSingularNouns` rejects the plural, and this project runs a zero-warnings policy. Implementation also adds `Find-CdbPath` (AppX-aware), `Test-BinaryNinjaMcpCapable` (the O7 capability probe), `Get-JavaVersion`, and `Test-FileContainsAscii`, all required by the amended spec's Phase 0 discovery table.
+
 - [ ] **Step 1: O3 is already resolved — confirm, do not re-derive**
 
 `MVP_FINDINGS.md` settled this: Binary Ninja's settings file is
@@ -813,7 +815,7 @@ Describe 'Get-HostInventory' {
         Mock -ModuleName ReAgent.Discovery Find-X64dbgRoot { $null }
         Mock -ModuleName ReAgent.Discovery Find-GhidraRoot { $null }
         Mock -ModuleName ReAgent.Discovery Find-BinaryNinjaRoot { $null }
-        Mock -ModuleName ReAgent.Discovery Get-MachineFacts {
+        Mock -ModuleName ReAgent.Discovery Get-MachineFact {
             [PSCustomObject]@{ FreeDiskGb = 120; TotalRamGb = 32
                                IsVirtualMachine = $true; IsAdministrator = $true }
         }
@@ -950,7 +952,7 @@ function Get-BinaryNinjaSettingsPath {
     return (Join-Path $env:APPDATA 'Binary Ninja\settings.json')
 }
 
-function Get-MachineFacts {
+function Get-MachineFact {
     <#
     .SYNOPSIS
         Collects RAM, free disk, VM status, and elevation. Exists as a mock seam.
@@ -985,7 +987,7 @@ function Get-HostInventory {
     $python = Find-Executable -Name 'python'
     $ghidra = Find-GhidraRoot
     $bnRoot = Find-BinaryNinjaRoot
-    $facts  = Get-MachineFacts
+    $facts  = Get-MachineFact
 
     [PSCustomObject]@{
         Python                  = $python
@@ -1014,7 +1016,7 @@ Replace the existing export line with:
 ```powershell
 Export-ModuleMember -Function Invoke-CommandLine, Find-Executable, Compare-VersionAtLeast, `
     Get-PythonVersion, Find-X64dbgRoot, Find-GhidraRoot, Get-GhidraVersion, `
-    Find-BinaryNinjaRoot, Get-BinaryNinjaSettingsPath, Get-MachineFacts, Get-HostInventory
+    Find-BinaryNinjaRoot, Get-BinaryNinjaSettingsPath, Get-MachineFact, Get-HostInventory
 ```
 
 - [ ] **Step 5: Run the test and confirm it passes**
