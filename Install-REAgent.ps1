@@ -100,11 +100,12 @@ $phaseTable = @(
     }
     @{ Id   = 5; Name = 'Verify'
         Test = { $false }
-        Fn   = { param($c) $c.VerifyResults = Invoke-Verification -Config $c.Config -Attended:$c.Attended }
+        Fn   = { param($c) $c.VerifyResults = Invoke-Verification -Config $c.Config `
+                `-ServerResults $c.ServerResults -Inventory $c.Inventory -Attended:$c.Attended }
     }
     @{ Id   = 6; Name = 'Manifest'
         Test = { $false }
-        Fn   = { param($c) Write-Manifest -Context $c }
+        Fn   = { param($c) Write-Manifest -Context $c -PhaseResults $results }
     }
 )
 
