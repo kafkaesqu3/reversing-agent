@@ -92,7 +92,7 @@ $phaseTable = @(
     }
     @{ Id   = 3; Name = 'McpServers'
         Test = { $false }
-        Fn   = { param($c) $c.ServerResults = Install-AllMcpServers -Config $c.Config -Inventory $c.Inventory }
+        Fn   = { param($c) $c.ServerResults = Install-AllMcpServer -Config $c.Config -Inventory $c.Inventory }
     }
     @{ Id   = 4; Name = 'AgentConfig'
         Test = { $false }
