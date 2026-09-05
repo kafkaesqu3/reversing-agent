@@ -1,0 +1,38 @@
+# Generated agent configuration — emitted from re-agent.config.json on every run.
+# Never hand-edited, never committed; regenerating is the whole point.
+.mcp.json
+ports.json
+manifest.json
+verify-report.json
+
+# Secrets. Bearer tokens live on disk with restrictive ACLs and never in git.
+tokens/
+*.token
+
+# Installer output
+install.log
+*.bak-*
+
+# Python venvs — one per MCP server, rebuilt from pinned versions
+.venv/
+venvs/
+__pycache__/
+*.py[cod]
+
+# Ghidra projects and analysis artefacts
+*.gpr
+*.rep/
+scratch/
+symbols/
+cases/
+
+# PowerShell / editor noise
+*.psd1.bak
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+
+# Agent tooling session state — per-machine, not project content
+.claude/autoharness/
+**/.claude/autoharness/
