@@ -2,6 +2,8 @@ BeforeAll {
     Import-Module "$PSScriptRoot/../src/ReAgent.Common.psm1" -Force
     Import-Module "$PSScriptRoot/../src/ReAgent.Discovery.psm1" -Force
     Import-Module "$PSScriptRoot/../src/ReAgent.Symbols.psm1" -Force
+    Import-Module "$PSScriptRoot/../src/ReAgent.Tokens.psm1" -Force
+    Import-Module "$PSScriptRoot/../src/ReAgent.Json.psm1" -Force
     Import-Module "$PSScriptRoot/../src/ReAgent.Servers.psm1" -Force
 
     function Get-TestServer {
@@ -172,6 +174,7 @@ Describe 'Install-McpServer dispatch' {
         }
         $Script:Inv = [PSCustomObject]@{
             Uv = 'uv.exe'; Cdb = 'C:\cdb.exe'; GhidraRoot = 'C:\ghidra'
+            X64dbgRoot = $null; BinaryNinjaRoot = $null; BinaryNinjaMcpCapable = $false
         }
     }
 
@@ -183,10 +186,18 @@ Describe 'Install-McpServer dispatch' {
     }
 
     It 'reports a kind with no handler as failed, naming the kind' {
-        $s = Get-TestServer -Name 'x64dbg-x64' -Kind 'plugin-inproc'
+        $s = Get-TestServer -Name 'mystery' -Kind 'not-a-real-kind'
         $r = Install-McpServer -Server $s -Config $Script:Cfg -Inventory $Script:Inv
         $r.Status | Should -Be 'failed'
-        $r.Reason | Should -BeLike '*plugin-inproc*'
+        $r.Reason | Should -BeLike '*not-a-real-kind*'
+    }
+
+    It 'reports plugin-inproc as not-installed when x64dbg is absent' {
+        $s = Get-TestServer -Name 'x64dbg-x64' -Kind 'plugin-inproc'
+        $inv = [PSCustomObject]@{ Uv = 'uv.exe'; X64dbgRoot = $null }
+        $r = Install-McpServer -Server $s -Config $Script:Cfg -Inventory $inv
+        $r.Status | Should -Be 'not-installed'
+        $r.Reason | Should -BeLike '*x64dbg*'
     }
 
     It 'turns a handler exception into a failed result instead of throwing' {
@@ -367,5 +378,260 @@ Describe 'Install-AllMcpServer' {
         }
         { Install-AllMcpServer -Config $cfg -Inventory ([PSCustomObject]@{ Uv = 'uv' }) } |
             Should -Not -Throw
+    }
+}
+
+Describe 'Write-X64dbgPreseed' {
+    It 'writes the exact field names and casing the plugin reads' {
+        $p = Join-Path $TestDrive 'mcp_config.json'
+        Write-X64dbgPreseed -ConfigPath $p -Bind '127.0.0.1' -Port 9094 `
+            -Token 'aabb' -Confirm:$false
+        $c = Get-Content $p -Raw | ConvertFrom-Json
+        $c.IpAddress | Should -Be '127.0.0.1'
+        $c.Port | Should -Be 9094
+        $c.AutoStart | Should -BeTrue
+        $c.AuthToken | Should -Be 'aabb'
+    }
+
+    It 'round-trips through Get-X64dbgToken' {
+        $p = Join-Path $TestDrive 'rt.json'
+        Write-X64dbgPreseed -ConfigPath $p -Bind '127.0.0.1' -Port 9095 `
+            -Token 'deadbeef' -Confirm:$false
+        Get-X64dbgToken -McpConfigPath $p | Should -Be 'deadbeef'
+    }
+
+    It 'refuses to seed a non-loopback bind' {
+        # The plugin README documents a 0.0.0.0 default. Seeding that would
+        # expose a debugger control channel on every adapter attached later.
+        { Write-X64dbgPreseed -ConfigPath (Join-Path $TestDrive 'x.json') `
+                -Bind '0.0.0.0' -Port 9094 -Token 't' -Confirm:$false } |
+            Should -Throw '*0.0.0.0*'
+    }
+}
+
+Describe 'Get-X64dbgConfigPath' {
+    It 'returns both candidate locations, because upstream contradicts itself' {
+        $paths = Get-X64dbgConfigPath -ReleaseRoot 'C:\Tools\x64dbg\release' -Arch 'x64'
+        $paths[0] | Should -Be 'C:\Tools\x64dbg\release\x64\mcp_config.json'
+        $paths[1] | Should -Be 'C:\Tools\x64dbg\release\x64\plugins\mcp_config.json'
+    }
+
+    It 'rejects an architecture that is not x32 or x64' {
+        { Get-X64dbgConfigPath -ReleaseRoot 'C:\x' -Arch 'arm64' } | Should -Throw
+    }
+}
+
+Describe 'Get-VerifiedRelease' {
+    BeforeAll {
+        $Script:RelCfg = [PSCustomObject]@{
+            paths = [PSCustomObject]@{ toolRoot = $TestDrive }
+        }
+        function Get-RelServer {
+            param($Sha = 'PIN-ME', $Asset = 'a.zip')
+            [PSCustomObject]@{
+                name   = 'x64dbg-x64'
+                source = [PSCustomObject]@{
+                    repo   = 'duty1g/x64dbg-mcp-server'; pin = 'v1.3'
+                    sha256 = [PSCustomObject]@{ $Asset = $Sha }
+                }
+            }
+        }
+    }
+
+    It 'refuses a placeholder hash and reports the real one to record' {
+        Mock -ModuleName ReAgent.Servers Invoke-Download {
+            'payload' | Set-Content -LiteralPath $OutFile
+        }
+        { Get-VerifiedRelease -Server (Get-RelServer) -Config $Script:RelCfg } |
+            Should -Throw '*not pinned to a hash yet*'
+    }
+
+    It 'aborts on a hash mismatch rather than installing unverified code' {
+        Mock -ModuleName ReAgent.Servers Invoke-Download {
+            'payload' | Set-Content -LiteralPath $OutFile
+        }
+        { Get-VerifiedRelease -Server (Get-RelServer -Sha ('0' * 64) -Asset 'b.zip') `
+                -Config $Script:RelCfg } | Should -Throw '*mismatch*'
+    }
+
+    It 'returns the path when the hash matches' {
+        Mock -ModuleName ReAgent.Servers Invoke-Download {
+            'payload' | Set-Content -LiteralPath $OutFile
+        }
+        $probe = Join-Path $TestDrive 'probe.txt'
+        'payload' | Set-Content -LiteralPath $probe
+        $hash = (Get-FileHash -LiteralPath $probe -Algorithm SHA256).Hash.ToLowerInvariant()
+        Get-VerifiedRelease -Server (Get-RelServer -Sha $hash -Asset 'c.zip') `
+            -Config $Script:RelCfg | Should -BeLike '*c.zip'
+    }
+
+    It 'insists on exactly one pinned asset' {
+        $s = [PSCustomObject]@{
+            name   = 'x'
+            source = [PSCustomObject]@{
+                repo   = 'a/b'; pin = 'v1'
+                sha256 = [PSCustomObject]@{ 'one.zip' = 'x'; 'two.zip' = 'y' }
+            }
+        }
+        { Get-VerifiedRelease -Server $s -Config $Script:RelCfg } |
+            Should -Throw '*exactly one*'
+    }
+}
+
+Describe 'Copy-PluginFile' {
+    It 'copies when the destination does not exist' {
+        $a = Join-Path $TestDrive 'src1.dll'; 'v1' | Set-Content $a
+        $b = Join-Path $TestDrive 'dst1.dll'
+        Copy-PluginFile -Source $a -Destination $b | Should -BeTrue
+        (Get-Content $b -Raw).Trim() | Should -Be 'v1'
+    }
+
+    It 'does nothing when the file is already identical' {
+        $a = Join-Path $TestDrive 'src2.dll'; 'same' | Set-Content $a
+        $b = Join-Path $TestDrive 'dst2.dll'; 'same' | Set-Content $b
+        Copy-PluginFile -Source $a -Destination $b | Should -BeFalse
+    }
+
+    It 'backs up what it replaces' {
+        $a = Join-Path $TestDrive 'src3.dll'; 'new' | Set-Content $a
+        $b = Join-Path $TestDrive 'dst3.dll'; 'old' | Set-Content $b
+        Copy-PluginFile -Source $a -Destination $b | Should -BeTrue
+        (Get-ChildItem $TestDrive -Filter 'dst3.dll.bak-*').Count | Should -BeGreaterThan 0
+    }
+}
+
+Describe 'Install-GuiBuiltinHttpServer' {
+    BeforeAll {
+        $Script:BnCfg = [PSCustomObject]@{
+            paths = [PSCustomObject]@{ toolRoot = $TestDrive }
+        }
+        $Script:BnSrv = [PSCustomObject]@{
+            name      = 'binaryninja'; kind = 'gui-builtin-http'; enabled = $true
+            transport = 'http'; bind = '127.0.0.1'; port = 24642; path = '/mcp'
+            auth      = 'bearer-generated'
+        }
+    }
+
+    It 'reports not-installed when Binary Ninja is absent' {
+        $inv = [PSCustomObject]@{ BinaryNinjaRoot = $null; BinaryNinjaMcpCapable = $false }
+        (Install-GuiBuiltinHttpServer -Server $Script:BnSrv -Config $Script:BnCfg `
+                -Inventory $inv).Status | Should -Be 'not-installed'
+    }
+
+    It 'says upgrade Binary Ninja, not broken server, for an old build' {
+        $inv = [PSCustomObject]@{
+            BinaryNinjaRoot = 'C:\bn'; BinaryNinjaMcpCapable = $false
+            BinaryNinjaSettingsPath = 'C:\s.json'
+        }
+        (Install-GuiBuiltinHttpServer -Server $Script:BnSrv -Config $Script:BnCfg `
+                -Inventory $inv).Reason | Should -BeLike '*Upgrade Binary Ninja*'
+    }
+
+    It 'merges the four ui.mcp settings without downloading anything' {
+        $settings = Join-Path $TestDrive 'bn-settings.json'
+        '{ "ui.theme": "dark" }' | Set-Content $settings
+        $inv = [PSCustomObject]@{
+            BinaryNinjaRoot = 'C:\bn'; BinaryNinjaMcpCapable = $true
+            BinaryNinjaSettingsPath = $settings
+        }
+        $r = Install-GuiBuiltinHttpServer -Server $Script:BnSrv -Config $Script:BnCfg `
+            -Inventory $inv
+        $r.Status | Should -Be 'installed'
+        $s = Get-Content $settings -Raw | ConvertFrom-Json
+        $s.'ui.mcp.enabled' | Should -BeTrue
+        $s.'ui.mcp.port' | Should -Be 24642
+        $s.'ui.mcp.endpoint' | Should -Be '/mcp'
+        $s.'ui.mcp.token' | Should -Match '^[0-9a-f]{64}$'
+        $s.'ui.theme' | Should -Be 'dark'
+    }
+
+    It 'tells the operator the server needs starting every session' {
+        $settings = Join-Path $TestDrive 'bn-settings2.json'
+        $inv = [PSCustomObject]@{
+            BinaryNinjaRoot = 'C:\bn'; BinaryNinjaMcpCapable = $true
+            BinaryNinjaSettingsPath = $settings
+        }
+        (Install-GuiBuiltinHttpServer -Server $Script:BnSrv -Config $Script:BnCfg `
+                -Inventory $inv).Reason | Should -BeLike '*ONCE PER SESSION*'
+    }
+}
+
+Describe 'Install-GuiPluginHttpServer' {
+    BeforeAll {
+        $Script:GmSrv = [PSCustomObject]@{
+            name             = 'ghidramcp'; kind = 'gui-plugin-http'; enabled = $false
+            transport        = 'sse'; bind = '127.0.0.1'; port = 8761; path = '/sse'
+            auth             = 'bearer-generated'; maxGhidraVersion = '11.3.2'
+            source           = [PSCustomObject]@{ pin = '1.4' }
+        }
+    }
+
+    It 'refuses an extension the installed Ghidra would reject' {
+        # GhidraMCP 1.4 targets Ghidra 11.3.2; this host runs 12.1.2.
+        $inv = [PSCustomObject]@{ GhidraRoot = 'C:\g'; GhidraVersion = [version]'12.1.2' }
+        $r = Install-GuiPluginHttpServer -Server $Script:GmSrv -Config ([PSCustomObject]@{}) `
+            -Inventory $inv
+        $r.Status | Should -Be 'not-installed'
+        $r.Reason | Should -BeLike '*12.1.2*'
+    }
+
+    It 'does not treat the version mismatch as a failure' {
+        $inv = [PSCustomObject]@{ GhidraRoot = 'C:\g'; GhidraVersion = [version]'12.1.2' }
+        (Install-GuiPluginHttpServer -Server $Script:GmSrv -Config ([PSCustomObject]@{}) `
+                -Inventory $inv).Status | Should -Not -Be 'failed'
+    }
+
+    It 'reports not-installed when Ghidra is absent' {
+        $inv = [PSCustomObject]@{ GhidraRoot = $null; GhidraVersion = $null }
+        (Install-GuiPluginHttpServer -Server $Script:GmSrv -Config ([PSCustomObject]@{}) `
+                -Inventory $inv).Status | Should -Be 'not-installed'
+    }
+}
+
+Describe 'Install-PluginInprocServer' {
+    BeforeAll {
+        $Script:XSrv = [PSCustomObject]@{
+            name      = 'x64dbg-x64'; kind = 'plugin-inproc'; enabled = $true; arch = 'x64'
+            transport = 'http'; bind = '127.0.0.1'; port = 9094; path = '/'
+            auth      = 'bearer-preseeded'
+            source    = [PSCustomObject]@{ pin = 'v1.3' }
+        }
+    }
+
+    It 'pre-seeds a 32 hex char token, matching the plugin format' {
+        $root = Join-Path $TestDrive 'x64dbg-release'
+        $null = New-Item -ItemType Directory -Path (Join-Path $root 'x64') -Force
+        Mock -ModuleName ReAgent.Servers Get-VerifiedRelease { 'C:\dl\a.zip' }
+        Mock -ModuleName ReAgent.Servers Expand-X64dbgPlugin { }
+        $cfg = [PSCustomObject]@{ paths = [PSCustomObject]@{ toolRoot = $TestDrive } }
+        $inv = [PSCustomObject]@{ X64dbgRoot = $root }
+        $r = Install-PluginInprocServer -Server $Script:XSrv -Config $cfg -Inventory $inv
+        $r.Status | Should -Be 'installed'
+        $seeded = Get-Content (Join-Path $root 'x64\mcp_config.json') -Raw | ConvertFrom-Json
+        $seeded.AuthToken | Should -Match '^[0-9a-f]{32}$'
+        $seeded.IpAddress | Should -Be '127.0.0.1'
+        $seeded.Port | Should -Be 9094
+    }
+
+    It 'preserves a token the plugin already generated rather than inventing one' {
+        $root = Join-Path $TestDrive 'x64dbg-release2'
+        $null = New-Item -ItemType Directory -Path (Join-Path $root 'x64') -Force
+        '{ "IpAddress": "127.0.0.1", "Port": 9094, "AutoStart": true,
+           "AuthToken": "pluginownedtoken" }' |
+            Set-Content (Join-Path $root 'x64\mcp_config.json')
+        Mock -ModuleName ReAgent.Servers Get-VerifiedRelease { 'C:\dl\a.zip' }
+        Mock -ModuleName ReAgent.Servers Expand-X64dbgPlugin { }
+        $cfg = [PSCustomObject]@{ paths = [PSCustomObject]@{ toolRoot = $TestDrive } }
+        Install-PluginInprocServer -Server $Script:XSrv -Config $cfg `
+            -Inventory ([PSCustomObject]@{ X64dbgRoot = $root }) | Out-Null
+        (Get-Content (Join-Path $root 'x64\mcp_config.json') -Raw |
+            ConvertFrom-Json).AuthToken | Should -Be 'pluginownedtoken'
+    }
+
+    It 'reports not-installed when x64dbg is absent' {
+        $cfg = [PSCustomObject]@{ paths = [PSCustomObject]@{ toolRoot = $TestDrive } }
+        (Install-PluginInprocServer -Server $Script:XSrv -Config $cfg `
+                -Inventory ([PSCustomObject]@{ X64dbgRoot = $null })).Status |
+            Should -Be 'not-installed'
     }
 }

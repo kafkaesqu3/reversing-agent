@@ -468,6 +468,18 @@ function Install-McpServer {
             'venv-http' {
                 return Install-VenvHttpServer -Server $Server -Config $Config -Inventory $Inventory
             }
+            'gui-builtin-http' {
+                return Install-GuiBuiltinHttpServer -Server $Server -Config $Config `
+                    -Inventory $Inventory
+            }
+            'gui-plugin-http' {
+                return Install-GuiPluginHttpServer -Server $Server -Config $Config `
+                    -Inventory $Inventory
+            }
+            'plugin-inproc' {
+                return Install-PluginInprocServer -Server $Server -Config $Config `
+                    -Inventory $Inventory
+            }
             default {
                 return New-ServerResult -Server $Server -Status 'failed' -Reason (
                     "No install handler is implemented for kind '$($Server.kind)'.")
@@ -507,6 +519,418 @@ function Install-AllMcpServer {
         $results += $r
     }
     return $results
+}
+
+function Invoke-Download {
+    <#
+    .SYNOPSIS
+        Downloads a URL to a file. Exists as a mock seam.
+    .PARAMETER Uri
+        Source URL.
+    .PARAMETER OutFile
+        Destination path.
+    .EXAMPLE
+        Invoke-Download -Uri $u -OutFile $p
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Uri,
+        [Parameter(Mandatory)][string]$OutFile
+    )
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing
+}
+
+function Get-VerifiedRelease {
+    <#
+    .SYNOPSIS
+        Downloads a pinned GitHub release asset and verifies its SHA-256.
+    .DESCRIPTION
+        This ecosystem is full of near-identical forks, so an unpinned or
+        unverified source is a supply-chain hole. A hash mismatch aborts that
+        server's install; unverified code is never executed.
+
+        A config hash still set to the PIN-ME placeholder is also refused, but
+        the error carries the hash that was actually computed so the operator
+        can record it and re-run. That makes the first run a deliberate
+        trust-on-first-use decision rather than an accidental one.
+    .PARAMETER Server
+        The server's config entry, carrying source.repo, source.pin, source.sha256.
+    .PARAMETER Config
+        The parsed configuration object.
+    .EXAMPLE
+        Get-VerifiedRelease -Server $s -Config $cfg
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Server,
+        [Parameter(Mandatory)][object]$Config
+    )
+
+    $assetNames = @($Server.source.sha256.PSObject.Properties.Name)
+    if ($assetNames.Count -ne 1) {
+        throw ("Server '$($Server.name)' must pin exactly one release asset in " +
+            "source.sha256; found $($assetNames.Count).")
+    }
+    $asset = $assetNames[0]
+    $expected = $Server.source.sha256.$asset
+
+    $dir = Join-Path $Config.paths.toolRoot 'mcp\downloads'
+    if (-not (Test-Path -LiteralPath $dir)) {
+        $null = New-Item -ItemType Directory -Path $dir -Force
+    }
+    $target = Join-Path $dir $asset
+
+    if (-not (Test-Path -LiteralPath $target)) {
+        $uri = "https://github.com/$($Server.source.repo)/releases/download/" +
+        "$($Server.source.pin)/$asset"
+        Write-ReAgentLog -Level INFO -Message "Downloading $asset from $uri"
+        Invoke-Download -Uri $uri -OutFile $target
+    }
+
+    $actual = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash.ToLowerInvariant()
+
+    if ($expected -eq 'PIN-ME') {
+        throw ("'$asset' is not pinned to a hash yet. Its SHA-256 is $actual - record " +
+            "that under mcpServers[$($Server.name)].source.sha256 in " +
+            're-agent.config.json and re-run. Nothing is installed unverified.')
+    }
+    if ($actual -ne $expected.ToLowerInvariant()) {
+        throw ("SHA-256 mismatch for '$asset'. Expected $expected, got $actual. " +
+            'Refusing to install; delete the download and re-run, or investigate the source.')
+    }
+
+    Write-ReAgentLog -Level INFO -Message "Verified $asset ($actual)."
+    return $target
+}
+
+function Expand-X64dbgPlugin {
+    <#
+    .SYNOPSIS
+        Deploys the x64dbg MCP plugin into both architecture plugin directories.
+    .DESCRIPTION
+        The release ships a dist/ tree carrying x32 and x64 plugins. Both are
+        installed unconditionally: a 32-bit target loads x32dbg, and a plugin
+        present in only one architecture is an intermittent failure that looks
+        like a bug elsewhere.
+    .PARAMETER ArchivePath
+        The verified release zip.
+    .PARAMETER ReleaseRoot
+        The x64dbg release directory holding x32\ and x64\.
+    .EXAMPLE
+        Expand-X64dbgPlugin -ArchivePath $z -ReleaseRoot 'C:\Tools\x64dbg\release'
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)][string]$ArchivePath,
+        [Parameter(Mandatory)][string]$ReleaseRoot
+    )
+
+    if (-not $PSCmdlet.ShouldProcess($ReleaseRoot, 'Deploy x64dbg MCP plugin')) { return }
+
+    $staging = Join-Path ([IO.Path]::GetTempPath()) ("reagent-x64dbg-" + [Guid]::NewGuid().ToString('N'))
+    $null = New-Item -ItemType Directory -Path $staging -Force
+    try {
+        Expand-Archive -LiteralPath $ArchivePath -DestinationPath $staging -Force
+
+        foreach ($arch in @('x32', 'x64')) {
+            $source = Get-ChildItem -LiteralPath $staging -Recurse -Directory `
+                -ErrorAction SilentlyContinue |
+                Where-Object { $_.FullName -match "\\$arch\\plugins$" } |
+                Select-Object -First 1
+            if (-not $source) {
+                throw ("The release archive has no $arch\plugins directory. " +
+                    'The upstream layout has changed; re-check the pinned release.')
+            }
+            $dest = Join-Path $ReleaseRoot "$arch\plugins"
+            if (-not (Test-Path -LiteralPath $dest)) {
+                $null = New-Item -ItemType Directory -Path $dest -Force
+            }
+            foreach ($f in Get-ChildItem -LiteralPath $source.FullName -File) {
+                Copy-PluginFile -Source $f.FullName -Destination (Join-Path $dest $f.Name)
+            }
+        }
+    } finally {
+        Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Copy-PluginFile {
+    <#
+    .SYNOPSIS
+        Copies a plugin file only when it differs, backing up what it replaces.
+    .DESCRIPTION
+        Idempotency: an unchanged file is left alone so a re-run reports no
+        change. Anything overwritten is backed up first, because this script
+        never destroys something it did not create.
+    .PARAMETER Source
+        File to copy.
+    .PARAMETER Destination
+        Where it goes.
+    .EXAMPLE
+        Copy-PluginFile -Source $a -Destination $b
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Source,
+        [Parameter(Mandatory)][string]$Destination
+    )
+
+    if (Test-Path -LiteralPath $Destination) {
+        $a = (Get-FileHash -LiteralPath $Source -Algorithm SHA256).Hash
+        $b = (Get-FileHash -LiteralPath $Destination -Algorithm SHA256).Hash
+        if ($a -eq $b) {
+            Write-ReAgentLog -Level INFO -Message "Unchanged: '$Destination'."
+            return $false
+        }
+        $backup = "$Destination.bak-$((Get-Date).ToString('yyyyMMddHHmmss'))"
+        Copy-Item -LiteralPath $Destination -Destination $backup -Force
+        Write-ReAgentLog -Level WARN -Message "Replacing '$Destination' (backed up to '$backup')."
+    }
+    Copy-Item -LiteralPath $Source -Destination $Destination -Force
+    return $true
+}
+
+function Get-X64dbgConfigPath {
+    <#
+    .SYNOPSIS
+        Returns the candidate mcp_config.json paths for one x64dbg architecture.
+    .DESCRIPTION
+        Upstream disagrees with itself about where this file lives: the README
+        says "next to the x64dbg executable", the source says "next to the
+        loading module", which would be the plugins directory. Pre-seeding the
+        wrong one fails silently, so both are returned - the first is written,
+        and a token is read back from whichever actually exists.
+    .PARAMETER ReleaseRoot
+        The x64dbg release directory.
+    .PARAMETER Arch
+        x64 or x32.
+    .EXAMPLE
+        Get-X64dbgConfigPath -ReleaseRoot 'C:\Tools\x64dbg\release' -Arch 'x64'
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ReleaseRoot,
+        [Parameter(Mandatory)][ValidateSet('x64', 'x32')][string]$Arch
+    )
+    $archRoot = Join-Path $ReleaseRoot $Arch
+    return @(
+        (Join-Path $archRoot 'mcp_config.json'),
+        (Join-Path $archRoot 'plugins\mcp_config.json')
+    )
+}
+
+function Write-X64dbgPreseed {
+    <#
+    .SYNOPSIS
+        Pre-seeds the x64dbg MCP plugin's config so it never picks its own values.
+    .DESCRIPTION
+        The plugin reads an existing mcp_config.json and preserves it, generating
+        a token only when the field is missing. Writing this before x64dbg first
+        runs is therefore the whole token bootstrap - no launching the GUI, no
+        prompting the operator.
+
+        The token is 32 hex chars, matching the plugin's own 16-byte format, and
+        an existing token is always reused rather than rotated.
+    .PARAMETER ConfigPath
+        Where to write mcp_config.json.
+    .PARAMETER Bind
+        Bind address. Never 0.0.0.0.
+    .PARAMETER Port
+        Listening port, compiled in per architecture upstream.
+    .PARAMETER Token
+        The bearer token to seed.
+    .EXAMPLE
+        Write-X64dbgPreseed -ConfigPath $p -Bind '127.0.0.1' -Port 9094 -Token $t
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)][string]$ConfigPath,
+        [Parameter(Mandatory)][string]$Bind,
+        [Parameter(Mandatory)][int]$Port,
+        [Parameter(Mandatory)][string]$Token
+    )
+
+    if ($Bind -ne '127.0.0.1') {
+        throw "Refusing to seed x64dbg with bind '$Bind'. Only 127.0.0.1 is permitted."
+    }
+    if (-not $PSCmdlet.ShouldProcess($ConfigPath, 'Pre-seed x64dbg MCP config')) { return }
+
+    $dir = Split-Path -Parent $ConfigPath
+    if ($dir -and -not (Test-Path -LiteralPath $dir)) {
+        $null = New-Item -ItemType Directory -Path $dir -Force
+    }
+
+    # Field names and casing verified against src/core/config.zig upstream.
+    $payload = [ordered]@{
+        IpAddress = $Bind
+        Port      = $Port
+        AutoStart = $true
+        AuthToken = $Token
+    }
+    ([PSCustomObject]$payload) | ConvertTo-Json -Depth 4 |
+        Set-Content -LiteralPath $ConfigPath -Encoding UTF8
+}
+
+function Install-GuiBuiltinHttpServer {
+    <#
+    .SYNOPSIS
+        Configures Binary Ninja's vendor-built-in MCP server. Downloads nothing.
+    .DESCRIPTION
+        Vector 35 ships this server inside every GUI edition, so there is no
+        source to pin, no hash to verify and no supply-chain surface at all. The
+        install is four settings merged into Binary Ninja's own settings.json.
+
+        Gated on capability rather than version number: Vector 35 documents no
+        minimum, so Phase 0 probes the executable for the ui.mcp.enabled key. An
+        older build is reported as "upgrade Binary Ninja", never as a failure.
+    .PARAMETER Server
+        The server's config entry.
+    .PARAMETER Config
+        The parsed configuration object.
+    .PARAMETER Inventory
+        The host inventory.
+    .EXAMPLE
+        Install-GuiBuiltinHttpServer -Server $s -Config $cfg -Inventory $inv
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Server,
+        [Parameter(Mandatory)][object]$Config,
+        [Parameter(Mandatory)][object]$Inventory
+    )
+
+    if (-not $Inventory.BinaryNinjaRoot) {
+        return New-ServerResult -Server $Server -Status 'not-installed' `
+            -Reason 'Binary Ninja was not found on this host.'
+    }
+    if (-not $Inventory.BinaryNinjaMcpCapable) {
+        return New-ServerResult -Server $Server -Status 'not-installed' -Reason (
+            'This Binary Ninja build has no ui.mcp.* settings. Upgrade Binary Ninja; ' +
+            'the MCP server is built in from a recent version onward.')
+    }
+
+    $token = Get-OrNewServerToken -Name $Server.name `
+        -TokenRoot (Join-Path $Config.paths.toolRoot 'mcp\tokens')
+
+    Merge-JsonFile -Path $Inventory.BinaryNinjaSettingsPath -Values @{
+        'ui.mcp.enabled'  = $true
+        'ui.mcp.port'     = [int]$Server.port
+        'ui.mcp.endpoint' = $Server.path
+        'ui.mcp.token'    = $token
+    }
+
+    return New-ServerResult -Server $Server -Status 'installed' -Reason (
+        'Requires a Binary Ninja restart, then Plugins > MCP > Start Server ' +
+        'ONCE PER SESSION - it does not autostart.')
+}
+
+function Install-GuiPluginHttpServer {
+    <#
+    .SYNOPSIS
+        Installs the GhidraMCP extension, when the installed Ghidra can load it.
+    .DESCRIPTION
+        Ghidra enforces extension version compatibility. GhidraMCP 1.4 targets
+        Ghidra 11.3.2, so a newer Ghidra will reject it outright. That is an
+        expected outcome, not a failure: the server ships disabled anyway, so it
+        is recorded as not-installed with the version mismatch as the reason
+        rather than polluting the run's exit code.
+    .PARAMETER Server
+        The server's config entry.
+    .PARAMETER Config
+        The parsed configuration object.
+    .PARAMETER Inventory
+        The host inventory.
+    .EXAMPLE
+        Install-GuiPluginHttpServer -Server $s -Config $cfg -Inventory $inv
+    #>
+    [CmdletBinding()]
+    # Config is part of the uniform handler signature the dispatcher calls with.
+    # This handler does not need it yet because the version gate rejects every
+    # host tested so far before an install path is reached.
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '')]
+    param(
+        [Parameter(Mandatory)][object]$Server,
+        [Parameter(Mandatory)][object]$Config,
+        [Parameter(Mandatory)][object]$Inventory
+    )
+
+    if (-not $Inventory.GhidraRoot) {
+        return New-ServerResult -Server $Server -Status 'not-installed' `
+            -Reason 'Ghidra was not found on this host.'
+    }
+
+    $maxName = 'maxGhidraVersion'
+    if ($Server.PSObject.Properties.Name -contains $maxName -and $Inventory.GhidraVersion) {
+        $max = [version]$Server.$maxName
+        if ($Inventory.GhidraVersion -gt $max) {
+            return New-ServerResult -Server $Server -Status 'not-installed' -Reason (
+                "GhidraMCP $($Server.source.pin) targets Ghidra $max, but this host runs " +
+                "$($Inventory.GhidraVersion); Ghidra would reject the extension. " +
+                'This server is disabled by default, so nothing else is affected.')
+        }
+    }
+
+    return New-ServerResult -Server $Server -Status 'not-installed' -Reason (
+        'Extension install is not implemented: on every host tested so far the ' +
+        'version gate above rejects it first. Implement when a matching Ghidra appears.')
+}
+
+function Install-PluginInprocServer {
+    <#
+    .SYNOPSIS
+        Installs the x64dbg MCP plugin and pre-seeds its config.
+    .DESCRIPTION
+        One server per architecture: the plugin compiles its port in from
+        pointer width (9094 for x64dbg, 9095 for x32dbg) and each process reads
+        its own mcp_config.json. Both architectures get the plugin regardless,
+        because a plugin present in only one is an intermittent failure that
+        looks like a bug somewhere else entirely.
+    .PARAMETER Server
+        The server's config entry.
+    .PARAMETER Config
+        The parsed configuration object.
+    .PARAMETER Inventory
+        The host inventory.
+    .EXAMPLE
+        Install-PluginInprocServer -Server $s -Config $cfg -Inventory $inv
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Server,
+        [Parameter(Mandatory)][object]$Config,
+        [Parameter(Mandatory)][object]$Inventory
+    )
+
+    if (-not $Inventory.X64dbgRoot) {
+        return New-ServerResult -Server $Server -Status 'not-installed' `
+            -Reason 'x64dbg was not found on this host.'
+    }
+
+    $payload = Get-VerifiedRelease -Server $Server -Config $Config
+    Expand-X64dbgPlugin -ArchivePath $payload -ReleaseRoot $Inventory.X64dbgRoot
+
+    $tokenRoot = Join-Path $Config.paths.toolRoot 'mcp\tokens'
+    $candidates = Get-X64dbgConfigPath -ReleaseRoot $Inventory.X64dbgRoot -Arch $Server.arch
+
+    # If the plugin has already run it owns a token; never invent one over it.
+    $existing = $null
+    foreach ($c in $candidates) {
+        $existing = Get-X64dbgToken -McpConfigPath $c
+        if ($existing) { break }
+    }
+    $token = if ($existing) {
+        $existing
+    } else {
+        Get-OrNewServerToken -Name $Server.name -TokenRoot $tokenRoot -ByteCount 16
+    }
+    Save-ServerToken -Name $Server.name -Token $token -TokenRoot $tokenRoot
+
+    Write-X64dbgPreseed -ConfigPath $candidates[0] -Bind $Server.bind `
+        -Port ([int]$Server.port) -Token $token
+
+    return New-ServerResult -Server $Server -Status 'installed' -Version $Server.source.pin `
+        -Reason 'Requires x64dbg to be open with the target loaded before it answers.'
 }
 
 function New-TestCrashDump {
@@ -560,4 +984,7 @@ function New-TestCrashDump {
 Export-ModuleMember -Function New-ServerResult, Get-VenvPython, Get-VenvPackageVersion, `
     Install-VenvPackage, Write-ServerLauncher, Get-ServerVenvPath, Invoke-ChromaPrewarm, `
     Get-ScheduledTaskActionText, Register-ServerScheduledTask, Install-VenvStdioServer, `
-    Install-VenvHttpServer, Install-McpServer, Install-AllMcpServer, New-TestCrashDump
+    Install-VenvHttpServer, Install-McpServer, Install-AllMcpServer, New-TestCrashDump, `
+    Get-X64dbgConfigPath, Write-X64dbgPreseed, Install-GuiBuiltinHttpServer, `
+    Install-GuiPluginHttpServer, Install-PluginInprocServer, Get-VerifiedRelease, `
+    Expand-X64dbgPlugin, Invoke-Download, Copy-PluginFile
