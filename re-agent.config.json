@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "paths": {
+    "toolRoot": "C:\\re",
+    "agentRoot": "C:\\re\\agent",
+    "stateRoot": "C:\\ProgramData\\re-lab",
+    "symbolCache": "C:\\re\\symbols"
+  },
+  "symbols": {
+    "enabled": true,
+    "server": "https://msdl.microsoft.com/download/symbols",
+    "prewarm": ["ntdll.dll", "kernel32.dll", "kernelbase.dll", "ws2_32.dll",
+                "advapi32.dll", "ole32.dll", "crypt32.dll", "wininet.dll"]
+  },
+  "testBinary": "C:\\Windows\\System32\\winver.exe",
+  "mcpServers": [
+    {
+      "name": "x64dbg-x64", "enabled": true, "kind": "plugin-inproc", "arch": "x64",
+      "source": { "type": "github-release", "repo": "duty1g/x64dbg-mcp-server",
+                  "pin": "v1.3", "sha256": { "x64dbg-MCP-Server-v1.3.zip": "PIN-ME" } },
+      "transport": "http", "bind": "127.0.0.1", "port": 9094, "path": "/",
+      "auth": "bearer-preseeded", "tokenHexChars": 32,
+      "requiresHostApp": true, "verifyTier": "attended"
+    },
+    {
+      "name": "x64dbg-x32", "enabled": true, "kind": "plugin-inproc", "arch": "x32",
+      "source": { "type": "github-release", "repo": "duty1g/x64dbg-mcp-server",
+                  "pin": "v1.3", "sha256": { "x64dbg-MCP-Server-v1.3.zip": "PIN-ME" } },
+      "transport": "http", "bind": "127.0.0.1", "port": 9095, "path": "/",
+      "auth": "bearer-preseeded", "tokenHexChars": 32,
+      "requiresHostApp": true, "verifyTier": "attended"
+    },
+    {
+      "name": "binaryninja", "enabled": true, "kind": "gui-builtin-http",
+      "transport": "http", "bind": "127.0.0.1", "port": 24642, "path": "/mcp",
+      "auth": "bearer-generated", "requiresHostApp": true, "verifyTier": "attended",
+      "capabilityProbe": "ui.mcp.enabled",
+      "perSessionStart": "Plugins > MCP > Start Server"
+    },
+    {
+      "name": "pyghidra-mcp", "enabled": true, "kind": "venv-http",
+      "source": { "type": "pypi", "package": "pyghidra-mcp", "pin": "0.2.5" },
+      "transport": "http", "bind": "127.0.0.1", "port": 8762, "path": "/mcp",
+      "auth": "none",
+      "authExemptReason": "upstream exposes no auth mechanism; loopback-only, Profile A",
+      "scheduledTask": "ReLab-pyghidra-mcp",
+      "requiresHostApp": false, "verifyTier": "unattended"
+    },
+    {
+      "name": "mcp-windbg", "enabled": true, "kind": "venv-stdio",
+      "source": { "type": "pypi", "package": "mcp-windbg", "pin": "1.2.1" },
+      "transport": "stdio", "bind": "127.0.0.1", "port": 0,
+      "auth": "none", "requiresHostApp": false, "verifyTier": "unattended"
+    },
+    {
+      "name": "ghidramcp", "enabled": false, "kind": "gui-plugin-http",
+      "source": { "type": "github-release", "repo": "LaurieWired/GhidraMCP",
+                  "pin": "1.4", "sha256": { "GhidraMCP-release-1-4.zip": "PIN-ME" } },
+      "transport": "sse", "bind": "127.0.0.1", "port": 8761, "path": "/sse",
+      "auth": "bearer-generated", "requiresHostApp": true, "verifyTier": "none",
+      "maxGhidraVersion": "11.3.2"
+    }
+  ]
+}
