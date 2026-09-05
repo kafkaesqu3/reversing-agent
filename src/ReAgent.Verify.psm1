@@ -373,6 +373,144 @@ function Test-WindbgLive {
         -Detail 'ntdll listed with symbols resolved.'
 }
 
+function Get-ProbeInterpreter {
+    <#
+    .SYNOPSIS
+        Returns an interpreter that has the mcp client library available.
+    .DESCRIPTION
+        Any server venv will do - they all depend on the mcp package - so the
+        pyghidra-mcp venv is reused rather than creating a venv just to test.
+    .PARAMETER Config
+        The parsed configuration object.
+    .EXAMPLE
+        Get-ProbeInterpreter -Config $cfg
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][object]$Config)
+
+    foreach ($name in @('pyghidra-mcp', 'mcp-windbg')) {
+        $python = Get-VenvPython -VenvPath (Get-ServerVenvPath -Config $Config -Name $name)
+        if (Test-Path -LiteralPath $python) { return $python }
+    }
+    throw ('No server venv is available to run the MCP probe. Install at least one ' +
+        'Python-based server (phase 3) before running attended verification.')
+}
+
+function Test-HttpServerLive {
+    <#
+    .SYNOPSIS
+        Tier-2 live check for an HTTP server whose host application must be open.
+    .DESCRIPTION
+        Handshake first, then a real tool call - a server that connects and then
+        errors on first use is the normal failure mode, and a handshake alone
+        would report it healthy.
+
+        The tool to call is DATA, from the server's optional 'verify' block in
+        re-agent.config.json:
+
+            "verify": { "tool": "<name>", "args": { ... }, "expect": "<regex>" }
+
+        Without one this reports not-testable rather than inventing a tool name.
+        Guessing here would produce a confident false failure, which is worse
+        than an honest "not checked": confirm a real tool name against the
+        running server, record it in config, and the check becomes live.
+    .PARAMETER Server
+        The server's config entry.
+    .PARAMETER Config
+        The parsed configuration object.
+    .PARAMETER PythonPath
+        Any interpreter with the mcp client library - a server venv will do.
+    .EXAMPLE
+        Test-HttpServerLive -Server $s -Config $cfg -PythonPath $py
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Server,
+        [Parameter(Mandatory)][object]$Config,
+        [Parameter(Mandatory)][string]$PythonPath
+    )
+
+    $name = "$($Server.name) live call"
+    $url = "http://$($Server.bind):$($Server.port)$($Server.path)"
+    $probeArgs = @('--transport=http', "--url=$url")
+
+    if ($Server.auth -ne 'none') {
+        $token = Get-ServerToken -Name $Server.name `
+            -TokenRoot (Join-Path $Config.paths.toolRoot 'mcp\tokens')
+        if ($token) { $probeArgs += "--header=Authorization=Bearer $token" }
+    }
+
+    $hasVerify = $Server.PSObject.Properties.Name -contains 'verify'
+    if ($hasVerify -and $Server.verify.tool) {
+        $call = @{ tool = $Server.verify.tool; args = @{} }
+        if ($Server.verify.PSObject.Properties.Name -contains 'args') {
+            foreach ($p in $Server.verify.args.PSObject.Properties) {
+                $call.args[$p.Name] = $p.Value
+            }
+        }
+        $probeArgs += ('--calls=' + (ConvertTo-Json @($call) -Depth 6 -Compress))
+    }
+
+    $r = Invoke-McpProbe -PythonPath $PythonPath -ProbeScript (Get-ProbeScriptPath) `
+        -ProbeArgs $probeArgs
+
+    if (-not $r.ok -and $r.PSObject.Properties.Name -contains 'error') {
+        return New-CheckResult -Name $name -Status 'not-testable' -Detail (
+            "Could not reach $url ($($r.error)). " + (Get-HostAppHint -Server $Server))
+    }
+    if (-not $r.ok) {
+        return New-CheckResult -Name $name -Status 'fail' `
+            -Detail ($r | ConvertTo-Json -Depth 6 -Compress)
+    }
+    if ($r.toolCount -le 0) {
+        return New-CheckResult -Name $name -Status 'fail' `
+            -Detail 'The server connected but advertises no tools.'
+    }
+
+    if (-not ($hasVerify -and $Server.verify.tool)) {
+        return New-CheckResult -Name $name -Status 'not-testable' -Detail (
+            "Connected and advertising $($r.toolCount) tools, but no live call was made: " +
+            "no verify.tool is configured for '$($Server.name)'. A handshake alone does " +
+            'not prove the server works. Pick a tool from ' +
+            "[$($r.tools -join ', ')], record it under mcpServers[$($Server.name)].verify " +
+            'in re-agent.config.json, and re-run with -VerifyOnly -Attended.')
+    }
+
+    $text = $r.call.text
+    if ($hasVerify -and $Server.verify.PSObject.Properties.Name -contains 'expect' -and
+        $Server.verify.expect -and $text -notmatch $Server.verify.expect) {
+        return New-CheckResult -Name $name -Status 'fail' -Detail (
+            "Tool '$($Server.verify.tool)' returned output not matching " +
+            "/$($Server.verify.expect)/: $text")
+    }
+    return New-CheckResult -Name $name -Status 'pass' -Detail (
+        "$($r.toolCount) tools; '$($Server.verify.tool)' returned $($r.call.length) chars.")
+}
+
+function Get-HostAppHint {
+    <#
+    .SYNOPSIS
+        Returns the operator instruction for an unreachable GUI-hosted server.
+    .PARAMETER Server
+        The server's config entry.
+    .EXAMPLE
+        Get-HostAppHint -Server $s
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][object]$Server)
+
+    if ($Server.PSObject.Properties.Name -contains 'perSessionStart' -and
+        $Server.perSessionStart) {
+        return ("Open the application, then run '$($Server.perSessionStart)' - it does not " +
+            'autostart, and this is needed once per session.')
+    }
+    if ($Server.kind -eq 'plugin-inproc') {
+        $exe = if ($Server.arch -eq 'x32') { 'x32dbg' } else { 'x64dbg' }
+        return "Open $exe with the target binary loaded, then re-run."
+    }
+    return 'Open the host application, then re-run.'
+}
+
 function Invoke-Verification {
     <#
     .SYNOPSIS
@@ -424,13 +562,27 @@ function Invoke-Verification {
             continue
         }
 
-        switch ($s.name) {
-            'pyghidra-mcp' { $checks += Test-PyghidraLive -Server $s -Config $Config }
-            'mcp-windbg' { $checks += Test-WindbgLive -Server $s -Config $Config -Result $result }
-            default {
-                $checks += Test-ServerNotTestable -ServerName $s.name `
-                    -Reason 'No live check is implemented for this server yet.'
+        # One check blowing up must not take the suite with it: the whole point
+        # of this phase is to report on every server, including broken ones.
+        try {
+            switch ($s.name) {
+                'pyghidra-mcp' { $checks += Test-PyghidraLive -Server $s -Config $Config }
+                'mcp-windbg' {
+                    $checks += Test-WindbgLive -Server $s -Config $Config -Result $result
+                }
+                default {
+                    if ($s.transport -eq 'stdio') {
+                        $checks += Test-ServerNotTestable -ServerName $s.name `
+                            -Reason 'No live check is implemented for this server yet.'
+                    } else {
+                        $checks += Test-HttpServerLive -Server $s -Config $Config `
+                            -PythonPath (Get-ProbeInterpreter -Config $Config)
+                    }
+                }
             }
+        } catch {
+            $checks += Test-ServerNotTestable -ServerName $s.name `
+                -Reason "The check could not run: $($_.Exception.Message)"
         }
     }
 
@@ -459,4 +611,5 @@ function Invoke-Verification {
 
 Export-ModuleMember -Function New-CheckResult, Invoke-McpProbe, Test-ClaudeCli, `
     Test-ClaudeMcpList, Test-GeneratedConfig, Test-ServerNotTestable, `
-    Get-ProbeScriptPath, Test-PyghidraLive, Test-WindbgLive, Invoke-Verification
+    Get-ProbeScriptPath, Test-PyghidraLive, Test-WindbgLive, Invoke-Verification, `
+    Test-HttpServerLive, Get-HostAppHint, Get-ProbeInterpreter
