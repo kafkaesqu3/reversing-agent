@@ -219,3 +219,108 @@ Describe 'Get-JavaVersion' {
         Get-JavaVersion -JavaPath 'java.exe' | Should -BeNullOrEmpty
     }
 }
+
+Describe 'Test-Preflight' {
+    BeforeAll {
+        function Get-TestInv {
+            param($Admin = $true, $Vm = $true, $Claude = 'C:\claude.exe',
+                $Ram = 32, $Disk = 100)
+            [PSCustomObject]@{
+                IsAdministrator = $Admin; IsVirtualMachine = $Vm; ClaudeCode = $Claude
+                TotalRamGb      = $Ram; FreeDiskGb = $Disk
+            }
+        }
+    }
+
+    BeforeEach {
+        Mock -ModuleName ReAgent.Discovery Test-NetworkReachable { $true }
+    }
+
+    It 'returns no blockers on a healthy host' {
+        Test-Preflight -Inventory (Get-TestInv) | Should -BeNullOrEmpty
+    }
+
+    It 'blocks when not elevated' {
+        (Test-Preflight -Inventory (Get-TestInv -Admin $false)) -join ';' |
+            Should -BeLike '*Administrator*'
+    }
+
+    It 'blocks when Claude Code is absent' {
+        (Test-Preflight -Inventory (Get-TestInv -Claude $null)) -join ';' |
+            Should -BeLike '*Claude Code*'
+    }
+
+    It 'blocks when not on a virtual machine' {
+        (Test-Preflight -Inventory (Get-TestInv -Vm $false)) -join ';' |
+            Should -BeLike '*virtual machine*'
+    }
+
+    It 'blocks when there is no network' {
+        Mock -ModuleName ReAgent.Discovery Test-NetworkReachable { $false }
+        (Test-Preflight -Inventory (Get-TestInv)) -join ';' | Should -BeLike '*network*'
+    }
+
+    It 'reports every blocker at once rather than only the first' {
+        @(Test-Preflight -Inventory (Get-TestInv -Admin $false -Claude $null)).Count |
+            Should -Be 2
+    }
+
+    It 'does NOT block on low RAM - that is a warning, not a blocker' {
+        # This host has 8 GB against a 32 GB advisory. Blocking would make the
+        # installer unusable on the very box it was written for.
+        Test-Preflight -Inventory (Get-TestInv -Ram 8) | Should -BeNullOrEmpty
+    }
+
+    It 'every blocker message tells the operator what to do about it' {
+        $b = Test-Preflight -Inventory (Get-TestInv -Admin $false -Vm $false -Claude $null)
+        foreach ($m in $b) { $m.Length | Should -BeGreaterThan 40 }
+    }
+}
+
+Describe 'Get-PreflightWarning' {
+    It 'warns below the recommended RAM' {
+        $inv = [PSCustomObject]@{ TotalRamGb = 8; FreeDiskGb = 100 }
+        (Get-PreflightWarning -Inventory $inv) -join ';' | Should -BeLike '*RAM*'
+    }
+
+    It 'warns on low free disk' {
+        $inv = [PSCustomObject]@{ TotalRamGb = 32; FreeDiskGb = 5 }
+        (Get-PreflightWarning -Inventory $inv) -join ';' | Should -BeLike '*disk*'
+    }
+
+    It 'says nothing about a comfortable host' {
+        $inv = [PSCustomObject]@{ TotalRamGb = 64; FreeDiskGb = 500 }
+        Get-PreflightWarning -Inventory $inv | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Assert-Preflight' {
+    BeforeEach {
+        Mock -ModuleName ReAgent.Discovery Test-NetworkReachable { $true }
+    }
+
+    It 'throws listing the blockers' {
+        $inv = [PSCustomObject]@{
+            IsAdministrator = $false; IsVirtualMachine = $true; ClaudeCode = 'x'
+            TotalRamGb      = 32; FreeDiskGb = 100
+        }
+        { Assert-Preflight -Inventory $inv } | Should -Throw '*Administrator*'
+    }
+
+    It 'does not throw on a healthy host' {
+        $inv = [PSCustomObject]@{
+            IsAdministrator = $true; IsVirtualMachine = $true; ClaudeCode = 'x'
+            TotalRamGb      = 32; FreeDiskGb = 100
+        }
+        { Assert-Preflight -Inventory $inv } | Should -Not -Throw
+    }
+}
+
+Describe 'Assert-Preflight empty-array handling' {
+    It 'treats no blockers as success rather than a null dereference' {
+        # Regression: Test-Preflight returns @(), PowerShell unrolls it to $null
+        # on return, and $null.Count throws under Set-StrictMode -Version Latest.
+        Mock -ModuleName ReAgent.Discovery Test-Preflight { @() }
+        { Assert-Preflight -Inventory ([PSCustomObject]@{}) } | Should -Not -Throw
+    }
+}

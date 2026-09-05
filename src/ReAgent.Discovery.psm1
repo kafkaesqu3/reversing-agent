@@ -441,7 +441,123 @@ function Get-HostInventory {
     }
 }
 
+function Test-NetworkReachable {
+    <#
+    .SYNOPSIS
+        True when the symbol server host answers. Exists as a mock seam.
+    .DESCRIPTION
+        Phase 2 downloads symbols and Phase 3 downloads packages, so a box with
+        no egress cannot complete a run. Probing the actual symbol server is a
+        better signal than pinging a generic address.
+    .PARAMETER HostName
+        Host to probe.
+    .EXAMPLE
+        Test-NetworkReachable
+    #>
+    [CmdletBinding()]
+    param([string]$HostName = 'msdl.microsoft.com')
+
+    try {
+        return [bool](Test-NetConnection -ComputerName $HostName -Port 443 `
+                -InformationLevel Quiet -WarningAction SilentlyContinue)
+    } catch {
+        return $false
+    }
+}
+
+function Test-Preflight {
+    <#
+    .SYNOPSIS
+        Returns the list of hard blockers preventing this run, empty if none.
+    .DESCRIPTION
+        Every blocker is reported, not just the first, so one run surfaces all
+        the remediation the operator needs. Advisory conditions such as low RAM
+        belong in Get-PreflightWarning, not here: blocking on them would make
+        the installer unusable on the boxes it targets.
+    .PARAMETER Inventory
+        The host inventory from Get-HostInventory.
+    .EXAMPLE
+        $blockers = Test-Preflight -Inventory $inv
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][object]$Inventory)
+
+    $blockers = @()
+
+    if (-not $Inventory.IsAdministrator) {
+        $blockers += ('Not running as Administrator. Re-launch PowerShell with ' +
+            '"Run as administrator" and run this script again.')
+    }
+    if (-not $Inventory.IsVirtualMachine) {
+        $blockers += ('This does not look like a virtual machine. RE tooling must not be ' +
+            'installed on a host OS. Run this inside the FLARE VM.')
+    }
+    if (-not $Inventory.ClaudeCode) {
+        $blockers += ('Claude Code was not found for the current user. It is a prerequisite, ' +
+            'not installed by this script. Install it, confirm "claude --version" works ' +
+            'as the analyst user, then re-run.')
+    }
+    if ($PSVersionTable.PSVersion -lt [version]'5.1') {
+        $blockers += ("PowerShell $($PSVersionTable.PSVersion) is too old. " +
+            'Version 5.1 or later is required; install Windows Management Framework 5.1.')
+    }
+    if (-not (Test-NetworkReachable)) {
+        $blockers += ('No network reachable. This run downloads symbols and pinned packages, ' +
+            'so it cannot proceed offline. Restore egress and re-run.')
+    }
+    return $blockers
+}
+
+function Get-PreflightWarning {
+    <#
+    .SYNOPSIS
+        Returns advisory conditions worth reporting but not worth blocking on.
+    .DESCRIPTION
+        Separated from Test-Preflight so that "uncomfortable" never silently
+        becomes "refuses to run".
+    .PARAMETER Inventory
+        The host inventory from Get-HostInventory.
+    .EXAMPLE
+        Get-PreflightWarning -Inventory $inv | ForEach-Object { Write-Warning $_ }
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][object]$Inventory)
+
+    $warnings = @()
+    if ($Inventory.TotalRamGb -lt 32) {
+        $warnings += ("Only $($Inventory.TotalRamGb) GB RAM. Ghidra, Binary Ninja, a debugger " +
+            'and the agent co-resident want 32 GB; expect swapping.')
+    }
+    if ($Inventory.FreeDiskGb -lt 20) {
+        $warnings += ("Only $($Inventory.FreeDiskGb) GB free disk. Symbol caches and Ghidra " +
+            'projects grow quickly.')
+    }
+    return $warnings
+}
+
+function Assert-Preflight {
+    <#
+    .SYNOPSIS
+        Throws with a combined, actionable message when preflight blockers exist.
+    .PARAMETER Inventory
+        The host inventory from Get-HostInventory.
+    .EXAMPLE
+        Assert-Preflight -Inventory $c.Inventory
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][object]$Inventory)
+
+    # @() is load-bearing: PowerShell unrolls an empty array on return, so a
+    # healthy host yields $null here and $null.Count throws under StrictMode.
+    # Without the wrap, Assert-Preflight fails on exactly the boxes that pass.
+    $blockers = @(Test-Preflight -Inventory $Inventory)
+    if ($blockers.Count -gt 0) {
+        throw ("Preflight failed:`n  - " + ($blockers -join "`n  - "))
+    }
+}
+
 Export-ModuleMember -Function Invoke-CommandLine, Find-Executable, Compare-VersionAtLeast, `
     Get-PythonVersion, Test-FileContainsAscii, Get-AppxInstallLocation, Find-X64dbgRoot, `
     Find-GhidraRoot, Get-GhidraVersion, Find-BinaryNinjaRoot, Get-BinaryNinjaSettingsPath, `
-    Test-BinaryNinjaMcpCapable, Find-CdbPath, Get-JavaVersion, Get-MachineFact, Get-HostInventory
+    Test-BinaryNinjaMcpCapable, Find-CdbPath, Get-JavaVersion, Get-MachineFact, Get-HostInventory, `
+    Test-NetworkReachable, Test-Preflight, Get-PreflightWarning, Assert-Preflight
