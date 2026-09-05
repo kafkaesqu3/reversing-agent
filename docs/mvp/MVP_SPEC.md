@@ -66,21 +66,21 @@ C:\re\
     CLAUDE.md                  # operating contract (§8)
     .mcp.json                  # GENERATED from config — never hand-edited
     .claude\
-      settings.json            # GENERATED — carries the disabled-server list
+      settings.json            # GENERATED — disabled-server list + project approval
     cases\                     # created empty
+      ghidra\                  # pyghidra-mcp's Ghidra project (the server owns it)
   mcp\
     ports.json                 # GENERATED — name → port, single source of truth
+    launch-pyghidra-mcp.cmd    # GENERATED — sets GHIDRA_INSTALL_DIR, run by the logon task
+    downloads\                 # pinned release archives, kept for hash re-verification
     tokens\                    # bearer tokens, restrictive ACLs
     venvs\
       pyghidra-mcp\
       mcp-windbg\
       ghidramcp-bridge\
-  cases\
-    ghidra\                  # pyghidra-mcp Ghidra project (server owns it)
-  scratch\
-    test.dmp                 # GENERATED crash dump for the mcp-windbg tier-1 check
   symbols\                     # symbol cache
-  scratch\                     # test binaries, verification working dir
+  scratch\
+    test.dmp                   # GENERATED crash dump for the mcp-windbg tier-1 check
 
 C:\ProgramData\re-lab\
   manifest.json                # what was actually found and installed
@@ -88,7 +88,14 @@ C:\ProgramData\re-lab\
   verify-report.json           # last verification run, both tiers
 ```
 
-`.mcp.json`, `settings.json`, and `ports.json` are **generated from the config file on every run**. A re-run reproduces them byte-identically except for rotated secrets. Never write these by hand and never edit them in place.
+`.mcp.json`, `settings.json`, `ports.json` and the launcher `.cmd` are **generated from the config
+file on every run**. A re-run reproduces them byte-identically — nothing varying (no timestamps)
+goes into them, and tokens are reused rather than rotated. Never write these by hand and never edit
+them in place.
+
+Outside the tool root, the script also registers a **logon scheduled task** (`ReLab-pyghidra-mcp`)
+and merges four `ui.mcp.*` keys into `%APPDATA%\Binary Ninja\settings.json`, backing that file up
+first. Those two are the only things it changes that do not live under `C:\re`.
 
 ---
 
@@ -188,13 +195,18 @@ Declarative, so the runner is generic. Network is required throughout; there is 
 
 | # | Name | Function | Test | Notes |
 |---|---|---|---|---|
-| 0 | Preflight | `Invoke-Preflight` | `Test-Preflight` | Inventory; fail fast on hard blockers |
-| 1 | Prerequisites | `Invoke-Prereqs` | `Test-Prereqs` | Python, cdb.exe, JDK |
-| 2 | Symbols | `Invoke-Symbols` | `Test-Symbols` | Network-heavy; do it early |
-| 3 | McpServers | `Invoke-McpServers` | `Test-McpServers` | Loops over enabled servers by `kind` |
-| 4 | AgentConfig | `Invoke-AgentConfig` | `Test-AgentConfig` | Generates `.mcp.json`, `settings.json`, `CLAUDE.md` |
-| 5 | Verify | `Invoke-Verify` | — | Tier 1 always; tier 2 if `-Attended` |
-| 6 | Manifest | `Invoke-Manifest` | — | Always runs, even after failures |
+| 0 | Preflight | `Get-HostInventory` + `Assert-Preflight` | — (always runs) | Inventory; fail fast on hard blockers |
+| 1 | Prerequisites | `Install-Prereq` | `Test-PrereqSatisfied` | Python, cdb.exe, JDK, uv |
+| 2 | Symbols | `Install-Symbols` | `Test-SymbolsReady` | Network-heavy; do it early |
+| 3 | McpServers | `Install-AllMcpServer` | — (always runs) | Loops over servers by `kind` |
+| 4 | AgentConfig | `Write-AgentConfiguration` | — (always runs) | Generates `.mcp.json`, `settings.json`, `CLAUDE.md` |
+| 5 | Verify | `Invoke-Verification` | — | Tier 1 always; tier 2 if `-Attended` |
+| 6 | Manifest | `Write-Manifest` | — | Always runs, even after failures |
+
+✅ These are the names as implemented. Singular nouns throughout (`Install-Prereq`, not
+`Install-Prereqs`) because PSScriptAnalyzer's `PSUseSingularNouns` rejects the plural and this
+project runs a zero-warnings policy. Phases whose Test column is — have a `{ $false }` test block:
+they are cheap, derived, or must re-observe the host every run.
 
 **Claude Code is not installed by this script.** It is already present on the target and is treated as a discovered prerequisite (Phase 0), not something to provision. The script still *verifies* it — see Phase 0 and §9.
 

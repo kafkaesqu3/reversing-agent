@@ -59,6 +59,41 @@ the summary. The tasks below consume the answers instead of re-deriving them.
 
 ---
 
+## Corrections found while implementing this plan
+
+All four of these were bugs in the code blocks below, caught by the tests this plan specifies. They
+are fixed in place above and in `src/`, and recorded here so nobody reintroduces them from memory.
+
+| What | Why it mattered |
+|---|---|
+| **`Assert-Preflight` threw on healthy hosts.** `$blockers = Test-Preflight ...` then `$blockers.Count` | PowerShell unrolls an empty array on return, so a host with *no* blockers yields `$null`, and `$null.Count` throws under `Set-StrictMode -Version Latest`. It failed on exactly the boxes that should pass. Wrap every "returns a possibly-empty array" call site in `@()`. The same trap was live in `Test-PrereqSatisfied`. |
+| **`Get-X64dbgToken` read a `token` field.** Upstream writes **`AuthToken`** | Verified against `src/core/config.zig`. The whole token bootstrap would have silently found nothing and invented a token the plugin does not use. Casing matters: `IpAddress`, `Port`, `AutoStart`, `AuthToken`. |
+| **`Get-JavaVersion` returned `$null` for JDK 25.** `[version]'25'` throws | `System.Version` needs at least `major.minor`, and modern JDKs report a single component. The `catch` swallowed it, so the inventory reported no JDK on a host that plainly had one. Pad to `25.0`. |
+| **Three-argument `Join-Path` is PowerShell 6+.** `Join-Path $a $b $c` | Throws on the 5.1 target with "A positional parameter cannot be found". `PSUseCompatibleSyntax` does **not** catch it, because it is a parameter-set problem rather than a syntax one. Nest the calls instead. |
+
+**Environment gotchas that cost time:**
+
+- **`Install-Module` fails non-interactively on a stock FLARE VM** until the NuGet provider is
+  bootstrapped — see Task 1 Step 1.
+- **You will get Pester 6, not 5.** It runs every Pester 5 construct used here.
+- **`where.exe` lies about Chocolatey-installed tools**, returning the shim in
+  `C:\ProgramData\chocolateyin\`. Deriving an install root from a shim path gives
+  `C:\ProgramData\chocolatey`. Probe real paths first and reject shims.
+- **PSScriptAnalyzer cannot see into scriptblocks stored in hashtables**, so a parameter used only
+  inside a phase-table `Fn` reads as unused. Passing it through the shared context fixes the warning
+  *and* is better design than closing over script scope.
+- **`PSUseSingularNouns` and `PSUseShouldProcessForStateChangingFunctions` fire constantly** under a
+  zero-warnings policy. Rename where the singular is honest (`Get-MachineFact`, `Install-Prereq`);
+  suppress with a justification where it would not be (`Install-Symbols` sets a path *and* warms a
+  cache; every `New-*` factory here is pure).
+
+**Verification is not hand-rolled JSON-RPC.** `tools/mcp_probe.py` runs under each server's own venv
+— they all depend on the `mcp` client library already — so the probe always speaks the same protocol
+version as the server it tests, and nothing extra is installed to test anything. Pass its arguments
+as `--opt=value`: a bare `--arg --no-symbols` is parsed by argparse as a missing value.
+
+---
+
 ## File Structure
 
 ```
@@ -66,12 +101,14 @@ Install-REAgent.ps1                    # entry point: param block, module import
 re-agent.config.json                   # the single source of truth for pins, ports, paths
 templates/
   CLAUDE.md.template                   # operating contract, copied verbatim
+tools/
+  mcp_probe.py                         # MCP client used by verification; runs under a server venv
 src/
   ReAgent.Common.psm1                  # logging, phase result objects, Invoke-Phase, exit codes
   ReAgent.Config.psm1                  # config load, schema validation, port map, ports.json
   ReAgent.Discovery.psm1               # host inventory, preflight hard blockers
   ReAgent.Prereqs.psm1                 # Python / JDK / cdb.exe / uv install-if-missing
-  ReAgent.Symbols.psm1                 # _NT_SYMBOL_PATH + symchk pre-warm
+  ReAgent.Symbols.psm1                 # _NT_SYMBOL_PATH + best-effort pre-warm (no symchk here)
   ReAgent.Tokens.psm1                  # bearer generation, x64dbg read-back, token storage
   ReAgent.Json.psm1                    # safe JSON merge with backup (used by Binary Ninja)
   ReAgent.Servers.psm1                 # dispatcher + one handler per `kind`
@@ -88,9 +125,8 @@ tests/
   ReAgent.Json.Tests.ps1
   ReAgent.Servers.Tests.ps1
   ReAgent.Generate.Tests.ps1
-  ReAgent.Verify.Tests.ps1
-  ReAgent.Manifest.Tests.ps1
-  Integration.Tests.ps1                # end-to-end idempotency, runs on the FLARE host only
+  ReAgent.Verify.Tests.ps1             # also covers ReAgent.Manifest
+  Integration.Tests.ps1                # entry-point wiring, idempotency, security invariants
 ```
 
 **Why this split:** the four boundaries that matter are *data* (Config), *observation* (Discovery), *mutation* (Prereqs/Symbols/Servers), and *emission* (Generate/Manifest). Verify reads across all of them and writes nothing. Tokens and Json are separated because both are pure, security-sensitive, and used by more than one server handler — exactly the kind of logic that must be unit-tested in isolation rather than buried inside an install path.
@@ -111,14 +147,22 @@ tests/
 
 PowerShell 5.1 ships Pester 3.x, whose syntax is incompatible with what this plan uses. Install Pester 5 explicitly:
 
+⚠️ **The obvious command fails on a stock FLARE VM.** PowerShellGet 1.0.0.1 cannot bootstrap its
+NuGet provider non-interactively and dies with `Install-NuGetClientBinaries : Exception calling
+"ShouldContinue"`. Bootstrap the provider first:
+
 ```powershell
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+$null = Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser
+Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
 Install-Module Pester -MinimumVersion 5.5.0 -Force -SkipPublisherCheck -Scope CurrentUser
 Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
-Import-Module Pester -MinimumVersion 5.5.0
-Get-Module Pester | Select-Object Version
+Get-Module -ListAvailable Pester | Sort-Object Version -Descending | Select-Object -First 1 Version
 ```
 
-Expected: version 5.5.0 or higher.
+✅ **You get Pester 6.x, not 5.x** — `-MinimumVersion` lets it through. That is fine: Pester 6 runs
+every Pester 5 construct this plan uses (`BeforeAll`, `BeforeEach`, `$TestDrive`, `Mock -ModuleName`,
+`Should -Invoke`). Verified against all 254 tests. Do not pin back to 5.x.
 
 - [ ] **Step 2: Create the analyzer settings**
 
@@ -606,7 +650,7 @@ git commit -m "Add config loading, schema validation, and port allocation"
 
 **Interfaces:**
 - Consumes: `Write-ReAgentLog` from Task 1.
-- Produces: `Find-Executable -Name <string>` returning a path string or `$null`; `Get-PythonVersion -PythonPath <string>` returning a `[version]` or `$null`; `Compare-VersionAtLeast -Actual <version> -Minimum <version>` returning a bool; `Get-HostInventory` returning a PSCustomObject with properties `Python`, `PythonVersion`, `Jdk`, `JdkVersion`, `Cdb`, `X64dbgRoot`, `GhidraRoot`, `GhidraVersion`, `BinaryNinjaRoot`, `BinaryNinjaSettingsPath`, `BinaryNinjaVersion`, `ClaudeCode`, `FreeDiskGb`, `TotalRamGb`, `IsVirtualMachine`, `IsAdministrator`.
+- Produces: `Find-Executable -Name <string>` returning a path string or `$null`; `Get-PythonVersion -PythonPath <string>` returning a `[version]` or `$null`; `Compare-VersionAtLeast -Actual <version> -Minimum <version>` returning a bool; `Get-HostInventory` returning a PSCustomObject with properties `Python`, `PythonVersion`, `Jdk`, `JdkVersion`, `Cdb`, `Uv`, `X64dbgRoot`, `GhidraRoot`, `GhidraVersion`, `BinaryNinjaRoot`, `BinaryNinjaSettingsPath`, `BinaryNinjaMcpCapable`, `ClaudeCode`, `FreeDiskGb`, `TotalRamGb`, `IsVirtualMachine`, `IsAdministrator`. Note `BinaryNinjaMcpCapable` rather than a version number: O7 is gated on capability (see Task 4).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -993,15 +1037,15 @@ function Get-HostInventory {
         Python                  = $python
         PythonVersion           = if ($python) { Get-PythonVersion -PythonPath $python } else { $null }
         Jdk                     = Find-Executable -Name 'java'
-        JdkVersion              = $null
-        Cdb                     = Find-Executable -Name 'cdb'
+        JdkVersion              = if ($java) { Get-JavaVersion -JavaPath $java } else { $null }
+        Cdb                     = Find-CdbPath   # NOT Find-Executable: cdb ships in an MSIX
         Uv                      = Find-Executable -Name 'uv'
         X64dbgRoot              = Find-X64dbgRoot
         GhidraRoot              = $ghidra
         GhidraVersion           = if ($ghidra) { Get-GhidraVersion -GhidraRoot $ghidra } else { $null }
         BinaryNinjaRoot         = $bnRoot
         BinaryNinjaSettingsPath = Get-BinaryNinjaSettingsPath
-        BinaryNinjaVersion      = $null
+        BinaryNinjaMcpCapable   = Test-BinaryNinjaMcpCapable -BinaryNinjaRoot $bnRoot
         ClaudeCode              = Find-Executable -Name 'claude'
         FreeDiskGb              = $facts.FreeDiskGb
         TotalRamGb              = $facts.TotalRamGb
@@ -1154,7 +1198,10 @@ function Assert-Preflight {
     [CmdletBinding()]
     param([Parameter(Mandatory)][object]$Inventory)
 
-    $blockers = Test-Preflight -Inventory $Inventory
+    # @() is load-bearing. PowerShell unrolls an empty array on return, so a
+    # HEALTHY host yields $null here and $null.Count throws under StrictMode.
+    # Without the wrap this function fails on exactly the boxes that pass.
+    $blockers = @(Test-Preflight -Inventory $Inventory)
     if ($blockers.Count -gt 0) {
         throw ("Preflight failed:`n  - " + ($blockers -join "`n  - "))
     }
@@ -1367,7 +1414,7 @@ $phaseTable = @(
        Fn   = { param($c) Install-Symbols -Config $c.Config } }
     @{ Id = 3; Name = 'McpServers'
        Test = { $false }
-       Fn   = { param($c) $c.ServerResults = Install-AllMcpServers -Config $c.Config -Inventory $c.Inventory } }
+       Fn   = { param($c) $c.ServerResults = Install-AllMcpServer -Config $c.Config -Inventory $c.Inventory } }
     @{ Id = 4; Name = 'AgentConfig'
        Test = { $false }
        Fn   = { param($c) Write-AgentConfiguration -Config $c.Config -ServerResults $c.ServerResults } }
