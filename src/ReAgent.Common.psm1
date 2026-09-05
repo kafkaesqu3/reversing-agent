@@ -92,4 +92,67 @@ function Get-ReAgentExitCode {
     return 0
 }
 
-Export-ModuleMember -Function Write-ReAgentLog, New-PhaseResult, Get-ReAgentExitCode
+function Invoke-Phase {
+    <#
+    .SYNOPSIS
+        Runs one phase with logging, idempotency, timing, and failure isolation.
+    .DESCRIPTION
+        Calls the phase's Test block first; when it returns true and -Force was
+        not given, the phase is skipped. A throwing phase is recorded as failed
+        and does not stop the run - the caller decides what is a hard dependency.
+
+        A Test block that throws is treated as "cannot confirm, so run it",
+        never as a failure: an idempotency probe that errors must not be able to
+        abort an install.
+    .PARAMETER Phase
+        Hashtable with keys Id, Name, Test (scriptblock), Fn (scriptblock).
+    .PARAMETER Context
+        Shared state passed to both blocks. Mutated by phases to publish results.
+    .PARAMETER Force
+        Run the phase even when its Test reports it already satisfied.
+    .EXAMPLE
+        Invoke-Phase -Phase $p -Context $context -Force:$Force
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][hashtable]$Phase,
+        [Parameter(Mandatory)][hashtable]$Context,
+        [switch]$Force
+    )
+
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+
+    try {
+        $already = & $Phase.Test $Context
+    } catch {
+        $already = $false
+    }
+
+    if ($already -and -not $Force) {
+        $sw.Stop()
+        Write-ReAgentLog -Level INFO `
+            -Message "Phase $($Phase.Id) ($($Phase.Name)): already satisfied, skipping."
+        return New-PhaseResult -Id $Phase.Id -Name $Phase.Name -Status 'skipped' `
+            -DurationMs ([int]$sw.ElapsedMilliseconds)
+    }
+
+    Write-ReAgentLog -Level INFO -Message "Phase $($Phase.Id) ($($Phase.Name)): starting."
+    try {
+        $null = & $Phase.Fn $Context
+        $sw.Stop()
+        Write-ReAgentLog -Level INFO `
+            -Message "Phase $($Phase.Id) ($($Phase.Name)): ok in $($sw.ElapsedMilliseconds)ms."
+        return New-PhaseResult -Id $Phase.Id -Name $Phase.Name -Status 'ok' `
+            -DurationMs ([int]$sw.ElapsedMilliseconds)
+    } catch {
+        $sw.Stop()
+        $msg = $_.Exception.Message
+        Write-ReAgentLog -Level ERROR `
+            -Message "Phase $($Phase.Id) ($($Phase.Name)): FAILED - $msg"
+        return New-PhaseResult -Id $Phase.Id -Name $Phase.Name -Status 'failed' `
+            -DurationMs ([int]$sw.ElapsedMilliseconds) -ErrorMessage $msg
+    }
+}
+
+Export-ModuleMember -Function Write-ReAgentLog, New-PhaseResult, Get-ReAgentExitCode, `
+    Invoke-Phase
