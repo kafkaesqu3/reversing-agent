@@ -170,6 +170,9 @@ written beside `x64dbg.exe` or beside the plugin `.dp64`. Pre-seeding the wrong 
 
 ## Log
 
+> **Resuming this work? Start at `HANDOFF.md`.** It carries current state, the exact next
+> steps, and the environment gotchas that are not derivable from the code.
+
 | Date | Entry |
 |---|---|
 | 2026-09-04 | MVP scoped. `../../BLUEPRINT.md` §6/§8 and `../../DEPLOYMENT_PLAN.md` §D4 + Part 1 updated: all MCP servers local, inference remote, three-plane model documented. |

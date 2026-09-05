@@ -77,7 +77,7 @@ are fixed in place above and in `src/`, and recorded here so nobody reintroduces
   bootstrapped — see Task 1 Step 1.
 - **You will get Pester 6, not 5.** It runs every Pester 5 construct used here.
 - **`where.exe` lies about Chocolatey-installed tools**, returning the shim in
-  `C:\ProgramData\chocolateyin\`. Deriving an install root from a shim path gives
+  `C:\ProgramData\chocolatey\bin\`. Deriving an install root from a shim path gives
   `C:\ProgramData\chocolatey`. Probe real paths first and reject shims.
 - **PSScriptAnalyzer cannot see into scriptblocks stored in hashtables**, so a parameter used only
   inside a phase-table `Fn` reads as unused. Passing it through the shared context fixes the warning
