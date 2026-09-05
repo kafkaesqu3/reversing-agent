@@ -54,7 +54,7 @@ the summary. The tasks below consume the answers instead of re-deriving them.
 1. **pyghidra-mcp runs over streamable-http, not stdio** — stdio breaks its symbol loading. It needs a
    new `venv-http` kind and a logon Scheduled Task, and it has **no auth mechanism at all**.
 2. **x64dbg is two servers**, on 9094 (x64) and 9095 (x32), each with its own config file.
-3. **Nothing needs installing on this host.** `Get-MissingPrereqs` must return empty here; if it does
+3. **Nothing needs installing on this host.** `Get-MissingPrereq` must return empty here; if it does
    not, the discovery logic is wrong rather than the host.
 
 ---
@@ -1360,8 +1360,8 @@ $phaseTable = @(
        Test = { $false }
        Fn   = { param($c) $c.Inventory = Get-HostInventory; Assert-Preflight -Inventory $c.Inventory } }
     @{ Id = 1; Name = 'Prerequisites'
-       Test = { param($c) Test-PrereqsSatisfied -Inventory $c.Inventory }
-       Fn   = { param($c) Install-Prereqs -Inventory $c.Inventory } }
+       Test = { param($c) Test-PrereqSatisfied -Inventory $c.Inventory }
+       Fn   = { param($c) Install-Prereq -Inventory $c.Inventory } }
     @{ Id = 2; Name = 'Symbols'
        Test = { param($c) Test-SymbolsReady -Config $c.Config }
        Fn   = { param($c) Install-Symbols -Config $c.Config } }
@@ -1416,7 +1416,7 @@ git commit -m "Add phase runner and script entry point"
 
 **Interfaces:**
 - Consumes: `Compare-VersionAtLeast`, `Find-Executable`, `Invoke-CommandLine` from Tasks 3–4.
-- Produces: `Get-MissingPrereqs -Inventory <object>` returning an array of names from the set `python`, `jdk`, `cdb`, `uv`; `Test-PrereqsSatisfied -Inventory <object>` returning a bool; `Install-Prereqs -Inventory <object>` performing the installs.
+- Produces: `Get-MissingPrereq -Inventory <object>` returning an array of names from the set `python`, `jdk`, `cdb`, `uv`; `Test-PrereqSatisfied -Inventory <object>` returning a bool; `Install-Prereq -Inventory <object>` performing the installs.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1427,7 +1427,7 @@ BeforeAll {
     Import-Module "$PSScriptRoot/../src/ReAgent.Prereqs.psm1" -Force
 }
 
-Describe 'Get-MissingPrereqs' {
+Describe 'Get-MissingPrereq' {
     BeforeAll {
         function New-Inv {
             param($Py = 'C:\py.exe', $PyVer = [version]'3.11.0', $Jdk = 'C:\java.exe',
@@ -1440,37 +1440,37 @@ Describe 'Get-MissingPrereqs' {
     }
 
     It 'reports nothing missing on a fully provisioned host' {
-        Get-MissingPrereqs -Inventory (New-Inv) | Should -BeNullOrEmpty
+        Get-MissingPrereq -Inventory (New-Inv) | Should -BeNullOrEmpty
     }
 
     It 'reports python when it is absent' {
-        Get-MissingPrereqs -Inventory (New-Inv -Py $null -PyVer $null) | Should -Contain 'python'
+        Get-MissingPrereq -Inventory (New-Inv -Py $null -PyVer $null) | Should -Contain 'python'
     }
 
     It 'reports python when it is present but older than 3.10' {
-        Get-MissingPrereqs -Inventory (New-Inv -PyVer ([version]'3.9.7')) | Should -Contain 'python'
+        Get-MissingPrereq -Inventory (New-Inv -PyVer ([version]'3.9.7')) | Should -Contain 'python'
     }
 
     It 'reports cdb when it is absent' {
-        Get-MissingPrereqs -Inventory (New-Inv -Cdb $null) | Should -Contain 'cdb'
+        Get-MissingPrereq -Inventory (New-Inv -Cdb $null) | Should -Contain 'cdb'
     }
 
     It 'does not require a JDK when Ghidra is not installed' {
-        Get-MissingPrereqs -Inventory (New-Inv -Jdk $null -Ghidra $null) | Should -Not -Contain 'jdk'
+        Get-MissingPrereq -Inventory (New-Inv -Jdk $null -Ghidra $null) | Should -Not -Contain 'jdk'
     }
 
     It 'requires a JDK when Ghidra is installed' {
-        Get-MissingPrereqs -Inventory (New-Inv -Jdk $null) | Should -Contain 'jdk'
+        Get-MissingPrereq -Inventory (New-Inv -Jdk $null) | Should -Contain 'jdk'
     }
 }
 
-Describe 'Test-PrereqsSatisfied' {
+Describe 'Test-PrereqSatisfied' {
     It 'is true when nothing is missing' {
         $inv = [PSCustomObject]@{
             Python = 'x'; PythonVersion = [version]'3.11.0'; Jdk = 'x'
             Cdb = 'x'; Uv = 'x'; GhidraRoot = 'x'
         }
-        Test-PrereqsSatisfied -Inventory $inv | Should -BeTrue
+        Test-PrereqSatisfied -Inventory $inv | Should -BeTrue
     }
 }
 ```
@@ -1489,7 +1489,7 @@ Set-StrictMode -Version Latest
 
 $Script:MinPython = [version]'3.10.0'
 
-function Get-MissingPrereqs {
+function Get-MissingPrereq {
     <#
     .SYNOPSIS
         Returns the names of prerequisites this host is missing.
@@ -1515,17 +1515,17 @@ function Get-MissingPrereqs {
     return $missing
 }
 
-function Test-PrereqsSatisfied {
+function Test-PrereqSatisfied {
     <#
     .SYNOPSIS
         True when no prerequisite is missing.
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][object]$Inventory)
-    return ((Get-MissingPrereqs -Inventory $Inventory).Count -eq 0)
+    return ((Get-MissingPrereq -Inventory $Inventory).Count -eq 0)
 }
 
-function Install-Prereqs {
+function Install-Prereq {
     <#
     .SYNOPSIS
         Installs only the prerequisites the host is missing.
@@ -1536,7 +1536,7 @@ function Install-Prereqs {
     [CmdletBinding(SupportsShouldProcess)]
     param([Parameter(Mandatory)][object]$Inventory)
 
-    foreach ($item in (Get-MissingPrereqs -Inventory $Inventory)) {
+    foreach ($item in (Get-MissingPrereq -Inventory $Inventory)) {
         if (-not $PSCmdlet.ShouldProcess($item, 'Install prerequisite')) { continue }
         switch ($item) {
             'python' {
@@ -1574,7 +1574,7 @@ is on the machine PATH.
     }
 }
 
-Export-ModuleMember -Function Get-MissingPrereqs, Test-PrereqsSatisfied, Install-Prereqs
+Export-ModuleMember -Function Get-MissingPrereq, Test-PrereqSatisfied, Install-Prereq
 ```
 
 - [ ] **Step 4: Run the test and confirm it passes**
@@ -1586,7 +1586,7 @@ Expected: PASS, 7 tests.
 
 ✅ Already measured: Ghidra **12.1.2** declares `application.java.min=21` with **no maximum**, and the
 host's **OpenJDK 25** is verified working end-to-end (pyghidra 3.1.0 started the JVM and reported
-`Application.getApplicationVersion() == 12.1.2`). `Get-MissingPrereqs` must therefore **not** report
+`Application.getApplicationVersion() == 12.1.2`). `Get-MissingPrereq` must therefore **not** report
 `jdk` on this host.
 
 To re-confirm after any Ghidra upgrade:

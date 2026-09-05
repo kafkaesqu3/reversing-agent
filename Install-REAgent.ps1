@@ -83,8 +83,8 @@ $phaseTable = @(
         Fn   = { param($c) $c.Inventory = Get-HostInventory; Assert-Preflight -Inventory $c.Inventory }
     }
     @{ Id   = 1; Name = 'Prerequisites'
-        Test = { param($c) Test-PrereqsSatisfied -Inventory $c.Inventory }
-        Fn   = { param($c) Install-Prereqs -Inventory $c.Inventory }
+        Test = { param($c) Test-PrereqSatisfied -Inventory $c.Inventory }
+        Fn   = { param($c) Install-Prereq -Inventory $c.Inventory }
     }
     @{ Id   = 2; Name = 'Symbols'
         Test = { param($c) Test-SymbolsReady -Config $c.Config }
