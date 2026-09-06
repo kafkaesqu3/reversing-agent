@@ -149,6 +149,12 @@ function Invoke-Phase {
         $msg = $_.Exception.Message
         Write-ReAgentLog -Level ERROR `
             -Message "Phase $($Phase.Id) ($($Phase.Name)): FAILED - $msg"
+        # Without the frame, a strict-mode property error names no file and no
+        # line, and the phase that reports it is rarely the one at fault.
+        if ($_.ScriptStackTrace) {
+            Write-ReAgentLog -Level ERROR -Message (
+                '  ' + (($_.ScriptStackTrace -split "`r?`n")[0]).Trim())
+        }
         return New-PhaseResult -Id $Phase.Id -Name $Phase.Name -Status 'failed' `
             -DurationMs ([int]$sw.ElapsedMilliseconds) -ErrorMessage $msg
     }
