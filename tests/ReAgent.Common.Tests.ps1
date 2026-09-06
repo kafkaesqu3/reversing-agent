@@ -124,20 +124,21 @@ Describe 'Select-Phase' {
             @{ Id = 2; Name = 'Symbols' }
             @{ Id = 3; Name = 'McpServers' }
             @{ Id = 4; Name = 'AgentConfig' }
-            @{ Id = 5; Name = 'Verify' }
-            @{ Id = 6; Name = 'Manifest' }
+            @{ Id = 5; Name = 'Skills' }
+            @{ Id = 6; Name = 'Verify' }
+            @{ Id = 7; Name = 'Manifest' }
         )
     }
 
     It 'runs every phase by default' {
-        (Select-Phase -PhaseTable $Script:Table).Count | Should -Be 7
+        (Select-Phase -PhaseTable $Script:Table).Count | Should -Be 8
     }
 
     It 'runs preflight under -VerifyOnly, so verification has an inventory' {
         # Without phase 0 every check degrades to "Not installed on this host" -
         # a confident false negative, which is worse than no report at all.
         $ids = @(Select-Phase -PhaseTable $Script:Table -VerifyOnly | ForEach-Object { $_.Id })
-        $ids | Should -Be @(0, 5, 6)
+        $ids | Should -Be @(0, 6, 7)
     }
 
     It 'honours an explicit phase list' {
@@ -147,7 +148,18 @@ Describe 'Select-Phase' {
 
     It 'lets -VerifyOnly win over an explicit phase list' {
         @(Select-Phase -PhaseTable $Script:Table -VerifyOnly -Phases @(1) |
-            ForEach-Object { $_.Id }) | Should -Be @(0, 5, 6)
+            ForEach-Object { $_.Id }) | Should -Be @(0, 6, 7)
+    }
+}
+
+Describe 'Select-Phase with the Skills phase in place' {
+    It 'runs preflight, verification and the manifest under -VerifyOnly, never Skills' {
+        # Verifying must not install. The literal is asserted explicitly so it cannot
+        # drift silently the next time the phase table is renumbered.
+        $table = @(0..7 | ForEach-Object { @{ Id = $_; Name = "P$_" } })
+        $ids = @((Select-Phase -PhaseTable $table -VerifyOnly) | ForEach-Object { $_.Id })
+        $ids | Should -Be @(0, 6, 7)
+        $ids | Should -Not -Contain 5
     }
 }
 

@@ -105,7 +105,7 @@ function New-ClaudeSettingsObject {
         enableAllProjectMcpServers stops every OTHER server sitting at Pending
         approval. It is necessary but not sufficient: Claude Code still needs to
         be run once interactively in the project directory with the trust prompt
-        accepted, which Phase 6 reports as a manual step.
+        accepted, which Phase 7 reports as a manual step.
 
         Note these are NOT the same keys as disabledMcpServers/enabledMcpServers
         (no 'json'), which are the /mcp panel's toggles in ~/.claude.json.

@@ -19,7 +19,7 @@
 .PARAMETER Force
     Re-run phases their Test block reports as already satisfied.
 .PARAMETER VerifyOnly
-    Run only verification and manifest (phases 5 and 6).
+    Run only verification and manifest (phases 6 and 7).
 .PARAMETER Attended
     Include tier-2 verification, which needs x64dbg and Binary Ninja open.
 .EXAMPLE
@@ -84,6 +84,7 @@ $context = @{
     Attended      = [bool]$Attended
     VerifyOnly    = [bool]$VerifyOnly
     ServerResults = @()
+    SkillResults  = @()
     VerifyResults = @()
 }
 
@@ -109,7 +110,12 @@ $phaseTable = @(
         Test = { $false }
         Fn   = { param($c) Write-AgentConfiguration -Config $c.Config -ServerResults $c.ServerResults }
     }
-    @{ Id   = 5; Name = 'Verify'
+    @{ Id   = 5; Name = 'Skills'
+        Test = { $false }
+        Fn   = { param($c) $c.SkillResults = @(Install-AllSkill -Config $c.Config `
+                    -RepoRoot $PSScriptRoot) }
+    }
+    @{ Id   = 6; Name = 'Verify'
         Test = { $false }
         # -VerifyOnly skips phase 3, so replay the last run's server results out
         # of the manifest rather than verifying against an empty list.
@@ -122,7 +128,7 @@ $phaseTable = @(
                 -ServerResults $c.ServerResults -Inventory $c.Inventory -Attended:$c.Attended
         }
     }
-    @{ Id   = 6; Name = 'Manifest'
+    @{ Id   = 7; Name = 'Manifest'
         Test = { $false }
         Fn   = { param($c) Write-Manifest -Context $c -PhaseResults $results }
     }

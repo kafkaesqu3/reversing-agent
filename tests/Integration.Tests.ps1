@@ -1,7 +1,7 @@
 BeforeAll {
     $Script:Root = Join-Path $PSScriptRoot '..'
     foreach ($m in @('Common', 'Config', 'Discovery', 'Prereqs', 'Symbols',
-            'Tokens', 'Json', 'Servers', 'Generate', 'Verify', 'Manifest')) {
+            'Tokens', 'Json', 'Servers', 'Generate', 'Skills', 'Verify', 'Manifest')) {
         Import-Module (Join-Path $Script:Root "src\ReAgent.$m.psm1") -Force
     }
 }
@@ -59,7 +59,7 @@ Describe 'the entry point script' {
         $text = Get-Content (Join-Path $Script:Root 'Install-REAgent.ps1') -Raw
         foreach ($fn in @('Get-HostInventory', 'Assert-Preflight', 'Test-PrereqSatisfied',
                 'Install-Prereq', 'Test-SymbolsReady', 'Install-Symbols',
-                'Install-AllMcpServer', 'Write-AgentConfiguration',
+                'Install-AllMcpServer', 'Write-AgentConfiguration', 'Install-AllSkill',
                 'Invoke-Verification', 'Write-Manifest')) {
             $text | Should -BeLike "*$fn*"
             Get-Command $fn -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty

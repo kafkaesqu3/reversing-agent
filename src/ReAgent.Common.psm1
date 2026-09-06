@@ -245,7 +245,8 @@ function Select-Phase {
         -VerifyOnly deliberately keeps phase 0. Verification decides almost
         everything from the host inventory, so running it without one turns
         every check into a confident false negative - which is worse than no
-        report at all. It does not run phase 3: verifying must not install.
+        report at all. It does not run phase 3 or phase 5: verifying must not
+        install.
     .PARAMETER PhaseTable
         The full phase table, in execution order.
     .PARAMETER Phases
@@ -262,7 +263,7 @@ function Select-Phase {
         [switch]$VerifyOnly
     )
 
-    if ($VerifyOnly) { return @($PhaseTable | Where-Object { $_.Id -in @(0, 5, 6) }) }
+    if ($VerifyOnly) { return @($PhaseTable | Where-Object { $_.Id -in @(0, 6, 7) }) }
     if ($Phases) { return @($PhaseTable | Where-Object { $_.Id -in $Phases }) }
     return @($PhaseTable)
 }
