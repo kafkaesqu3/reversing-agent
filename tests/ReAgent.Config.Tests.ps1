@@ -101,6 +101,9 @@ Describe 'Write-PortsJson' {
 Describe 'Test-ReAgentConfigSchema skills validation' {
     BeforeAll {
         function New-SkillPack {
+            # Pure factory: builds and returns an in-memory PSCustomObject, writes nothing.
+            [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+                'PSUseShouldProcessForStateChangingFunctions', '')]
             param($Namespace = 'windbg', $Commit = ('a' * 40), $Name = 'windbg-crash',
                   $Enabled = $true, $Skills = $null, $Targets = @('mcp-windbg'))
             if ($null -eq $Skills) {
@@ -120,13 +123,19 @@ Describe 'Test-ReAgentConfigSchema skills validation' {
             }
         }
         function New-CfgWith {
+            # Pure factory: builds and returns an in-memory PSCustomObject, writes nothing.
+            [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+                'PSUseShouldProcessForStateChangingFunctions', '')]
             param($Packs)
             [PSCustomObject]@{
                 version = 1
                 paths = [PSCustomObject]@{ toolRoot = 'C:\re'; agentRoot = 'C:\re\agent'
                     stateRoot = 'C:\ProgramData\re-lab'; symbolCache = 'C:\re\symbols' }
                 symbols = [PSCustomObject]@{ enabled = $false; server = ''; prewarm = @() }
-                mcpServers = @([PSCustomObject]@{ name = 'mcp-windbg'; enabled = $true; kind = 'venv-stdio'; transport = 'stdio'; bind = '127.0.0.1'; port = 0 })
+                mcpServers = @([PSCustomObject]@{
+                        name = 'mcp-windbg'; enabled = $true; kind = 'venv-stdio'
+                        transport = 'stdio'; bind = '127.0.0.1'; port = 0
+                    })
                 skills = $Packs
             }
         }

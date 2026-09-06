@@ -150,31 +150,85 @@ function Test-SkillPackSchema {
     $seenNames = @{}
 
     foreach ($p in $Config.skills) {
-        if ($p.source.commit -notmatch '^[0-9a-f]{40}$') {
-            throw ("Skill pack '$($p.namespace)' pins source.commit to " +
-                "'$($p.source.commit)'. A 40-character commit SHA is required - a branch " +
-                'or tag moves under you.')
-        }
-        if ($p.review.reviewedCommit -ne $p.source.commit) {
-            throw ("Skill pack '$($p.namespace)' has review.reviewedCommit " +
-                "'$($p.review.reviewedCommit)' but source.commit " +
-                "'$($p.source.commit)'. The sign-off is for a different tree; re-review.")
-        }
-        foreach ($t in $p.targetServers) {
-            if ($serverNames -notcontains $t) {
-                throw ("Skill pack '$($p.namespace)' targets server '$t', which is not " +
-                    'declared in mcpServers.')
-            }
-        }
-        foreach ($x in $p.scanExceptions) {
-            if ([string]::IsNullOrWhiteSpace($x.justification)) {
-                throw ("Skill pack '$($p.namespace)' has a scan exception for rule " +
-                    "'$($x.ruleId)' with no justification. An unreviewed suppression is " +
-                    'not an exception.')
-            }
-        }
+        Test-SkillPackSourceSchema -Pack $p
+        Test-SkillPackTargetsSchema -Pack $p -ServerNames $serverNames
+        Test-SkillPackScanExceptionsSchema -Pack $p
         foreach ($s in $p.skills) {
             Test-SkillEntrySchema -Pack $p -Skill $s -SeenNames $seenNames
+        }
+    }
+}
+
+function Test-SkillPackSourceSchema {
+    <#
+    .SYNOPSIS
+        Validates a skill pack's commit pin and review freshness.
+    .DESCRIPTION
+        Supply-chain rule 1 as code: a branch or a tag is rejected here, not by
+        discipline. Tags move; a 40-hex commit cannot. A sign-off recorded
+        against a different commit is a sign-off for a different tree.
+    .PARAMETER Pack
+        The skill pack config entry.
+    .EXAMPLE
+        Test-SkillPackSourceSchema -Pack $p
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][object]$Pack)
+
+    if ($Pack.source.commit -notmatch '^[0-9a-f]{40}$') {
+        throw ("Skill pack '$($Pack.namespace)' pins source.commit to " +
+            "'$($Pack.source.commit)'. A 40-character commit SHA is required - a branch " +
+            'or tag moves under you.')
+    }
+    if ($Pack.review.reviewedCommit -ne $Pack.source.commit) {
+        throw ("Skill pack '$($Pack.namespace)' has review.reviewedCommit " +
+            "'$($Pack.review.reviewedCommit)' but source.commit " +
+            "'$($Pack.source.commit)'. The sign-off is for a different tree; re-review.")
+    }
+}
+
+function Test-SkillPackTargetsSchema {
+    <#
+    .SYNOPSIS
+        Validates that every targetServers entry names a declared server.
+    .PARAMETER Pack
+        The skill pack config entry.
+    .PARAMETER ServerNames
+        Names of the servers declared in mcpServers.
+    .EXAMPLE
+        Test-SkillPackTargetsSchema -Pack $p -ServerNames $serverNames
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Pack,
+        [Parameter(Mandatory)][array]$ServerNames
+    )
+
+    foreach ($t in $Pack.targetServers) {
+        if ($ServerNames -notcontains $t) {
+            throw ("Skill pack '$($Pack.namespace)' targets server '$t', which is not " +
+                'declared in mcpServers.')
+        }
+    }
+}
+
+function Test-SkillPackScanExceptionsSchema {
+    <#
+    .SYNOPSIS
+        Validates that every scan exception carries a justification.
+    .PARAMETER Pack
+        The skill pack config entry.
+    .EXAMPLE
+        Test-SkillPackScanExceptionsSchema -Pack $p
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][object]$Pack)
+
+    foreach ($x in $Pack.scanExceptions) {
+        if ([string]::IsNullOrWhiteSpace($x.justification)) {
+            throw ("Skill pack '$($Pack.namespace)' has a scan exception for rule " +
+                "'$($x.ruleId)' with no justification. An unreviewed suppression is " +
+                'not an exception.')
         }
     }
 }
@@ -213,11 +267,14 @@ function Test-SkillEntrySchema {
     }
     $SeenNames[$Skill.name] = $Pack.namespace
 
-    if (-not $Skill.enabled -and [string]::IsNullOrWhiteSpace($Skill.disabledReason)) {
+    $reason = $null
+    if ($Skill.PSObject.Properties['disabledReason']) { $reason = $Skill.disabledReason }
+    if (-not $Skill.enabled -and [string]::IsNullOrWhiteSpace($reason)) {
         throw ("Skill '$($Skill.name)' is disabled with no disabledReason. An omission " +
             'that is not written down becomes an oversight.')
     }
 }
 
 Export-ModuleMember -Function Get-ReAgentConfig, Test-ReAgentConfigSchema, `
-    Get-ServerPortMap, Write-PortsJson, Test-SkillPackSchema, Test-SkillEntrySchema
+    Get-ServerPortMap, Write-PortsJson, Test-SkillPackSchema, Test-SkillEntrySchema, `
+    Test-SkillPackSourceSchema, Test-SkillPackTargetsSchema, Test-SkillPackScanExceptionsSchema
