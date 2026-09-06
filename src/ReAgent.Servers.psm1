@@ -354,6 +354,18 @@ function Install-VenvStdioServer {
     $symbolPath = Get-SymbolPathValue -CacheDir $Config.paths.symbolCache `
         -Server $Config.symbols.server
 
+    # mcp-windbg has no live-process tool, so its tier-1 check needs a dump on
+    # disk. The server is installed and usable without one; only verification
+    # suffers, so a failure here warns rather than failing the install.
+    try {
+        $null = New-TestCrashDump -CdbPath $Inventory.Cdb `
+            -OutputPath (Join-Path $Config.paths.toolRoot 'scratch\test.dmp')
+    } catch {
+        Write-ReAgentLog -Level WARN -Message (
+            "Could not create the verification dump: $($_.Exception.Message) " +
+            'mcp-windbg is installed; its tier-1 check will report not-testable.')
+    }
+
     $command = [PSCustomObject]@{
         Executable = Get-VenvPython -VenvPath $venv
         Arguments  = @('-m', 'mcp_windbg',

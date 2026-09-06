@@ -219,6 +219,26 @@ Describe 'Install-VenvStdioServer' {
             transport = 'stdio'; bind = '127.0.0.1'; port = 0; auth = 'none'
             source    = [PSCustomObject]@{ package = 'mcp-windbg'; pin = '1.2.1' }
         }
+        Mock -ModuleName ReAgent.Servers New-TestCrashDump { 'C:\re\scratch\test.dmp' }
+    }
+
+    It 'creates the dump the tier-1 WinDbg check needs' {
+        # No caller meant no dump, and the check reported not-testable with
+        # "phase 3 creates it" - naming a step that never ran.
+        Mock -ModuleName ReAgent.Servers Install-VenvPackage { '1.2.1' }
+        $inv = [PSCustomObject]@{ Uv = 'uv.exe'; Cdb = 'C:\cdb.exe'; GhidraRoot = 'C:\g' }
+        Install-VenvStdioServer -Server $Script:StdioSrv -Config $Script:StdioCfg `
+            -Inventory $inv | Out-Null
+        Should -Invoke New-TestCrashDump -ModuleName ReAgent.Servers -Times 1 `
+            -ParameterFilter { $OutputPath -eq 'C:\re\scratch\test.dmp' -and $CdbPath -eq 'C:\cdb.exe' }
+    }
+
+    It 'still installs when the dump cannot be created' {
+        Mock -ModuleName ReAgent.Servers Install-VenvPackage { '1.2.1' }
+        Mock -ModuleName ReAgent.Servers New-TestCrashDump { throw 'cdb refused' }
+        $inv = [PSCustomObject]@{ Uv = 'uv.exe'; Cdb = 'C:\cdb.exe'; GhidraRoot = 'C:\g' }
+        (Install-VenvStdioServer -Server $Script:StdioSrv -Config $Script:StdioCfg `
+                -Inventory $inv).Status | Should -Be 'installed'
     }
 
     It 'refuses to install without cdb, and says how to get it' {
