@@ -60,4 +60,110 @@ function New-SkillResult {
     }
 }
 
-Export-ModuleMember -Function New-SkillResult
+function Get-SkillScanRule {
+    <#
+    .SYNOPSIS
+        Loads the red-flag scanner rules.
+    .DESCRIPTION
+        Rules are data, not code: they are a threat-intelligence artifact that
+        changes on a different cadence from the installer, and a reviewer who
+        does not read PowerShell can still audit them.
+
+        A missing, unparseable or empty rule file THROWS. It must never read as
+        'the scan passed'.
+    .PARAMETER Path
+        Rule file. Defaults to data/skill-scan-rules.json beside the module.
+    .EXAMPLE
+        Get-SkillScanRule
+    #>
+    [CmdletBinding()]
+    param([string]$Path = '')
+
+    if (-not $Path) {
+        $root = Join-Path $PSScriptRoot '..'
+        $Path = Join-Path $root 'data\skill-scan-rules.json'
+    }
+    if (-not (Test-Path -LiteralPath $Path)) {
+        throw ("Skill scan rules not found at '$Path'. Refusing to scan: a missing rule " +
+            'file must never read as a clean scan.')
+    }
+    $doc = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    $rules = @($doc.rules)
+    if ($rules.Count -eq 0) {
+        throw "Skill scan rules at '$Path' contain no rules. Refusing to scan."
+    }
+    return $rules
+}
+
+function Test-SkillContent {
+    <#
+    .SYNOPSIS
+        Scans skill text for red flags.
+    .DESCRIPTION
+        Pure: text in, findings out, no filesystem. One loop over the rule
+        table rather than a switch, which keeps complexity flat as rules grow.
+    .PARAMETER Text
+        The file's content.
+    .PARAMETER Rules
+        Rules from Get-SkillScanRule.
+    .PARAMETER File
+        Path recorded on each finding.
+    .EXAMPLE
+        Test-SkillContent -Text $md -Rules $rules -File 'SKILL.md'
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Text,
+        [Parameter(Mandatory)][array]$Rules,
+        [string]$File = ''
+    )
+
+    $findings = @()
+    $lines = $Text -split "`r?`n"
+    foreach ($rule in $Rules) {
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -match $rule.pattern) {
+                $findings += [PSCustomObject]@{
+                    RuleId   = $rule.id
+                    Severity = $rule.severity
+                    File     = $File
+                    Line     = $i + 1
+                    Text     = $lines[$i].Trim()
+                }
+            }
+        }
+    }
+    return $findings
+}
+
+function Select-UnwaivedFinding {
+    <#
+    .SYNOPSIS
+        Removes findings covered by a recorded, justified exception.
+    .DESCRIPTION
+        Exceptions are per-skill and per-rule, never global. A global
+        loosening of the rule file would be invisible; an exception is
+        recorded in the manifest with its justification and gets reviewed.
+    .PARAMETER Findings
+        Findings from Test-SkillContent.
+    .PARAMETER Exceptions
+        The pack's scanExceptions entries.
+    .PARAMETER Skill
+        The upstream skill name the findings came from.
+    .EXAMPLE
+        Select-UnwaivedFinding -Findings $f -Exceptions $p.scanExceptions -Skill 'crash'
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][array]$Findings,
+        [Parameter(Mandatory)][AllowEmptyCollection()][array]$Exceptions,
+        [Parameter(Mandatory)][string]$Skill
+    )
+
+    $waived = @($Exceptions | Where-Object { $_.skill -eq $Skill } |
+            ForEach-Object { $_.ruleId })
+    return @($Findings | Where-Object { $waived -notcontains $_.RuleId })
+}
+
+Export-ModuleMember -Function New-SkillResult, Get-SkillScanRule, Test-SkillContent, `
+    Select-UnwaivedFinding
