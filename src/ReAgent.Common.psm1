@@ -188,6 +188,53 @@ function Write-Utf8NoBomFile {
         (New-Object System.Text.UTF8Encoding($false)))
 }
 
+function Write-FileIfChanged {
+    <#
+    .SYNOPSIS
+        Writes text only when it differs from what is already on disk.
+    .DESCRIPTION
+        Derived files are rewritten on every run, and an unconditional write
+        changes LastWriteTime even when the content is identical. That is what
+        made a healthy pyghidra-mcp restart on every run (docs/mvp/MVP.md:204).
+
+        The comparison normalises the trailing newline on BOTH sides, matching
+        what Write-Utf8NoBomFile does on write. An asymmetric comparison would
+        never converge: the writer appends a newline the next compare misses,
+        so every run would rewrite.
+    .PARAMETER Path
+        Destination file. Parent directories are created.
+    .PARAMETER Text
+        The content.
+    .OUTPUTS
+        [bool] True when the file was written, false when it was already current.
+    .EXAMPLE
+        Write-FileIfChanged -Path $skill -Text $markdown
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Text
+    )
+
+    $wanted = if ($Text.EndsWith("`n")) { $Text } else { $Text + "`r`n" }
+
+    if (Test-Path -LiteralPath $Path) {
+        $current = Get-Content -LiteralPath $Path -Raw -ErrorAction SilentlyContinue
+        if ($null -ne $current -and $current -eq $wanted) {
+            Write-ReAgentLog -Level INFO -Message "Unchanged: '$Path'."
+            return $false
+        }
+    } else {
+        $dir = Split-Path -Parent $Path
+        if ($dir -and -not (Test-Path -LiteralPath $dir)) {
+            $null = New-Item -ItemType Directory -Path $dir -Force
+        }
+    }
+
+    Write-Utf8NoBomFile -Path $Path -Text $wanted
+    return $true
+}
+
 
 function Select-Phase {
     <#
@@ -265,4 +312,5 @@ function Grant-PathFullControl {
 }
 
 Export-ModuleMember -Function Write-ReAgentLog, New-PhaseResult, Get-ReAgentExitCode, `
-    Invoke-Phase, Select-Phase, Write-Utf8NoBomFile, Grant-PathFullControl
+    Invoke-Phase, Select-Phase, Write-Utf8NoBomFile, Write-FileIfChanged, `
+    Grant-PathFullControl

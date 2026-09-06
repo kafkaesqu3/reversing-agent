@@ -151,6 +151,48 @@ Describe 'Select-Phase' {
     }
 }
 
+Describe 'Write-FileIfChanged' {
+    It 'writes the file and returns true when it does not exist' {
+        $p = Join-Path $TestDrive 'wic-new.txt'
+        Write-FileIfChanged -Path $p -Text 'hello' | Should -BeTrue
+        (Get-Content -LiteralPath $p -Raw) | Should -Be "hello`r`n"
+    }
+
+    It 'rewrites and returns true when the content differs' {
+        $p = Join-Path $TestDrive 'wic-diff.txt'
+        $null = Write-FileIfChanged -Path $p -Text 'one'
+        Write-FileIfChanged -Path $p -Text 'two' | Should -BeTrue
+        (Get-Content -LiteralPath $p -Raw) | Should -Be "two`r`n"
+    }
+
+    It 'leaves LastWriteTime alone and returns false when the content is identical' {
+        # Regression: Write-ServerLauncher rewrote a derived file unconditionally, so its
+        # LastWriteTime always beat the scheduled task's LastRunTime and pyghidra-mcp was
+        # restarted on every run (docs/mvp/MVP.md:204, HANDOFF defect 7). Skill files are
+        # read by the drift check, so the same bug would make drift look real.
+        $p = Join-Path $TestDrive 'wic-same.txt'
+        $null = Write-FileIfChanged -Path $p -Text 'stable'
+        $before = (Get-Item -LiteralPath $p).LastWriteTimeUtc
+        Start-Sleep -Milliseconds 1100
+        Write-FileIfChanged -Path $p -Text 'stable' | Should -BeFalse
+        (Get-Item -LiteralPath $p).LastWriteTimeUtc | Should -Be $before
+    }
+
+    It 'converges when the caller omits the trailing newline the writer adds' {
+        # An asymmetric compare rewrites forever: the writer appends a newline, so the
+        # next comparison against the un-appended text always differs.
+        $p = Join-Path $TestDrive 'wic-nl.txt'
+        $null = Write-FileIfChanged -Path $p -Text 'no-newline'
+        Write-FileIfChanged -Path $p -Text 'no-newline' | Should -BeFalse
+    }
+
+    It 'creates the parent directory when it is missing' {
+        $p = Join-Path $TestDrive 'wic-deep\nested\file.txt'
+        Write-FileIfChanged -Path $p -Text 'deep' | Should -BeTrue
+        Test-Path -LiteralPath $p | Should -BeTrue
+    }
+}
+
 Describe 'Grant-PathFullControl' {
     It 'adds an inheritable ace, so files created later inherit it' {
         # manifest.json was created by the elevated run and inherited only
