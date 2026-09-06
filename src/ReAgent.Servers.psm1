@@ -1406,7 +1406,10 @@ function Expand-SkillPack {
                 'layout has changed, or the pinned commit is wrong.')
         }
         if ($SubPath) {
-            $dirs = @($dirs | Where-Object { $_.FullName -match [regex]::Escape($SubPath) })
+            $needle = '/' + $SubPath.Replace('\', '/').Trim('/') + '/'
+            $dirs = @($dirs | Where-Object {
+                    ($_.FullName.Replace('\', '/') + '/') -like "*$needle*"
+                })
             if ($dirs.Count -eq 0) {
                 throw ("No SKILL.md under subPath '$SubPath'. The upstream layout has " +
                     'changed; re-check the pinned commit.')

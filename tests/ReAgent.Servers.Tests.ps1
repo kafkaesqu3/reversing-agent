@@ -916,6 +916,32 @@ Describe 'Expand-SkillPack' {
         { Expand-SkillPack -ArchivePath $zip -SubPath '' } |
             Should -Throw '*upstream layout*'
     }
+
+    It 'does not match a subPath as a bare substring of an unrelated directory name' {
+        $repo = Join-Path $TestDrive 'esp3-src\repo-abc123'
+        $decoy = Join-Path $repo 'myskillset'
+        $real = Join-Path $repo 'skills\crash'
+        $null = New-Item -ItemType Directory -Path $decoy -Force
+        $null = New-Item -ItemType Directory -Path $real -Force
+        "---`nname: x`n---`nbody" | Set-Content -LiteralPath (Join-Path $decoy 'SKILL.md')
+        "---`nname: x`n---`nbody" | Set-Content -LiteralPath (Join-Path $real 'SKILL.md')
+        $zip = Join-Path $TestDrive 'esp3.zip'
+        Compress-Archive -Path (Join-Path $TestDrive 'esp3-src\*') -DestinationPath $zip
+        $dirs = @(Expand-SkillPack -ArchivePath $zip -SubPath 'skills')
+        $dirs.Count | Should -Be 1
+        $dirs[0].Name | Should -Be 'crash'
+    }
+
+    It 'matches a multi-segment forward-slash subPath against a nested Windows path' {
+        $src = Join-Path $TestDrive 'esp4-src\repo\plugins\foo\skills\crash'
+        $null = New-Item -ItemType Directory -Path $src -Force
+        "---`nname: x`n---`nbody" | Set-Content -LiteralPath (Join-Path $src 'SKILL.md')
+        $zip = Join-Path $TestDrive 'esp4.zip'
+        Compress-Archive -Path (Join-Path $TestDrive 'esp4-src\*') -DestinationPath $zip
+        $dirs = @(Expand-SkillPack -ArchivePath $zip -SubPath 'plugins/foo/skills')
+        $dirs.Count | Should -Be 1
+        $dirs[0].Name | Should -Be 'crash'
+    }
 }
 
 Describe 'Get-VerifiedGitHubArchive' {
