@@ -137,6 +137,13 @@ Describe 'Test-GeneratedConfig' {
         (Test-GeneratedConfig -Config $Script:Cfg).Status | Should -Be 'pass'
     }
 
+    It 'passes an empty server map rather than throwing on it' {
+        # Every server failing to install is a bad run, not a broken verifier.
+        '{ "mcpServers": { } }' |
+            Set-Content (Join-Path $Script:Cfg.paths.agentRoot '.mcp.json')
+        (Test-GeneratedConfig -Config $Script:Cfg).Status | Should -Be 'pass'
+    }
+
     It 'ignores stdio entries, which carry no url' {
         '{ "mcpServers": { "w": { "command": "python.exe", "args": ["-m","mcp_windbg"] } } }' |
             Set-Content (Join-Path $Script:Cfg.paths.agentRoot '.mcp.json')

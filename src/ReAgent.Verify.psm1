@@ -186,7 +186,11 @@ function Test-GeneratedConfig {
 
     $allocated = @(Get-ServerPortMap -Config $Config).Values
     $mcp = Get-Content -LiteralPath $mcpPath -Raw | ConvertFrom-Json
-    foreach ($name in $mcp.mcpServers.PSObject.Properties.Name) {
+    # Enumerated one property at a time: '.Properties.Name' on an object with
+    # no properties throws under StrictMode, and an empty mcpServers is the
+    # normal shape when every server failed to install.
+    foreach ($prop in @($mcp.mcpServers.PSObject.Properties)) {
+        $name = $prop.Name
         $entry = $mcp.mcpServers.$name
         if ($entry.PSObject.Properties.Name -notcontains 'url') { continue }
         if ($entry.url -notmatch '^http://127\.0\.0\.1:(\d+)') {
