@@ -257,6 +257,74 @@ function Compare-ToolCatalog {
     }
 }
 
+function Find-FrontmatterEnd {
+    <#
+    .SYNOPSIS
+        Finds the index of the closing --- fence in a frontmatter block.
+    .PARAMETER Lines
+        The full text split into lines; searched starting at index 1.
+    .OUTPUTS
+        [int] The index of the closing fence, or -1 if none found.
+    .EXAMPLE
+        Find-FrontmatterEnd -Lines $lines
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][AllowEmptyCollection()][array]$Lines)
+
+    for ($i = 1; $i -lt $Lines.Count; $i++) {
+        if ($Lines[$i].Trim() -eq '---') { return $i }
+    }
+    return -1
+}
+
+function ConvertFrom-FrontmatterLine {
+    <#
+    .SYNOPSIS
+        Parses one frontmatter line into the accumulator hashtable.
+    .DESCRIPTION
+        Mutates Fm in place (hashtables are reference types). Returns the
+        current key, which may be unchanged (blank line, list item) or
+        newly set (a key: value line), so the caller's loop can track it
+        across iterations.
+    .PARAMETER Fm
+        The accumulator hashtable, mutated in place.
+    .PARAMETER CurrentKey
+        The key most recently seen, for list items that continue it.
+    .PARAMETER LineNumber
+        1-based line number, for error messages.
+    .PARAMETER Line
+        The raw line text.
+    .OUTPUTS
+        [string] The current key after processing this line.
+    .EXAMPLE
+        $currentKey = ConvertFrom-FrontmatterLine -Fm $fm -CurrentKey $currentKey `
+            -LineNumber ($i + 1) -Line $lines[$i]
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][hashtable]$Fm,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$CurrentKey,
+        [Parameter(Mandatory)][int]$LineNumber,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Line
+    )
+
+    if ($Line -match '^\s*$') { return $CurrentKey }
+    if ($Line -match '^\s+-\s*(.+?)\s*$') {
+        if (-not $CurrentKey) {
+            throw "Frontmatter list item on line $LineNumber has no key above it."
+        }
+        $Fm[$CurrentKey] = @($Fm[$CurrentKey]) + $Matches[1]
+        return $CurrentKey
+    }
+    if ($Line -match '^([A-Za-z][A-Za-z0-9_-]*):\s*(.*)$') {
+        $key = $Matches[1]
+        $value = $Matches[2].Trim()
+        if ($value) { $Fm[$key] = $value } else { $Fm[$key] = @() }
+        return $key
+    }
+    throw "Frontmatter line $LineNumber could not be parsed: '$Line'."
+}
+
 function Get-SkillFrontmatter {
     <#
     .SYNOPSIS
@@ -280,31 +348,14 @@ function Get-SkillFrontmatter {
     if ($lines.Count -eq 0 -or $lines[0].Trim() -ne '---') {
         throw 'Skill has no frontmatter block; the first line must be ---.'
     }
-    $end = -1
-    for ($i = 1; $i -lt $lines.Count; $i++) {
-        if ($lines[$i].Trim() -eq '---') { $end = $i; break }
-    }
+    $end = Find-FrontmatterEnd -Lines $lines
     if ($end -lt 0) { throw 'Skill has an unterminated frontmatter block.' }
 
     $fm = @{}
     $currentKey = ''
     for ($i = 1; $i -lt $end; $i++) {
-        $line = $lines[$i]
-        if ($line -match '^\s*$') { continue }
-        if ($line -match '^\s+-\s*(.+?)\s*$') {
-            if (-not $currentKey) {
-                throw "Frontmatter list item on line $($i + 1) has no key above it."
-            }
-            $fm[$currentKey] = @($fm[$currentKey]) + $Matches[1]
-            continue
-        }
-        if ($line -match '^([A-Za-z][A-Za-z0-9_-]*):\s*(.*)$') {
-            $currentKey = $Matches[1]
-            $value = $Matches[2].Trim()
-            if ($value) { $fm[$currentKey] = $value } else { $fm[$currentKey] = @() }
-            continue
-        }
-        throw "Frontmatter line $($i + 1) could not be parsed: '$line'."
+        $currentKey = ConvertFrom-FrontmatterLine -Fm $fm -CurrentKey $currentKey `
+            -LineNumber ($i + 1) -Line $lines[$i]
     }
     return $fm
 }
@@ -346,4 +397,5 @@ function Get-SkillToolReference {
 
 Export-ModuleMember -Function New-SkillResult, Get-SkillScanRule, Test-SkillContent, `
     Select-UnwaivedFinding, Get-ToolCatalog, Get-CatalogServerTool, `
-    Compare-ToolCatalog, Get-SkillFrontmatter, Get-SkillToolReference
+    Compare-ToolCatalog, Find-FrontmatterEnd, ConvertFrom-FrontmatterLine, `
+    Get-SkillFrontmatter, Get-SkillToolReference
