@@ -197,10 +197,11 @@ function Write-FileIfChanged {
         changes LastWriteTime even when the content is identical. That is what
         made a healthy pyghidra-mcp restart on every run (docs/mvp/MVP.md:204).
 
-        The comparison normalises the trailing newline on BOTH sides, matching
-        what Write-Utf8NoBomFile does on write. An asymmetric comparison would
-        never converge: the writer appends a newline the next compare misses,
-        so every run would rewrite.
+        The comparison recomputes what the disk should contain from $Text using
+        the same trailing-newline rule Write-Utf8NoBomFile applies on write, then
+        compares that against what is actually on disk. An asymmetric comparison
+        would never converge: the writer appends a newline the next compare
+        misses, so every run would rewrite.
     .PARAMETER Path
         Destination file. Parent directories are created.
     .PARAMETER Text
@@ -219,7 +220,7 @@ function Write-FileIfChanged {
     $wanted = if ($Text.EndsWith("`n")) { $Text } else { $Text + "`r`n" }
 
     if (Test-Path -LiteralPath $Path) {
-        $current = Get-Content -LiteralPath $Path -Raw -ErrorAction SilentlyContinue
+        $current = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
         if ($null -ne $current -and $current -eq $wanted) {
             Write-ReAgentLog -Level INFO -Message "Unchanged: '$Path'."
             return $false

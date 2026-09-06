@@ -191,6 +191,20 @@ Describe 'Write-FileIfChanged' {
         Write-FileIfChanged -Path $p -Text 'deep' | Should -BeTrue
         Test-Path -LiteralPath $p | Should -BeTrue
     }
+
+    It 'converges when the content contains non-ASCII characters' {
+        # Regression: Get-Content without -Encoding UTF8 falls back to the system ANSI
+        # codepage on PS 5.1 for a BOM-less file, so non-ASCII text written by
+        # Write-Utf8NoBomFile was misdecoded on read-back and never compared equal,
+        # rewriting on every call.
+        $p = Join-Path $TestDrive 'wic-nonascii.txt'
+        $text = 'one' + [char]0x2014 + 'two'
+        $null = Write-FileIfChanged -Path $p -Text $text
+        $before = (Get-Item -LiteralPath $p).LastWriteTimeUtc
+        Start-Sleep -Milliseconds 1100
+        Write-FileIfChanged -Path $p -Text $text | Should -BeFalse
+        (Get-Item -LiteralPath $p).LastWriteTimeUtc | Should -Be $before
+    }
 }
 
 Describe 'Grant-PathFullControl' {
