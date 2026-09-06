@@ -4,9 +4,17 @@
 
 Nothing else. `../../BLUEPRINT.md`, `../../DEPLOYMENT_PLAN.md`, and `../../GAP_ANALYSIS.md` describe the full system; this file tracks only the first shippable slice of it and what still blocks that slice.
 
-**Status:** scoped, researched, host-verified. **All open items O1–O7 resolved** — see
+**Status:** implemented and merged to `main` (`abbad02`). **All open items O1–O7 resolved**, and
+the last small one — x64dbg's `mcp_config.json` path — resolved on the host on 2026-09-06. See
 `MVP_FINDINGS.md`, which carries measured host inventory and nine deviations that override this file
-and `MVP_SPEC.md` wherever they conflict. Ready for implementation.
+and `MVP_SPEC.md` wherever they conflict.
+
+**All five items of the definition of done are met**, including item 3 — every enabled server
+answering a real tool call, which this file calls the only one that matters. `-VerifyOnly -Attended`
+reports **8 pass, 0 fail, 1 not-testable**, the last being `ghidramcp`, disabled by design.
+The idempotency contract is proven too: a full elevated run reports phases 1 and 2 skipped,
+everything in phase 3 already present, and no server restart. **Nothing is open** — `HANDOFF.md`
+records the closing evidence and what is worth doing next.
 
 ---
 
@@ -163,8 +171,11 @@ section each one touched.
 | O6 | Does BN autostart its server? | ❌ **No.** `Plugins > MCP > Start Server` is required **every session**. Belongs in `CLAUDE.md` and the tier-2 prompt |
 | O7 | Minimum BN version for `ui.mcp.*` | ✅ Undocumented by the vendor — so gate on the capability instead: probe `binaryninja.exe` for the `ui.mcp.enabled` literal. 6.0.10601.0 has it |
 
-**One small item left**, cheap to settle during implementation: whether x64dbg's `mcp_config.json` is
-written beside `x64dbg.exe` or beside the plugin `.dp64`. Pre-seeding the wrong path fails silently.
+✅ **The last small item is resolved.** x64dbg's `mcp_config.json` is written **beside
+`x64dbg.exe`**, in the release directory — `C:\tools\x64dbg\release\{x64,x32}\mcp_config.json` — and
+not in `plugins\`, which holds no such file. The plugin honoured the pre-seeded token: the live
+server on :9094 authenticates with exactly the token the installer generated. `Get-X64dbgConfigPath`
+is correct as written.
 
 ---
 
@@ -186,3 +197,9 @@ written beside `x64dbg.exe` or beside the plugin `.dp64`. Pre-seeding the wrong 
 | 2026-09-04 | Nine deviations from the spec recorded and folded in. New decisions **L10** (pyghidra-mcp over streamable-http, accepting no-auth and a logon Scheduled Task, to keep symbols) and **L11** (x64dbg modelled as two servers on 9094/9095). Zig dropped; `symchk` found unavailable, so symbol pre-warm becomes best-effort. |
 | 2026-09-04 | **Tasks 1–16 implemented**: 11 modules, the entry point, a `tools/mcp_probe.py` MCP client, and 254 Pester tests with zero PSScriptAnalyzer findings. Four real bugs in the plan's own code were caught by its tests: `Assert-Preflight` threw on healthy hosts (empty-array unroll), `Get-X64dbgToken` read a `token` field that upstream calls `AuthToken`, `Get-JavaVersion` silently returned null for single-component JDK versions, and 3-argument `Join-Path` is PowerShell 6+ only. |
 | 2026-09-04 | Verification runs live tool calls through `mcp_probe.py` under each server's own venv rather than hand-rolled JSON-RPC. Proven against pyghidra-mcp: 20 tools, `decompile_function` returning real C for `winver.exe`, and a correct `ok:false` on a tool error — the 'connected but broken' case tier-1 exists to catch. **Not yet done:** an elevated end-to-end run, and `verify.tool` names for x64dbg and Binary Ninja, which are left unset rather than guessed. |
+| 2026-09-05 | **First elevated end-to-end run.** Produced `C:\re\agent\.mcp.json`, `.claude\settings.json`, `CLAUDE.md`, and `C:\ProgramData\re-lab\{install.log,manifest.json,verify-report.json}`. `claude mcp list` showed **binaryninja, mcp-windbg, pyghidra-mcp and x64dbg-x64 connected**; x64dbg-x32 refused, correctly, with x32dbg not running. The trust prompt was accepted, settling the O1 ⏸-Pending risk. x64dbg's real SHA-256 pinned for v1.3. |
+| 2026-09-06 | Branch merged to `main` (`abbad02`, 25 commits, `--no-ff`). **x64dbg's config path resolved** — beside `x64dbg.exe`, not `plugins\`. **Tier-2 tool names read off the live servers** while both apps were open: x64dbg advertises 80 tools, Binary Ninja 75; `verify` blocks added for `GetDebugState` and `bn_binary_view_list`, both proven by hand through `mcp_probe.py`. **Three new defects found**: `-VerifyOnly` skips phase 0 so every check degrades to a false negative and the run throws on a null inventory; pyghidra-mcp's Ghidra project is empty despite the launcher passing `winver.exe`, so the default Ghidra backend has nothing to decompile; and `$PSScriptRoot` comes back empty in the `-ConfigPath` param default on this host. |
+| 2026-09-06 | **Four defects found and fixed, verification now passes for real.** `-VerifyOnly` had been producing a report of pure false negatives: it skipped phase 0, so with no inventory and no install results every server read `not-installed` and the run threw on a null inventory. Phase selection moved into `Select-Phase`, `Get-RecordedServerResult` replays the last run's states from `manifest.json`, `Test-Preflight -VerifyOnly` drops the install-only blockers, and verification now separates *unknown* from *not installed*. `$PSScriptRoot` was empty in the `-ConfigPath` default because **`[CmdletBinding()]` on a script empties it inside the param block** — bisected, not an SMB artefact. **PowerShell 5.1 strips double quotes from a native command's arguments**, so every inline `--calls=` JSON reached `mcp_probe.py` mangled and three healthy servers were reported unreachable; calls now travel through `--calls-file`. And `Test-PyghidraLive` was passing on a failed decompilation, matching the JSON envelope's own braces instead of the C inside it. Result: 7 pass, 1 fail, 2 not-testable, with **mcp-windbg's tool argument names confirmed** and **L11's two-server x64dbg model proven on the x32 side**. 294 tests, zero analyzer findings. |
+| 2026-09-06 | **Every enabled server now answers a real tool call: 8 pass, 0 fail, 1 not-testable.** Two more defects closed the gap. A rewritten launcher never reached the running server — `Register-ServerScheduledTask` compares the task's action, the launcher *path*, which never changes — so pyghidra-mcp had served an empty project since 2026-09-05: process started 19:04:26, launcher naming `winver.exe` written 19:47:57. `Test-ServerRestartNeeded` now compares the task's `LastRunTime` against the launcher's `LastWriteTime`. `Stop-ScheduledTask` alone was not enough — it only reaches instances started this session, and the orphan from the previous logon held the Ghidra project lock, killing the replacement with `LockException` — so the restart also stops the server by executable path. And `Test-PyghidraLive` now decompiles the configured `testBinary` rather than `programs[0]`, so an analyst's own imports no longer decide what the installer's own verification asserts. `Grant-PathFullControl` gives `stateRoot` an inheritable ace so an unelevated `-VerifyOnly` can write its manifest. 310 tests, zero analyzer findings. |
+| 2026-09-06 | **Two regressions from the restart fix, caught by an elevated run and fixed.** `Write-ServerLauncher` rewrote the launcher unconditionally, so its `LastWriteTime` always beat the task's `LastRunTime` and the new staleness check restarted pyghidra-mcp on *every* run; it now writes only when the content differs. And phase 5 probed the server phase 3 had restarted eight seconds earlier — pyghidra-mcp imports and analyses before it binds the port — which reported it unreachable and failed `claude mcp list` with it; `Wait-ServerListening` now blocks until the port answers. `Grant-PathFullControl` landed on the state directory, so an unelevated `-VerifyOnly -Attended` now completes **all six phases, manifest included: 8 pass, 0 fail, 1 not-testable**. 314 tests, zero analyzer findings. |
+| 2026-09-06 | **MVP complete.** A full elevated run on the current code reports phases 1 and 2 skipped, everything in phase 3 already present, **no restart line**, and phases 4–6 ok — the idempotency contract, proven. `-VerifyOnly -Attended` immediately after, unelevated, with all three GUI applications open: **8 pass, 0 fail, 1 not-testable**, the last being `ghidramcp`, disabled by design. All five definition-of-done items are met. |
