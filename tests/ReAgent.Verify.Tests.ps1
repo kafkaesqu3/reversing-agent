@@ -216,6 +216,30 @@ Describe 'Test-GeneratedConfig' {
     }
 }
 
+Describe 'Get-ServerCheck' {
+    It 'reports a server with no result record as unknown rather than not installed' {
+        $cfg = [PSCustomObject]@{
+            paths = [PSCustomObject]@{ stateRoot = (Join-Path $TestDrive 'gsc-state') }
+            mcpServers = @([PSCustomObject]@{ name = 'ghost'; enabled = $true
+                    requiresHostApp = $false })
+        }
+        $checks = @(Get-ServerCheck -Config $cfg -ServerResults @())
+        $checks[0].Status | Should -Be 'not-testable'
+        $checks[0].Detail | Should -BeLike '*no manifest entry*'
+    }
+
+    It 'reports an attended server as not-testable when the run is unattended' {
+        $cfg = [PSCustomObject]@{
+            paths = [PSCustomObject]@{ stateRoot = (Join-Path $TestDrive 'gsc-state2') }
+            mcpServers = @([PSCustomObject]@{ name = 'binaryninja'; enabled = $true
+                    requiresHostApp = $true })
+        }
+        $results = @([PSCustomObject]@{ Name = 'binaryninja'; Installed = $true })
+        $checks = @(Get-ServerCheck -Config $cfg -ServerResults $results)
+        $checks[0].Status | Should -Be 'not-testable'
+    }
+}
+
 Describe 'Invoke-Verification tiers' {
     BeforeAll {
         $Script:VCfg = [PSCustomObject]@{

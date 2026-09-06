@@ -566,41 +566,32 @@ function Get-HostAppHint {
     return 'Open the host application, then re-run.'
 }
 
-function Invoke-Verification {
+function Get-ServerCheck {
     <#
     .SYNOPSIS
-        Runs the verification suite and writes verify-report.json.
+        Builds one verification check per configured MCP server.
     .DESCRIPTION
-        Tier 1 always runs and needs no GUI. Tier 2 needs x64dbg and Binary
-        Ninja open with the test binary loaded, so without -Attended those
-        servers report not-testable rather than fail. A server that needs an
-        application nobody opened has told us nothing.
+        Extracted from Invoke-Verification so a second loop (skills) can be
+        added without pushing that function past 100 lines and complexity 8.
+        The branch order is unchanged and load-bearing: unknown, then not
+        installed, then needs-attended - each a different not-testable reason.
     .PARAMETER Config
         The parsed configuration object.
     .PARAMETER ServerResults
-        Results from Install-AllMcpServer.
-    .PARAMETER Inventory
-        The host inventory.
+        Results from Install-AllMcpServer, or replayed from the manifest.
     .PARAMETER Attended
-        Include tier-2 checks.
+        Whether the operator has the GUI applications open.
     .EXAMPLE
-        Invoke-Verification -Config $c.Config -ServerResults $c.ServerResults -Inventory $c.Inventory
+        Get-ServerCheck -Config $cfg -ServerResults $r -Attended
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][object]$Config,
         [Parameter(Mandatory)][AllowEmptyCollection()][array]$ServerResults,
-        [object]$Inventory = $null,
         [switch]$Attended
     )
 
     $checks = @()
-    $claude = if ($Inventory) { $Inventory.ClaudeCode } else { $null }
-
-    $checks += Test-ClaudeCli -ClaudePath $claude
-    $checks += Test-ClaudeMcpList -ClaudePath $claude -WorkingDirectory $Config.paths.agentRoot
-    $checks += Test-GeneratedConfig -Config $Config
-
     foreach ($s in $Config.mcpServers) {
         $result = $ServerResults | Where-Object { $_.Name -eq $s.name } | Select-Object -First 1
         if (-not $result) {
@@ -648,6 +639,45 @@ function Invoke-Verification {
                 -Reason "The check could not run: $($_.Exception.Message)"
         }
     }
+    return $checks
+}
+
+function Invoke-Verification {
+    <#
+    .SYNOPSIS
+        Runs the verification suite and writes verify-report.json.
+    .DESCRIPTION
+        Tier 1 always runs and needs no GUI. Tier 2 needs x64dbg and Binary
+        Ninja open with the test binary loaded, so without -Attended those
+        servers report not-testable rather than fail. A server that needs an
+        application nobody opened has told us nothing.
+    .PARAMETER Config
+        The parsed configuration object.
+    .PARAMETER ServerResults
+        Results from Install-AllMcpServer.
+    .PARAMETER Inventory
+        The host inventory.
+    .PARAMETER Attended
+        Include tier-2 checks.
+    .EXAMPLE
+        Invoke-Verification -Config $c.Config -ServerResults $c.ServerResults -Inventory $c.Inventory
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Config,
+        [Parameter(Mandatory)][AllowEmptyCollection()][array]$ServerResults,
+        [object]$Inventory = $null,
+        [switch]$Attended
+    )
+
+    $checks = @()
+    $claude = if ($Inventory) { $Inventory.ClaudeCode } else { $null }
+
+    $checks += Test-ClaudeCli -ClaudePath $claude
+    $checks += Test-ClaudeMcpList -ClaudePath $claude -WorkingDirectory $Config.paths.agentRoot
+    $checks += Test-GeneratedConfig -Config $Config
+
+    $checks += Get-ServerCheck -Config $Config -ServerResults $ServerResults -Attended:$Attended
 
     $report = [ordered]@{
         tier2Requested = [bool]$Attended
@@ -675,4 +705,4 @@ function Invoke-Verification {
 Export-ModuleMember -Function New-CheckResult, Invoke-McpProbe, Test-ClaudeCli, `
     Test-ClaudeMcpList, Test-GeneratedConfig, Test-ServerNotTestable, `
     Get-ProbeScriptPath, Test-PyghidraLive, Test-WindbgLive, Invoke-Verification, `
-    Test-HttpServerLive, Get-HostAppHint, Get-ProbeInterpreter
+    Test-HttpServerLive, Get-HostAppHint, Get-ProbeInterpreter, Get-ServerCheck
