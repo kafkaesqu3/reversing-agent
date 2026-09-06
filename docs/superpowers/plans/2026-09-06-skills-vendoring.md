@@ -2934,7 +2934,26 @@ Expected: three more passes.
 
 ---
 
-## Task 19: Pack 9 — `dariushoule/x64dbg-skills`
+## Task 19: Pack 9 — `dariushoule/x64dbg-skills` — DEFERRED, not part of this execution
+
+**Deferred by explicit decision on 2026-09-06.** Spec §3.2 rates this pack "High —
+near-rewrite": upstream is written against `dariushoule/x64dbg-automate` (ZMQ transport,
+single-client disconnect/run-Python/reconnect lifecycle), while our installed server is
+`duty1g/x64dbg-mcp-server` (HTTP, 80 PascalCase tools, no such lifecycle). Every
+"disconnect, run Python, reconnect" passage is a deletion plus a procedure rewrite, not a
+rename, and some procedures may have no equivalent — budget for shipping a subset. That
+cost is disproportionate to the other eight packs in this plan and is being carved out
+rather than let it stall the rest of the vendoring work.
+
+**This task is not executed in this pass.** The steps below are preserved as the
+requirements for whenever this pack is picked back up — do not delete them. When resumed,
+re-verify `dariushoule` is still the correct upstream (not one of the near-identical forks
+named in Step 1) before vendoring.
+
+Skipping this task means: no `x64dbg` namespace ships, `config.skills` carries no `x64dbg`
+entry, and the final verification's attended x64dbg/x32dbg check is dropped (see Final
+verification, below). Task 20 (Binary Ninja) and Task 21/22 do not depend on this task and
+proceed unaffected.
 
 Its own sub-slice. **This is not a rename job** (spec §3.2).
 
@@ -3123,7 +3142,7 @@ Invoke-ScriptAnalyzer -Path . -Settings PSScriptAnalyzerSettings.psd1 -Recurse  
 3. Insert a permission-skipping flag into a vendored SKILL.md → scan **blocks**, pack `failed`, previously-installed copy **removed from disk**.
 4. Bump a server's pin in config without refreshing the catalog → **G4 fails** with no server running.
 
-**Attended, with x64dbg, x32dbg and Binary Ninja open:**
+**Attended, with Binary Ninja open (x64dbg/x32dbg dropped — Task 19 deferred, see above):**
 ```powershell
 .\Install-REAgent.ps1 -Attended -UpdateToolCatalog
 .\Install-REAgent.ps1 -VerifyOnly -Attended
