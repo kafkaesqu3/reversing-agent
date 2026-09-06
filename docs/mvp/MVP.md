@@ -170,6 +170,9 @@ written beside `x64dbg.exe` or beside the plugin `.dp64`. Pre-seeding the wrong 
 
 ## Log
 
+> **Resuming this work? Start at `HANDOFF.md`.** It carries current state, the exact next
+> steps, and the environment gotchas that are not derivable from the code.
+
 | Date | Entry |
 |---|---|
 | 2026-09-04 | MVP scoped. `../../BLUEPRINT.md` §6/§8 and `../../DEPLOYMENT_PLAN.md` §D4 + Part 1 updated: all MCP servers local, inference remote, three-plane model documented. |
@@ -181,3 +184,5 @@ written beside `x64dbg.exe` or beside the plugin `.dp64`. Pre-seeding the wrong 
 | 2026-09-04 | **O1–O7 all resolved** against the live host and upstream sources; findings recorded in `MVP_FINDINGS.md`. Host inventory measured: **nothing needs installing** — Python 3.13.15, OpenJDK 25, uv, cdb (MSIX), Ghidra 12.1.2, x64dbg, Binary Ninja 6.0.10601, Claude Code 2.1.261 all present; 8 GB RAM, below the 32 GB advisory. |
 | 2026-09-04 | **The full chain was proven end-to-end before writing installer code**: `uv` venv → pyghidra 3.1.0 on Ghidra 12.1.2 under JDK 25 → MCP `initialize` (20 tools) → `decompile_function` returning real C for `winver.exe`'s entry point. Build risk is packaging and idempotency, not tool compatibility. |
 | 2026-09-04 | Nine deviations from the spec recorded and folded in. New decisions **L10** (pyghidra-mcp over streamable-http, accepting no-auth and a logon Scheduled Task, to keep symbols) and **L11** (x64dbg modelled as two servers on 9094/9095). Zig dropped; `symchk` found unavailable, so symbol pre-warm becomes best-effort. |
+| 2026-09-04 | **Tasks 1–16 implemented**: 11 modules, the entry point, a `tools/mcp_probe.py` MCP client, and 254 Pester tests with zero PSScriptAnalyzer findings. Four real bugs in the plan's own code were caught by its tests: `Assert-Preflight` threw on healthy hosts (empty-array unroll), `Get-X64dbgToken` read a `token` field that upstream calls `AuthToken`, `Get-JavaVersion` silently returned null for single-component JDK versions, and 3-argument `Join-Path` is PowerShell 6+ only. |
+| 2026-09-04 | Verification runs live tool calls through `mcp_probe.py` under each server's own venv rather than hand-rolled JSON-RPC. Proven against pyghidra-mcp: 20 tools, `decompile_function` returning real C for `winver.exe`, and a correct `ok:false` on a tool error — the 'connected but broken' case tier-1 exists to catch. **Not yet done:** an elevated end-to-end run, and `verify.tool` names for x64dbg and Binary Ninja, which are left unset rather than guessed. |
