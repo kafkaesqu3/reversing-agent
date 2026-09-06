@@ -168,3 +168,63 @@ Describe 'Compare-ToolCatalog' {
         $d.Removed | Should -BeNullOrEmpty
     }
 }
+
+Describe 'Get-SkillFrontmatter' {
+    It 'parses scalars and list items without a YAML dependency' {
+        $t = @"
+---
+name: windbg-crash-analysis
+description: Triage a crash dump.
+allowed-tools:
+  - mcp__mcp-windbg__open_cdb_dump
+  - Read
+---
+Body text.
+"@
+        $fm = Get-SkillFrontmatter -Text $t
+        $fm['name'] | Should -Be 'windbg-crash-analysis'
+        @($fm['allowed-tools']).Count | Should -Be 2
+    }
+
+    It 'throws on an unterminated frontmatter block rather than returning empty' {
+        # A vacuously-empty result would make the whole gate pass silently, which is the
+        # worst failure available here.
+        { Get-SkillFrontmatter -Text "---`nname: x`nno closing fence" } |
+            Should -Throw '*unterminated*'
+    }
+
+    It 'throws when there is no frontmatter block at all' {
+        { Get-SkillFrontmatter -Text 'Just body text.' } | Should -Throw '*frontmatter*'
+    }
+
+    It 'distinguishes an absent key from an explicitly empty list' {
+        $withEmpty = Get-SkillFrontmatter -Text "---`nname: x`nallowed-tools:`n---`nb"
+        $withEmpty.ContainsKey('allowed-tools') | Should -BeTrue
+        @($withEmpty['allowed-tools']).Count | Should -Be 0
+
+        $without = Get-SkillFrontmatter -Text "---`nname: x`n---`nb"
+        $without.ContainsKey('allowed-tools') | Should -BeFalse
+    }
+}
+
+Describe 'Get-SkillToolReference' {
+    It 'splits mcp__server__tool including hyphenated server names' {
+        $fm = @{ 'allowed-tools' = @('mcp__mcp-windbg__open_cdb_dump',
+                'mcp__x64dbg-x64__GetDebugState', 'Read') }
+        $refs = @(Get-SkillToolReference -Frontmatter $fm)
+        $refs.Count | Should -Be 2
+        ($refs | Where-Object { $_.Server -eq 'mcp-windbg' }).Tool |
+            Should -Be 'open_cdb_dump'
+        ($refs | Where-Object { $_.Server -eq 'x64dbg-x64' }).Tool |
+            Should -Be 'GetDebugState'
+    }
+
+    It 'ignores non-MCP entries such as Read and Write' {
+        $fm = @{ 'allowed-tools' = @('Read', 'Write', 'Bash') }
+        @(Get-SkillToolReference -Frontmatter $fm) | Should -BeNullOrEmpty
+    }
+
+    It 'returns nothing when the key is absent, leaving absence to the caller' {
+        @(Get-SkillToolReference -Frontmatter @{ name = 'x' }) | Should -BeNullOrEmpty
+    }
+}

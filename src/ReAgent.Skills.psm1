@@ -257,6 +257,93 @@ function Compare-ToolCatalog {
     }
 }
 
+function Get-SkillFrontmatter {
+    <#
+    .SYNOPSIS
+        Parses a SKILL.md's --- delimited frontmatter.
+    .DESCRIPTION
+        A minimal reader for 'key: value' and 'key:' followed by '  - item'.
+        No YAML dependency: PowerShell 5.1 ships none, and adding one to read
+        four keys is not justified.
+
+        It THROWS on anything it cannot parse. Returning an empty hashtable
+        would make every downstream check vacuously true.
+    .PARAMETER Text
+        The file's full content.
+    .EXAMPLE
+        Get-SkillFrontmatter -Text (Get-Content $p -Raw)
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Text)
+
+    $lines = $Text -split "`r?`n"
+    if ($lines.Count -eq 0 -or $lines[0].Trim() -ne '---') {
+        throw 'Skill has no frontmatter block; the first line must be ---.'
+    }
+    $end = -1
+    for ($i = 1; $i -lt $lines.Count; $i++) {
+        if ($lines[$i].Trim() -eq '---') { $end = $i; break }
+    }
+    if ($end -lt 0) { throw 'Skill has an unterminated frontmatter block.' }
+
+    $fm = @{}
+    $currentKey = ''
+    for ($i = 1; $i -lt $end; $i++) {
+        $line = $lines[$i]
+        if ($line -match '^\s*$') { continue }
+        if ($line -match '^\s+-\s*(.+?)\s*$') {
+            if (-not $currentKey) {
+                throw "Frontmatter list item on line $($i + 1) has no key above it."
+            }
+            $fm[$currentKey] = @($fm[$currentKey]) + $Matches[1]
+            continue
+        }
+        if ($line -match '^([A-Za-z][A-Za-z0-9_-]*):\s*(.*)$') {
+            $currentKey = $Matches[1]
+            $value = $Matches[2].Trim()
+            if ($value) { $fm[$currentKey] = $value } else { $fm[$currentKey] = @() }
+            continue
+        }
+        throw "Frontmatter line $($i + 1) could not be parsed: '$line'."
+    }
+    return $fm
+}
+
+function Get-SkillToolReference {
+    <#
+    .SYNOPSIS
+        Extracts MCP tool references from parsed frontmatter.
+    .DESCRIPTION
+        Reads allowed-tools, which is Claude Code's real permission mechanism -
+        so the declaration both feeds this gate and restricts the skill at
+        runtime. A declaration that also grants access cannot drift from what
+        the skill can actually do.
+
+        Server names contain hyphens (mcp-windbg, x64dbg-x64), so the split is
+        on the literal '__' separator, not on a character class.
+    .PARAMETER Frontmatter
+        From Get-SkillFrontmatter.
+    .EXAMPLE
+        Get-SkillToolReference -Frontmatter $fm
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][hashtable]$Frontmatter)
+
+    if (-not $Frontmatter.ContainsKey('allowed-tools')) { return @() }
+
+    $refs = @()
+    foreach ($entry in @($Frontmatter['allowed-tools'])) {
+        if ("$entry" -notlike 'mcp__*') { continue }
+        $parts = "$entry".Substring(5) -split '__', 2
+        if ($parts.Count -ne 2 -or -not $parts[0] -or -not $parts[1]) {
+            throw ("Malformed MCP tool reference '$entry'. Expected " +
+                'mcp__<server>__<tool>.')
+        }
+        $refs += [PSCustomObject]@{ Server = $parts[0]; Tool = $parts[1] }
+    }
+    return $refs
+}
+
 Export-ModuleMember -Function New-SkillResult, Get-SkillScanRule, Test-SkillContent, `
     Select-UnwaivedFinding, Get-ToolCatalog, Get-CatalogServerTool, `
-    Compare-ToolCatalog
+    Compare-ToolCatalog, Get-SkillFrontmatter, Get-SkillToolReference
