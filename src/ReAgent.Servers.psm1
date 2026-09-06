@@ -895,15 +895,8 @@ function Get-VerifiedRelease {
 
     $actual = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash.ToLowerInvariant()
 
-    if ($expected -eq 'PIN-ME') {
-        throw ("'$asset' is not pinned to a hash yet. Its SHA-256 is $actual - record " +
-            "that under mcpServers[$($Server.name)].source.sha256 in " +
-            're-agent.config.json and re-run. Nothing is installed unverified.')
-    }
-    if ($actual -ne $expected.ToLowerInvariant()) {
-        throw ("SHA-256 mismatch for '$asset'. Expected $expected, got $actual. " +
-            'Refusing to install; delete the download and re-run, or investigate the source.')
-    }
+    Assert-FileHash -Actual $actual -Expected $expected -Label $asset `
+        -RecordHint "mcpServers[$($Server.name)].source.sha256"
 
     Write-ReAgentLog -Level INFO -Message "Verified $asset ($actual)."
     return $target

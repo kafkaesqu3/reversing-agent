@@ -312,6 +312,48 @@ function Grant-PathFullControl {
     }
 }
 
+
+
+function Assert-FileHash {
+    <#
+    .SYNOPSIS
+        Enforces trust-on-first-use against a pinned hash.
+    .DESCRIPTION
+        Pure: takes hash strings, touches no filesystem. Three callers share
+        it - the release download, the vendored archive, and the adapted-tree
+        drift check - and each needs a DIFFERENT record hint, because handing
+        an operator the wrong config key is the failure this message exists to
+        prevent.
+    .PARAMETER Actual
+        The computed hash.
+    .PARAMETER Expected
+        The pinned hash, or the literal 'PIN-ME'.
+    .PARAMETER Label
+        What is being verified, for the message.
+    .PARAMETER RecordHint
+        The exact config key the operator should record the hash under.
+    .EXAMPLE
+        Assert-FileHash -Actual $h -Expected $p -Label 'x64dbg zip' -RecordHint 'mcpServers[x].source.sha256'
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Actual,
+        [Parameter(Mandatory)][string]$Expected,
+        [Parameter(Mandatory)][string]$Label,
+        [Parameter(Mandatory)][string]$RecordHint
+    )
+
+    if ($Expected -eq 'PIN-ME') {
+        throw ("'$Label' is not pinned to a hash yet. Its SHA-256 is $Actual - record " +
+            "that under $RecordHint in re-agent.config.json and re-run. Nothing is " +
+            'installed unverified.')
+    }
+    if ($Actual.ToLowerInvariant() -ne $Expected.ToLowerInvariant()) {
+        throw ("SHA-256 mismatch for '$Label'. Expected $Expected, got $Actual. " +
+            'Refusing to install; delete the download and re-run, or investigate the source.')
+    }
+}
+
 Export-ModuleMember -Function Write-ReAgentLog, New-PhaseResult, Get-ReAgentExitCode, `
     Invoke-Phase, Select-Phase, Write-Utf8NoBomFile, Write-FileIfChanged, `
-    Grant-PathFullControl
+    Grant-PathFullControl, Assert-FileHash

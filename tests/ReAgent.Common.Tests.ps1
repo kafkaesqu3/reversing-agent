@@ -256,3 +256,27 @@ Describe 'Grant-PathFullControl' {
             Should -Not -Throw
     }
 }
+
+Describe 'Assert-FileHash' {
+    It 'throws on a placeholder and carries the computed hash so it can be recorded' {
+        { Assert-FileHash -Actual 'abc123' -Expected 'PIN-ME' -Label 'thing' `
+                -RecordHint 'skills[demo].source.treeSha256' } |
+            Should -Throw '*abc123*'
+    }
+
+    It 'names the exact config key to record the hash under' {
+        { Assert-FileHash -Actual 'abc123' -Expected 'PIN-ME' -Label 'thing' `
+                -RecordHint 'skills[demo].source.treeSha256' } |
+            Should -Throw '*skills`[demo`].source.treeSha256*'
+    }
+
+    It 'refuses a mismatch rather than installing unverified content' {
+        { Assert-FileHash -Actual 'aaa' -Expected 'bbb' -Label 'thing' -RecordHint 'x' } |
+            Should -Throw '*mismatch*'
+    }
+
+    It 'accepts a match regardless of hash casing' {
+        { Assert-FileHash -Actual 'abcdef' -Expected 'ABCDEF' -Label 'thing' `
+                -RecordHint 'x' } | Should -Not -Throw
+    }
+}
