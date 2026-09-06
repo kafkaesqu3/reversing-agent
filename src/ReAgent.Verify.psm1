@@ -364,10 +364,6 @@ function Test-WindbgLive {
 
         Both calls share ONE probe session: open_cdb_dump establishes the state
         that run_cdb_command then uses.
-
-        VERIFY the two tool argument names against the installed mcp-windbg the
-        first time this runs on a host; upstream documents the tool names but
-        not their parameter names.
     .PARAMETER Server
         The server's config entry.
     .PARAMETER Config
