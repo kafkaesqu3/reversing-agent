@@ -20,6 +20,8 @@
                   "pin": "v1.3", "sha256": { "x64dbg-MCP-Server-v1.3.zip": "1763b3c494310114caada99551e24cea9a4b859065167bc6d09758bacd37a9aa" } },
       "transport": "http", "bind": "127.0.0.1", "port": 9094, "path": "/",
       "auth": "bearer-preseeded", "tokenHexChars": 32,
+      "verify": { "tool": "GetDebugState", "args": { },
+                  "expect": "isDebugging:\\s*true" },
       "requiresHostApp": true, "verifyTier": "attended"
     },
     {
@@ -28,6 +30,8 @@
                   "pin": "v1.3", "sha256": { "x64dbg-MCP-Server-v1.3.zip": "1763b3c494310114caada99551e24cea9a4b859065167bc6d09758bacd37a9aa" } },
       "transport": "http", "bind": "127.0.0.1", "port": 9095, "path": "/",
       "auth": "bearer-preseeded", "tokenHexChars": 32,
+      "verify": { "tool": "GetDebugState", "args": { },
+                  "expect": "isDebugging:\\s*true" },
       "requiresHostApp": true, "verifyTier": "attended"
     },
     {
@@ -35,6 +39,8 @@
       "transport": "http", "bind": "127.0.0.1", "port": 24642, "path": "/mcp",
       "auth": "bearer-generated", "requiresHostApp": true, "verifyTier": "attended",
       "capabilityProbe": "ui.mcp.enabled",
+      "verify": { "tool": "bn_binary_view_list", "args": { },
+                  "expect": "count:\\s*[1-9]" },
       "perSessionStart": "Plugins > MCP > Start Server"
     },
     {

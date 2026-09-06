@@ -476,19 +476,27 @@ function Test-Preflight {
         the installer unusable on the boxes it targets.
     .PARAMETER Inventory
         The host inventory from Get-HostInventory.
+    .PARAMETER VerifyOnly
+        Drop the blockers that only installing needs. Elevation, a VM and egress
+        are required to write plugins, venvs and machine-wide symbol paths; a
+        verification run does none of that, and refusing to report on a healthy
+        box because the shell is unelevated helps nobody.
     .EXAMPLE
         $blockers = Test-Preflight -Inventory $inv
     #>
     [CmdletBinding()]
-    param([Parameter(Mandatory)][object]$Inventory)
+    param(
+        [Parameter(Mandatory)][object]$Inventory,
+        [switch]$VerifyOnly
+    )
 
     $blockers = @()
 
-    if (-not $Inventory.IsAdministrator) {
+    if (-not $VerifyOnly -and -not $Inventory.IsAdministrator) {
         $blockers += ('Not running as Administrator. Re-launch PowerShell with ' +
             '"Run as administrator" and run this script again.')
     }
-    if (-not $Inventory.IsVirtualMachine) {
+    if (-not $VerifyOnly -and -not $Inventory.IsVirtualMachine) {
         $blockers += ('This does not look like a virtual machine. RE tooling must not be ' +
             'installed on a host OS. Run this inside the FLARE VM.')
     }
@@ -501,7 +509,7 @@ function Test-Preflight {
         $blockers += ("PowerShell $($PSVersionTable.PSVersion) is too old. " +
             'Version 5.1 or later is required; install Windows Management Framework 5.1.')
     }
-    if (-not (Test-NetworkReachable)) {
+    if (-not $VerifyOnly -and -not (Test-NetworkReachable)) {
         $blockers += ('No network reachable. This run downloads symbols and pinned packages, ' +
             'so it cannot proceed offline. Restore egress and re-run.')
     }
@@ -516,14 +524,18 @@ function Get-PreflightWarning {
         Separated from Test-Preflight so that "uncomfortable" never silently
         becomes "refuses to run".
     .PARAMETER Inventory
-        The host inventory from Get-HostInventory.
+        The host inventory from Get-HostInventory, or $null when preflight was
+        skipped or aborted.
     .EXAMPLE
         Get-PreflightWarning -Inventory $inv | ForEach-Object { Write-Warning $_ }
     #>
     [CmdletBinding()]
-    param([Parameter(Mandatory)][object]$Inventory)
+    param([Parameter(Mandatory)][AllowNull()][object]$Inventory)
 
     $warnings = @()
+    # The caller runs this after the phase loop whatever happened, so a run that
+    # never reached Get-HostInventory must produce no warnings, not an error.
+    if (-not $Inventory) { return $warnings }
     if ($Inventory.TotalRamGb -lt 32) {
         $warnings += ("Only $($Inventory.TotalRamGb) GB RAM. Ghidra, Binary Ninja, a debugger " +
             'and the agent co-resident want 32 GB; expect swapping.')
@@ -541,16 +553,21 @@ function Assert-Preflight {
         Throws with a combined, actionable message when preflight blockers exist.
     .PARAMETER Inventory
         The host inventory from Get-HostInventory.
+    .PARAMETER VerifyOnly
+        Assert only the blockers a verification run actually needs.
     .EXAMPLE
         Assert-Preflight -Inventory $c.Inventory
     #>
     [CmdletBinding()]
-    param([Parameter(Mandatory)][object]$Inventory)
+    param(
+        [Parameter(Mandatory)][object]$Inventory,
+        [switch]$VerifyOnly
+    )
 
     # @() is load-bearing: PowerShell unrolls an empty array on return, so a
     # healthy host yields $null here and $null.Count throws under StrictMode.
     # Without the wrap, Assert-Preflight fails on exactly the boxes that pass.
-    $blockers = @(Test-Preflight -Inventory $Inventory)
+    $blockers = @(Test-Preflight -Inventory $Inventory -VerifyOnly:$VerifyOnly)
     if ($blockers.Count -gt 0) {
         throw ("Preflight failed:`n  - " + ($blockers -join "`n  - "))
     }

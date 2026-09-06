@@ -688,3 +688,198 @@ Describe 'Install-PluginInprocServer' {
             Should -Be 'not-installed'
     }
 }
+
+Describe 'Get-WindbgLaunchCommand' {
+    BeforeAll {
+        $Script:WinCfg = [PSCustomObject]@{
+            paths   = [PSCustomObject]@{
+                toolRoot = 'C:\re'; symbolCache = 'C:\re\symbols'
+            }
+            symbols = [PSCustomObject]@{ server = 'https://example.invalid/symbols' }
+        }
+    }
+
+    It 'passes the resolved cdb path explicitly' {
+        # cdb.exe ships in the WinDbg MSIX package and is never on PATH, so
+        # auto-detection inside mcp-windbg cannot find it.
+        $c = Get-WindbgLaunchCommand -Config $Script:WinCfg `
+            -Inventory ([PSCustomObject]@{ Cdb = 'C:\win\cdb.exe' })
+        $c.Arguments | Should -Contain '--cdb-path'
+        $c.Arguments | Should -Contain 'C:\win\cdb.exe'
+    }
+
+    It 'sets _NT_SYMBOL_PATH to the same value it passes as --symbols-path' {
+        $c = Get-WindbgLaunchCommand -Config $Script:WinCfg `
+            -Inventory ([PSCustomObject]@{ Cdb = 'C:\win\cdb.exe' })
+        $i = [array]::IndexOf($c.Arguments, '--symbols-path')
+        $c.Env['_NT_SYMBOL_PATH'] | Should -Be $c.Arguments[$i + 1]
+    }
+
+    It 'returns nothing when cdb was never found' {
+        Get-WindbgLaunchCommand -Config $Script:WinCfg `
+            -Inventory ([PSCustomObject]@{ Cdb = $null }) | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Test-ServerRestartNeeded' {
+    It 'restarts a server whose launcher was rewritten under it' {
+        # This is the pyghidra-mcp defect: the process started at 19:04 and the
+        # launcher naming the test binary was written at 19:47, so the running
+        # server kept a command line that never imported anything.
+        $state = [PSCustomObject]@{
+            State = 'Running'; LastRunTime = [datetime]'2026-09-05T19:04:26'
+        }
+        Test-ServerRestartNeeded -RunState $state `
+            -LauncherWriteTime ([datetime]'2026-09-05T19:47:57') | Should -BeTrue
+    }
+
+    It 'leaves a server alone when it started after its launcher was written' {
+        $state = [PSCustomObject]@{
+            State = 'Running'; LastRunTime = [datetime]'2026-09-05T19:48:10'
+        }
+        Test-ServerRestartNeeded -RunState $state `
+            -LauncherWriteTime ([datetime]'2026-09-05T19:47:57') | Should -BeFalse
+    }
+
+    It 'starts a task that is registered but not running' {
+        $state = [PSCustomObject]@{
+            State = 'Ready'; LastRunTime = [datetime]'2026-09-06T09:00:00'
+        }
+        Test-ServerRestartNeeded -RunState $state `
+            -LauncherWriteTime ([datetime]'2026-09-05T19:47:57') | Should -BeTrue
+    }
+
+    It 'starts a task that has never run' {
+        $state = [PSCustomObject]@{ State = 'Ready'; LastRunTime = $null }
+        Test-ServerRestartNeeded -RunState $state `
+            -LauncherWriteTime ([datetime]'2026-09-05T19:47:57') | Should -BeTrue
+    }
+
+    It 'does nothing when the task does not exist' {
+        Test-ServerRestartNeeded -RunState $null `
+            -LauncherWriteTime ([datetime]'2026-09-05T19:47:57') | Should -BeFalse
+    }
+}
+
+Describe 'Restart-StaleServerTask' {
+    BeforeEach {
+        $Script:LauncherFile = Join-Path $TestDrive ('launch-' + [guid]::NewGuid() + '.cmd')
+        Set-Content -LiteralPath $Script:LauncherFile -Value '@echo off' -Encoding ASCII
+    }
+
+    It 'restarts the task when the running server predates the launcher' {
+        Mock -ModuleName ReAgent.Servers Get-ScheduledTaskRunState {
+            [PSCustomObject]@{ State = 'Running'; LastRunTime = [datetime]'2000-01-01' }
+        }
+        Mock -ModuleName ReAgent.Servers Stop-ScheduledTask {}
+        Mock -ModuleName ReAgent.Servers Start-ScheduledTask {}
+        Mock -ModuleName ReAgent.Servers Stop-ProcessByPath {}
+
+        Restart-StaleServerTask -Name 'ReLab-pyghidra-mcp' `
+            -LauncherPath $Script:LauncherFile -ExecutablePath 'C:\v\pyghidra-mcp.exe' `
+            -Confirm:$false | Should -BeTrue
+        Should -Invoke -ModuleName ReAgent.Servers Start-ScheduledTask -Times 1
+    }
+
+    It 'kills a server the task no longer owns before starting a new one' {
+        # Stop-ScheduledTask only reaches instances the task started this
+        # session. A server left over from an earlier logon keeps the Ghidra
+        # project locked, and the new instance dies with a LockException.
+        Mock -ModuleName ReAgent.Servers Get-ScheduledTaskRunState {
+            [PSCustomObject]@{ State = 'Ready'; LastRunTime = [datetime]'2000-01-01' }
+        }
+        Mock -ModuleName ReAgent.Servers Stop-ScheduledTask {}
+        Mock -ModuleName ReAgent.Servers Start-ScheduledTask {}
+        Mock -ModuleName ReAgent.Servers Stop-ProcessByPath {}
+
+        Restart-StaleServerTask -Name 'ReLab-pyghidra-mcp' `
+            -LauncherPath $Script:LauncherFile -ExecutablePath 'C:\v\pyghidra-mcp.exe' `
+            -Confirm:$false | Should -BeTrue
+        Should -Invoke -ModuleName ReAgent.Servers Stop-ProcessByPath -Times 1 -ParameterFilter {
+            $Path -eq 'C:\v\pyghidra-mcp.exe'
+        }
+    }
+
+    It 'leaves a current server running' {
+        Mock -ModuleName ReAgent.Servers Get-ScheduledTaskRunState {
+            [PSCustomObject]@{ State = 'Running'; LastRunTime = (Get-Date).AddYears(1) }
+        }
+        Mock -ModuleName ReAgent.Servers Stop-ScheduledTask {}
+        Mock -ModuleName ReAgent.Servers Start-ScheduledTask {}
+        Mock -ModuleName ReAgent.Servers Stop-ProcessByPath {}
+
+        Restart-StaleServerTask -Name 'ReLab-pyghidra-mcp' `
+            -LauncherPath $Script:LauncherFile -ExecutablePath 'C:\v\pyghidra-mcp.exe' `
+            -Confirm:$false | Should -BeFalse
+        Should -Invoke -ModuleName ReAgent.Servers Start-ScheduledTask -Times 0
+        Should -Invoke -ModuleName ReAgent.Servers Stop-ProcessByPath -Times 0
+    }
+}
+
+Describe 'Stop-ProcessByPath' {
+    It 'stops only the process running exactly that executable' {
+        $mine = 'C:\re\mcp\venvs\pyghidra-mcp\Scripts\pyghidra-mcp.exe'
+        Mock -ModuleName ReAgent.Servers Get-ProcessIdByPath {
+            if ($Path -eq $mine) { return @(4792) }
+            return @()
+        }
+        Mock -ModuleName ReAgent.Servers Stop-ProcessById {}
+
+        Stop-ProcessByPath -Path $mine -Confirm:$false | Should -Be 1
+        Should -Invoke -ModuleName ReAgent.Servers Stop-ProcessById -Times 1 -ParameterFilter {
+            $Id -eq 4792
+        }
+    }
+
+    It 'does nothing when no process is running it' {
+        Mock -ModuleName ReAgent.Servers Get-ProcessIdByPath { @() }
+        Mock -ModuleName ReAgent.Servers Stop-ProcessById {}
+        Stop-ProcessByPath -Path 'C:\nope.exe' -Confirm:$false | Should -Be 0
+        Should -Invoke -ModuleName ReAgent.Servers Stop-ProcessById -Times 0
+    }
+}
+
+Describe 'Write-ServerLauncher idempotency' {
+    It 'leaves an unchanged launcher untouched' {
+        # It is derived state, so it was rewritten unconditionally - which made
+        # its LastWriteTime newer than the task's LastRunTime on every run, and
+        # Restart-StaleServerTask then restarted pyghidra-mcp every single time,
+        # costing a fresh Ghidra analysis and failing the check that followed.
+        $p = Join-Path $TestDrive ('idem-' + [guid]::NewGuid() + '.cmd')
+        Write-ServerLauncher -Path $p -Executable 'x.exe' -Arguments @('-a') `
+            -Environment @{ K = 'v' } | Out-Null
+        $first = (Get-Item -LiteralPath $p).LastWriteTime
+
+        Start-Sleep -Milliseconds 30
+        Write-ServerLauncher -Path $p -Executable 'x.exe' -Arguments @('-a') `
+            -Environment @{ K = 'v' } | Out-Null
+
+        (Get-Item -LiteralPath $p).LastWriteTime | Should -Be $first
+    }
+
+    It 'rewrites a launcher whose content changed' {
+        $p = Join-Path $TestDrive ('idem2-' + [guid]::NewGuid() + '.cmd')
+        Write-ServerLauncher -Path $p -Executable 'x.exe' -Arguments @('-a') | Out-Null
+        Write-ServerLauncher -Path $p -Executable 'x.exe' -Arguments @('-b') | Out-Null
+        (Get-Content -LiteralPath $p -Raw) | Should -BeLike '*-b*'
+    }
+}
+
+Describe 'Wait-ServerListening' {
+    It 'returns as soon as the port answers' {
+        $Script:Polls = 0
+        Mock -ModuleName ReAgent.Servers Test-TcpPortOpen {
+            $Script:Polls++
+            return ($Script:Polls -ge 3)
+        }
+        Wait-ServerListening -Bind '127.0.0.1' -Port 8762 -TimeoutSeconds 30 -PollSeconds 0 |
+            Should -BeTrue
+        $Script:Polls | Should -Be 3
+    }
+
+    It 'gives up rather than blocking forever' {
+        Mock -ModuleName ReAgent.Servers Test-TcpPortOpen { $false }
+        Wait-ServerListening -Bind '127.0.0.1' -Port 8762 -TimeoutSeconds 0 -PollSeconds 0 |
+            Should -BeFalse
+    }
+}

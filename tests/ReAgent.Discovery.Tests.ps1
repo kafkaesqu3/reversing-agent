@@ -324,3 +324,47 @@ Describe 'Assert-Preflight empty-array handling' {
         { Assert-Preflight -Inventory ([PSCustomObject]@{}) } | Should -Not -Throw
     }
 }
+
+Describe 'Get-PreflightWarning with no inventory' {
+    It 'returns no warnings rather than throwing' {
+        # It runs unconditionally after the phase loop, including on a run where
+        # preflight was skipped or aborted, so a null inventory must be survivable.
+        @(Get-PreflightWarning -Inventory $null).Count | Should -Be 0
+    }
+}
+
+Describe 'Test-Preflight under -VerifyOnly' {
+    BeforeEach {
+        Mock -ModuleName ReAgent.Discovery Test-NetworkReachable { $true }
+    }
+
+    It 'does not block an unelevated verification run' {
+        # Elevation, egress and the VM check exist because installing needs
+        # them. Verifying installs nothing, and refusing to report on a healthy
+        # box because the shell is unelevated helps nobody.
+        $inv = [PSCustomObject]@{
+            IsAdministrator = $false; IsVirtualMachine = $true
+            ClaudeCode      = 'C:\claude.exe'; TotalRamGb = 32; FreeDiskGb = 100
+        }
+        Test-Preflight -Inventory $inv | Should -Not -BeNullOrEmpty
+        Test-Preflight -Inventory $inv -VerifyOnly | Should -BeNullOrEmpty
+    }
+
+    It 'still blocks when Claude Code is absent' {
+        # Nothing downstream means anything without it, verification included.
+        $inv = [PSCustomObject]@{
+            IsAdministrator = $true; IsVirtualMachine = $true
+            ClaudeCode      = $null; TotalRamGb = 32; FreeDiskGb = 100
+        }
+        (Test-Preflight -Inventory $inv -VerifyOnly) -join ';' | Should -BeLike '*Claude Code*'
+    }
+
+    It 'does not block a verification run that is offline' {
+        Mock -ModuleName ReAgent.Discovery Test-NetworkReachable { $false }
+        $inv = [PSCustomObject]@{
+            IsAdministrator = $true; IsVirtualMachine = $true
+            ClaudeCode      = 'C:\claude.exe'; TotalRamGb = 32; FreeDiskGb = 100
+        }
+        Test-Preflight -Inventory $inv -VerifyOnly | Should -BeNullOrEmpty
+    }
+}

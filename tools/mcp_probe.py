@@ -29,6 +29,7 @@ argparse as a missing value, because the value itself starts with a dash.
 
 import argparse
 import asyncio
+import io
 import json
 import os
 import re
@@ -90,7 +91,10 @@ async def probe_http(args):
 
 
 def planned_calls(args):
-    """Return the list of {tool, args} to make, from --calls or --tool."""
+    """Return the list of {tool, args} to make, from --calls* or --tool."""
+    if args.calls_file:
+        with io.open(args.calls_file, encoding="utf-8") as handle:
+            return json.loads(handle.read())
     if args.calls:
         return json.loads(args.calls)
     if args.tool:
@@ -187,6 +191,12 @@ def main():
     parser.add_argument(
         "--calls",
         help='JSON array of {"tool": NAME, "args": {...}} made in one session',
+    )
+    parser.add_argument(
+        "--calls-file",
+        help="File holding the same JSON array as --calls. Callers on Windows "
+        "PowerShell 5.1 must use this: it strips the double quotes out of a "
+        "native command's arguments, so inline JSON never survives the call.",
     )
     parser.add_argument("--timeout", type=float, default=600.0)
     parser.add_argument("--max-chars", type=int, default=4000)

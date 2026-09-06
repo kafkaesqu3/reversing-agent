@@ -239,3 +239,15 @@ Describe 'the security invariants' {
         { Test-ReAgentConfigSchema -Config $bad } | Should -Throw '*0.0.0.0*'
     }
 }
+
+Describe 'the entry point resolves its own config' {
+    It 'finds re-agent.config.json beside itself with no arguments' {
+        # $PSScriptRoot is empty inside the param block of an advanced script,
+        # so a -ConfigPath default built from it resolves to '\re-agent.config.json'
+        # and the script dies before doing anything. -WhatIf returns straight
+        # after the config load, which is exactly the part under test.
+        $script = Join-Path $Script:Root 'Install-REAgent.ps1'
+        $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -WhatIf 2>&1
+        ($out | Out-String) | Should -Not -BeLike '*Config file not found*'
+    }
+}

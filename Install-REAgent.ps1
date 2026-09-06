@@ -11,6 +11,9 @@
     deliberately.
 .PARAMETER ConfigPath
     Path to re-agent.config.json. Defaults to the copy beside this script.
+    Resolved in the body, not as a parameter default: $PSScriptRoot is empty
+    inside the param block of an advanced script, so a default built from it
+    silently becomes '\re-agent.config.json'.
 .PARAMETER Phases
     Run only these phase ids. Default runs all of them.
 .PARAMETER Force
@@ -29,7 +32,7 @@
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
-    [string]$ConfigPath = "$PSScriptRoot\re-agent.config.json",
+    [string]$ConfigPath,
     [int[]] $Phases,
     [switch]$Force,
     [switch]$VerifyOnly,
@@ -38,6 +41,8 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+if (-not $ConfigPath) { $ConfigPath = Join-Path $PSScriptRoot 're-agent.config.json' }
 
 $moduleNames = @('Common', 'Config', 'Discovery', 'Prereqs', 'Symbols',
     'Tokens', 'Json', 'Servers', 'Generate', 'Verify', 'Manifest')
@@ -57,6 +62,10 @@ if (-not $PSCmdlet.ShouldProcess($env:COMPUTERNAME, 'Wire Claude Code to the RE 
 }
 
 $null = New-Item -ItemType Directory -Path $config.paths.stateRoot -Force
+# Created elevated, so it would otherwise inherit ProgramData's defaults and
+# leave the analyst unable to rewrite the manifest from an unelevated run.
+$null = Grant-PathFullControl -Path $config.paths.stateRoot -Identity $env:USERNAME `
+    -Confirm:$false
 $transcript = Join-Path $config.paths.stateRoot 'install.log'
 try {
     Start-Transcript -Path $transcript -Append | Out-Null
@@ -73,6 +82,7 @@ $context = @{
     Config        = $config
     Inventory     = $null
     Attended      = [bool]$Attended
+    VerifyOnly    = [bool]$VerifyOnly
     ServerResults = @()
     VerifyResults = @()
 }
@@ -80,7 +90,8 @@ $context = @{
 $phaseTable = @(
     @{ Id   = 0; Name = 'Preflight'
         Test = { $false }
-        Fn   = { param($c) $c.Inventory = Get-HostInventory; Assert-Preflight -Inventory $c.Inventory }
+        Fn   = { param($c) $c.Inventory = Get-HostInventory
+            Assert-Preflight -Inventory $c.Inventory -VerifyOnly:$c.VerifyOnly }
     }
     @{ Id   = 1; Name = 'Prerequisites'
         Test = { param($c) Test-PrereqSatisfied -Inventory $c.Inventory }
@@ -100,8 +111,16 @@ $phaseTable = @(
     }
     @{ Id   = 5; Name = 'Verify'
         Test = { $false }
-        Fn   = { param($c) $c.VerifyResults = Invoke-Verification -Config $c.Config `
-                -ServerResults $c.ServerResults -Inventory $c.Inventory -Attended:$c.Attended }
+        # -VerifyOnly skips phase 3, so replay the last run's server results out
+        # of the manifest rather than verifying against an empty list.
+        Fn   = { param($c)
+            if (-not $c.ServerResults) {
+                $c.ServerResults = @(Get-RecordedServerResult -Config $c.Config `
+                        -Inventory $c.Inventory)
+            }
+            $c.VerifyResults = Invoke-Verification -Config $c.Config `
+                -ServerResults $c.ServerResults -Inventory $c.Inventory -Attended:$c.Attended
+        }
     }
     @{ Id   = 6; Name = 'Manifest'
         Test = { $false }
@@ -109,9 +128,7 @@ $phaseTable = @(
     }
 )
 
-$selected = if ($VerifyOnly) { $phaseTable | Where-Object { $_.Id -in @(5, 6) } }
-elseif ($Phases) { $phaseTable | Where-Object { $_.Id -in $Phases } }
-else { $phaseTable }
+$selected = Select-Phase -PhaseTable $phaseTable -Phases $Phases -VerifyOnly:$VerifyOnly
 
 $results = @()
 foreach ($p in $selected) {

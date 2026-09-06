@@ -1,6 +1,8 @@
 Set-StrictMode -Version Latest
 
-# Depends on Write-ReAgentLog (Common), imported by Install-REAgent.ps1.
+# Depends on Write-ReAgentLog and Write-Utf8NoBomFile (Common), and on
+# New-ServerResult and Get-WindbgLaunchCommand (Servers), all imported by
+# Install-REAgent.ps1 before this module.
 
 function Get-ManualStep {
     <#
@@ -104,4 +106,62 @@ function Write-Manifest {
     return $path
 }
 
-Export-ModuleMember -Function Get-ManualStep, Write-Manifest
+
+function Get-RecordedServerResult {
+    <#
+    .SYNOPSIS
+        Replays the last run's server results out of manifest.json.
+    .DESCRIPTION
+        -VerifyOnly must not install, so it cannot produce install results of
+        its own. Reading them back from the manifest lets verification say what
+        the last real run recorded, and say nothing at all when there was none -
+        which is honest, unlike inferring "not installed" from an empty list.
+
+        Servers the current config no longer declares are dropped: the manifest
+        describes a past run, and the config is what is being verified now.
+    .PARAMETER Config
+        The parsed configuration object.
+    .PARAMETER Inventory
+        The host inventory, used to rebuild stdio launch commands.
+    .EXAMPLE
+        Get-RecordedServerResult -Config $cfg -Inventory $inv
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Config,
+        [Parameter(Mandatory)][AllowNull()][object]$Inventory
+    )
+
+    $path = Join-Path $Config.paths.stateRoot 'manifest.json'
+    if (-not (Test-Path -LiteralPath $path)) {
+        Write-ReAgentLog -Level WARN -Message (
+            "No manifest at '$path', so nothing is known about what is installed. " +
+            'Run the installer without -VerifyOnly first.')
+        return @()
+    }
+
+    try {
+        $recorded = @((Get-Content -LiteralPath $path -Raw | ConvertFrom-Json).servers)
+    } catch {
+        Write-ReAgentLog -Level WARN -Message (
+            "Could not read '$path': $($_.Exception.Message) Verification will " +
+            'report every server as unknown.')
+        return @()
+    }
+
+    $results = @()
+    foreach ($s in $Config.mcpServers) {
+        $entry = $recorded | Where-Object { $_.name -eq $s.name } | Select-Object -First 1
+        if (-not $entry) { continue }
+
+        $command = $null
+        if ($s.kind -eq 'venv-stdio' -and $Inventory) {
+            $command = Get-WindbgLaunchCommand -Config $Config -Inventory $Inventory
+        }
+        $results += New-ServerResult -Server $s -Status $entry.status `
+            -Reason $entry.reason -Version $entry.version -Command $command
+    }
+    return $results
+}
+
+Export-ModuleMember -Function Get-ManualStep, Write-Manifest, Get-RecordedServerResult

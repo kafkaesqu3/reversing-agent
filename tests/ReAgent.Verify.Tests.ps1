@@ -154,8 +154,7 @@ Output:
         Test-WindbgLive -Server $Script:WbSrv -Config $Script:WbCfg `
             -Result $Script:WbRes | Out-Null
         Should -Invoke -ModuleName ReAgent.Verify Invoke-McpProbe -Times 1 -ParameterFilter {
-            $json = ($ProbeArgs | Where-Object { $_ -like '--calls=*' })
-            $json -like '*session_id*' -and $json -like '*{{session_id}}*'
+            $Calls[0].capture.session_id -and $Calls[1].args.session_id -eq '{{session_id}}'
         }
     }
 }
@@ -347,5 +346,214 @@ Describe 'Write-Manifest' {
         $m.authExemptions[0].server | Should -Be 'pyghidra-mcp'
         $m.manualSteps.Count | Should -BeGreaterThan 0
         $m.inventory.TotalRamGb | Should -Be 8
+    }
+}
+
+Describe 'Invoke-Verification with no install results' {
+    BeforeAll {
+        $Script:NoResCfg = [PSCustomObject]@{
+            paths      = [PSCustomObject]@{
+                stateRoot = (Join-Path $TestDrive 'nores-state')
+                agentRoot = (Join-Path $TestDrive 'nores-agent')
+            }
+            mcpServers = @([PSCustomObject]@{
+                    name = 'pyghidra-mcp'; enabled = $true; kind = 'venv-http'
+                    transport = 'http'; bind = '127.0.0.1'; port = 8762
+                    path = '/mcp'; auth = 'none'; requiresHostApp = $false
+                })
+        }
+    }
+
+    It 'reports the install state as unknown rather than claiming not installed' {
+        # An empty result set means phase 3 did not run, which is not the same
+        # as a server that failed to install. Saying "not installed" of a server
+        # that is running and answering is the worst answer available.
+        $checks = Invoke-Verification -Config $Script:NoResCfg -ServerResults @()
+        $c = $checks | Where-Object { $_.Name -eq 'pyghidra-mcp live call' }
+        $c.Status | Should -Be 'not-testable'
+        $c.Detail | Should -Not -BeLike '*Not installed on this host*'
+        $c.Detail | Should -BeLike '*manifest*'
+    }
+}
+
+Describe 'Invoke-McpProbe with a call sequence' {
+    It 'hands the calls to the probe in a file, not as an inline argument' {
+        # PowerShell 5.1 strips the double quotes out of a native command's
+        # arguments: '--calls=[{"tool":"x"}]' arrives as '--calls=[{tool:x}]'.
+        # Every check that sent a call sequence therefore failed with a
+        # JSONDecodeError that read as a broken server.
+        Mock -ModuleName ReAgent.Verify Invoke-CommandLine {
+            $file = @($Arguments | Where-Object { $_ -like '--calls-file=*' }) |
+                Select-Object -First 1
+            $Script:SeenArgs = $Arguments
+            $Script:SeenCalls = if ($file) {
+                Get-Content -LiteralPath ($file -replace '^--calls-file=', '') -Raw
+            } else { $null }
+            @('{"ok": true}')
+        }
+
+        Invoke-McpProbe -PythonPath 'py.exe' -ProbeScript 'p.py' `
+            -ProbeArgs @('--transport=http', '--url=http://127.0.0.1:9094/') `
+            -Calls @(@{ tool = 'GetDebugState'; args = @{} }) | Out-Null
+
+        ($Script:SeenArgs -join ' ') | Should -Not -BeLike '*--calls=*'
+        @($Script:SeenCalls | ConvertFrom-Json)[0].tool | Should -Be 'GetDebugState'
+    }
+
+    It 'deletes the call file afterwards' {
+        Mock -ModuleName ReAgent.Verify Invoke-CommandLine {
+            $Script:SeenFile = (@($Arguments | Where-Object { $_ -like '--calls-file=*' }) |
+                    Select-Object -First 1) -replace '^--calls-file=', ''
+            @('{"ok": true}')
+        }
+        Invoke-McpProbe -PythonPath 'py.exe' -ProbeScript 'p.py' -ProbeArgs @() `
+            -Calls @(@{ tool = 'Echo'; args = @{} }) | Out-Null
+        Test-Path -LiteralPath $Script:SeenFile | Should -BeFalse
+    }
+
+    It 'passes no call file when there are no calls' {
+        Mock -ModuleName ReAgent.Verify Invoke-CommandLine {
+            $Script:SeenArgs = $Arguments
+            @('{"ok": true}')
+        }
+        Invoke-McpProbe -PythonPath 'py.exe' -ProbeScript 'p.py' `
+            -ProbeArgs @('--transport=http') | Out-Null
+        ($Script:SeenArgs -join ' ') | Should -Not -BeLike '*--calls-file*'
+    }
+}
+
+Describe 'the probe script' {
+    It 'accepts a call sequence from a file' {
+        $src = Get-Content (Join-Path $PSScriptRoot '..\tools\mcp_probe.py') -Raw
+        $src | Should -BeLike '*--calls-file*'
+    }
+}
+
+Describe 'Test-PyghidraLive' {
+    BeforeAll {
+        $Script:PgSrv = [PSCustomObject]@{
+            name = 'pyghidra-mcp'; kind = 'venv-http'; transport = 'http'
+            bind = '127.0.0.1'; port = 8762; path = '/mcp'; auth = 'none'
+        }
+        $Script:PgCfg = [PSCustomObject]@{
+            paths = [PSCustomObject]@{ toolRoot = 'C:\re'; stateRoot = 'C:\re\state' }
+        }
+        $Script:Listed = '{ "programs": [ { "name": "/winver.exe-e678d1" } ] }'
+    }
+
+    It 'fails when the project holds no binaries' {
+        Mock -ModuleName ReAgent.Verify Invoke-McpProbe {
+            [PSCustomObject]@{ ok = $true
+                call = [PSCustomObject]@{ text = '{ "programs": [] }'; length = 18 }
+            }
+        }
+        $r = Test-PyghidraLive -Server $Script:PgSrv -Config $Script:PgCfg
+        $r.Status | Should -Be 'fail'
+        $r.Detail | Should -BeLike '*no binaries*'
+    }
+
+    It 'fails when the decompiler could not find the function' {
+        # pyghidra-mcp answers with a JSON envelope carrying an empty 'code' and
+        # an 'error' field. Its braces are not C, but a brace-matching heuristic
+        # cannot tell the difference - so this reported pass on a dead check.
+        $Script:PgCallNo = 0
+        Mock -ModuleName ReAgent.Verify Invoke-McpProbe {
+            $Script:PgCallNo++
+            if ($Script:PgCallNo -eq 1) {
+                return [PSCustomObject]@{ ok = $true
+                    call = [PSCustomObject]@{ text = $Script:Listed; length = 50 }
+                }
+            }
+            [PSCustomObject]@{ ok = $true
+                call = [PSCustomObject]@{
+                    text = '{ "name": "entry", "code": "", "error": "Function or symbol ''entry'' not found." }'
+                    length = 174
+                }
+            }
+        }
+        $r = Test-PyghidraLive -Server $Script:PgSrv -Config $Script:PgCfg
+        $r.Status | Should -Be 'fail'
+        $r.Detail | Should -BeLike '*not found*'
+    }
+
+    It 'passes on real decompiled C' {
+        $Script:PgCallNo = 0
+        Mock -ModuleName ReAgent.Verify Invoke-McpProbe {
+            $Script:PgCallNo++
+            if ($Script:PgCallNo -eq 1) {
+                return [PSCustomObject]@{ ok = $true
+                    call = [PSCustomObject]@{ text = $Script:Listed; length = 50 }
+                }
+            }
+            [PSCustomObject]@{ ok = $true
+                call = [PSCustomObject]@{
+                    text = '{ "name": "entry", "code": "void entry(void)\n\n{\n  FUN_140001000();\n  return;\n}\n" }'
+                    length = 120
+                }
+            }
+        }
+        (Test-PyghidraLive -Server $Script:PgSrv -Config $Script:PgCfg).Status |
+            Should -Be 'pass'
+    }
+}
+
+Describe 'Test-PyghidraLive against the configured test binary' {
+    BeforeAll {
+        $Script:TbSrv = [PSCustomObject]@{
+            name = 'pyghidra-mcp'; kind = 'venv-http'; transport = 'http'
+            bind = '127.0.0.1'; port = 8762; path = '/mcp'; auth = 'none'
+        }
+        $Script:TbCfg = [PSCustomObject]@{
+            paths      = [PSCustomObject]@{ toolRoot = 'C:\re'; stateRoot = 'C:\re\state' }
+            testBinary = 'C:\Windows\System32\winver.exe'
+        }
+    }
+
+    It 'decompiles the configured test binary, not whatever was imported first' {
+        # Otherwise the check reports on whichever binary the analyst happened
+        # to add, and passes or fails for reasons that have nothing to do with
+        # the install.
+        $Script:TbCall = 0
+        Mock -ModuleName ReAgent.Verify Invoke-McpProbe {
+            $Script:TbCall++
+            if ($Script:TbCall -eq 1) {
+                return [PSCustomObject]@{ ok = $true; call = [PSCustomObject]@{
+                        text = '{ "programs": [ { "name": "/GoogleUpdate.exe-4dd864" }, ' +
+                        '{ "name": "/winver.exe-e678d1" } ] }'
+                        length = 90
+                    }
+                }
+            }
+            $Script:TbBinary = $Calls[0].args.binary_name
+            [PSCustomObject]@{ ok = $true; call = [PSCustomObject]@{
+                    text = '{ "name": "entry", "code": "void entry(void)\n{\n  return;\n}\n" }'
+                    length = 60
+                }
+            }
+        }
+        (Test-PyghidraLive -Server $Script:TbSrv -Config $Script:TbCfg).Status | Should -Be 'pass'
+        $Script:TbBinary | Should -Be '/winver.exe-e678d1'
+    }
+
+    It 'falls back to the first binary when the test binary was never imported' {
+        $Script:TbCall = 0
+        Mock -ModuleName ReAgent.Verify Invoke-McpProbe {
+            $Script:TbCall++
+            if ($Script:TbCall -eq 1) {
+                return [PSCustomObject]@{ ok = $true; call = [PSCustomObject]@{
+                        text = '{ "programs": [ { "name": "/GoogleUpdate.exe-4dd864" } ] }'
+                        length = 50
+                    }
+                }
+            }
+            $Script:TbBinary = $Calls[0].args.binary_name
+            [PSCustomObject]@{ ok = $true; call = [PSCustomObject]@{
+                    text = '{ "name": "entry", "code": "void entry(void)\n{\n  return;\n}\n" }'
+                    length = 60
+                }
+            }
+        }
+        (Test-PyghidraLive -Server $Script:TbSrv -Config $Script:TbCfg).Status | Should -Be 'pass'
+        $Script:TbBinary | Should -Be '/GoogleUpdate.exe-4dd864'
     }
 }

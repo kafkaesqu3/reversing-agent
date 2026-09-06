@@ -57,6 +57,12 @@ function Invoke-McpProbe {
         Path to tools\mcp_probe.py.
     .PARAMETER ProbeArgs
         Already-formed probe arguments.
+    .PARAMETER Calls
+        A sequence of {tool, args} to make in one session. Written to a temp
+        file rather than passed inline: PowerShell 5.1 strips the double quotes
+        out of a native command's arguments, so '--calls=[{"tool":"x"}]' arrives
+        as '--calls=[{tool:x}]' and the probe dies on a JSONDecodeError that
+        reads as a broken server.
     .EXAMPLE
         Invoke-McpProbe -PythonPath $py -ProbeScript $p -ProbeArgs $a
     #>
@@ -64,8 +70,16 @@ function Invoke-McpProbe {
     param(
         [Parameter(Mandatory)][string]$PythonPath,
         [Parameter(Mandatory)][string]$ProbeScript,
-        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$ProbeArgs
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$ProbeArgs,
+        [AllowEmptyCollection()][array]$Calls = @()
     )
+
+    $callFile = $null
+    if ($Calls.Count -gt 0) {
+        $callFile = [IO.Path]::GetTempFileName()
+        Write-Utf8NoBomFile -Path $callFile -Text (ConvertTo-Json @($Calls) -Depth 6 -Compress)
+        $ProbeArgs = @($ProbeArgs) + "--calls-file=$callFile"
+    }
 
     try {
         $out = Invoke-CommandLine -FilePath $PythonPath -Arguments (@($ProbeScript) + $ProbeArgs)
@@ -77,6 +91,8 @@ function Invoke-McpProbe {
         return ($line | ConvertFrom-Json)
     } catch {
         return [PSCustomObject]@{ ok = $false; error = $_.Exception.Message }
+    } finally {
+        if ($callFile) { Remove-Item -LiteralPath $callFile -Force -ErrorAction SilentlyContinue }
     }
 }
 
@@ -249,6 +265,11 @@ function Test-PyghidraLive {
         list_project_binaries, and pyghidra-mcp keeps its state server-side so
         a second session sees the same project. Names are Ghidra program paths
         such as /winver.exe-e678d1, never the file name.
+
+        The configured testBinary is preferred over whatever happens to be
+        first: an analyst's own imports would otherwise decide what this check
+        reports on, and it would pass or fail for reasons unrelated to the
+        install.
     .PARAMETER Server
         The server's config entry.
     .PARAMETER Config
@@ -279,7 +300,14 @@ function Test-PyghidraLive {
 
     $binary = $null
     try {
-        $binary = ($listed.call.text | ConvertFrom-Json).programs[0].name
+        $programs = @(($listed.call.text | ConvertFrom-Json).programs)
+        $binary = $programs[0].name
+        if ($Config.PSObject.Properties.Name -contains 'testBinary' -and $Config.testBinary) {
+            $leaf = Split-Path -Leaf $Config.testBinary
+            $preferred = $programs | Where-Object { $_.name -like "*/$leaf-*" } |
+                Select-Object -First 1
+            if ($preferred) { $binary = $preferred.name }
+        }
     } catch {
         $binary = $null
     }
@@ -291,21 +319,37 @@ function Test-PyghidraLive {
     $calls = @{ tool = 'decompile_function'
         args        = @{ binary_name = $binary; name_or_address = 'entry' }
     }
-    $decompiled = Invoke-McpProbe -PythonPath $python -ProbeScript $probe -ProbeArgs @(
-        '--transport=http', "--url=$url",
-        ('--calls=' + (ConvertTo-Json @($calls) -Depth 6 -Compress)))
+    $decompiled = Invoke-McpProbe -PythonPath $python -ProbeScript $probe `
+        -ProbeArgs @('--transport=http', "--url=$url") -Calls @($calls)
 
     if (-not $decompiled.ok) {
         return New-CheckResult -Name $name -Status 'fail' -Detail (
             "Decompiling 'entry' in '$binary' failed: " +
             "$($decompiled | ConvertTo-Json -Depth 6 -Compress)")
     }
-    if ($decompiled.call.text -notmatch '\{|\(') {
-        return New-CheckResult -Name $name -Status 'fail' `
-            -Detail "Decompiler output does not look like C: $($decompiled.call.text)"
+    # The reply is a JSON envelope, and a failed decompilation is a successful
+    # tool call carrying an 'error' field and an empty 'code'. Matching braces
+    # against the envelope passes on exactly the failure worth catching.
+    $payload = $null
+    try { $payload = $decompiled.call.text | ConvertFrom-Json } catch { $payload = $null }
+    if (-not $payload) {
+        return New-CheckResult -Name $name -Status 'fail' -Detail (
+            "Decompiling 'entry' in '$binary' returned no JSON envelope: " +
+            "$($decompiled.call.text)")
+    }
+
+    $fields = $payload.PSObject.Properties.Name
+    if ($fields -contains 'error' -and $payload.error) {
+        return New-CheckResult -Name $name -Status 'fail' -Detail (
+            "Decompiling 'entry' in '$binary' returned an error: $($payload.error)")
+    }
+    $code = if ($fields -contains 'code') { [string]$payload.code } else { '' }
+    if (-not $code.Trim() -or $code -notmatch '\{|\(') {
+        return New-CheckResult -Name $name -Status 'fail' -Detail (
+            "Decompiling 'entry' in '$binary' produced no C: $($decompiled.call.text)")
     }
     return New-CheckResult -Name $name -Status 'pass' -Detail (
-        "Decompiled 'entry' in '$binary' ($($decompiled.call.length) chars).")
+        "Decompiled 'entry' in '$binary' ($($code.Length) chars of C).")
 }
 
 function Test-WindbgLive {
@@ -361,10 +405,9 @@ function Test-WindbgLive {
     $probeArgs = @('--transport=stdio', "--command=$($Result.Command.Executable)")
     foreach ($a in $Result.Command.Arguments) { $probeArgs += "--arg=$a" }
     foreach ($k in $Result.Command.Env.Keys) { $probeArgs += "--env=$k=$($Result.Command.Env[$k])" }
-    $probeArgs += ('--calls=' + (ConvertTo-Json $calls -Depth 6 -Compress))
 
     $r = Invoke-McpProbe -PythonPath $Result.Command.Executable -ProbeScript (Get-ProbeScriptPath) `
-        -ProbeArgs $probeArgs
+        -ProbeArgs $probeArgs -Calls @($calls)
 
     if (-not $r.ok) {
         return New-CheckResult -Name $name -Status 'fail' `
@@ -456,6 +499,7 @@ function Test-HttpServerLive {
     }
 
     $hasVerify = $Server.PSObject.Properties.Name -contains 'verify'
+    $calls = @()
     if ($hasVerify -and $Server.verify.tool) {
         $call = @{ tool = $Server.verify.tool; args = @{} }
         if ($Server.verify.PSObject.Properties.Name -contains 'args') {
@@ -463,11 +507,11 @@ function Test-HttpServerLive {
                 $call.args[$p.Name] = $p.Value
             }
         }
-        $probeArgs += ('--calls=' + (ConvertTo-Json @($call) -Depth 6 -Compress))
+        $calls = @($call)
     }
 
     $r = Invoke-McpProbe -PythonPath $PythonPath -ProbeScript (Get-ProbeScriptPath) `
-        -ProbeArgs $probeArgs
+        -ProbeArgs $probeArgs -Calls $calls
 
     if (-not $r.ok -and $r.PSObject.Properties.Name -contains 'error') {
         return New-CheckResult -Name $name -Status 'not-testable' -Detail (
@@ -563,10 +607,18 @@ function Invoke-Verification {
 
     foreach ($s in $Config.mcpServers) {
         $result = $ServerResults | Where-Object { $_.Name -eq $s.name } | Select-Object -First 1
-        if (-not $result -or -not $result.Installed) {
+        if (-not $result) {
+            # No record at all is not the same as a failed install: it means no
+            # run has reported on this server. Saying "not installed" of a
+            # server that is up and answering is the worst answer available.
             $checks += Test-ServerNotTestable -ServerName $s.name -Reason (
-                'Not installed on this host' +
-                $(if ($result) { ": $($result.Reason)" } else { '.' }))
+                'Install state unknown - no manifest entry for it. Run the ' +
+                'installer without -VerifyOnly, then verify again.')
+            continue
+        }
+        if (-not $result.Installed) {
+            $checks += Test-ServerNotTestable -ServerName $s.name -Reason (
+                "Not installed on this host: $($result.Reason)")
             continue
         }
 

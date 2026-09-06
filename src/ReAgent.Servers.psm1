@@ -167,7 +167,10 @@ function Write-ServerLauncher {
         script is the least surprising way to bridge that, and it also gives the
         operator something runnable by hand when a server misbehaves.
 
-        Regenerated unconditionally: it is derived state.
+        Written only when its content differs. It is derived state, but its
+        timestamp is not: Restart-StaleServerTask compares it against the task's
+        last run, so rewriting an identical file would restart the server on
+        every single run.
     .PARAMETER Path
         Destination .cmd file.
     .PARAMETER Executable
@@ -200,7 +203,13 @@ function Write-ServerLauncher {
     $quoted = $Arguments | ForEach-Object { if ($_ -match '\s') { "`"$_`"" } else { $_ } }
     $lines += ('"' + $Executable + '" ' + ($quoted -join ' ')).TrimEnd()
 
-    Set-Content -LiteralPath $Path -Value $lines -Encoding ASCII
+    $wanted = ($lines -join "`r`n") + "`r`n"
+    $current = if (Test-Path -LiteralPath $Path) {
+        Get-Content -LiteralPath $Path -Raw
+    } else { $null }
+    if ($current -ne $wanted) {
+        Set-Content -LiteralPath $Path -Value $lines -Encoding ASCII
+    }
     return $Path
 }
 
@@ -317,6 +326,286 @@ function Register-ServerScheduledTask {
     return $true
 }
 
+function Get-WindbgLaunchCommand {
+    <#
+    .SYNOPSIS
+        Builds mcp-windbg's launch command from the config and the inventory.
+    .DESCRIPTION
+        Shared by the installer and by the manifest replay that -VerifyOnly uses,
+        so a verification run probes exactly the command Claude Code will run.
+        mcp-windbg is the only venv-stdio server; if a second one appears this
+        needs to become a per-server lookup rather than a single builder.
+    .PARAMETER Config
+        The parsed configuration object.
+    .PARAMETER Inventory
+        The host inventory, for the resolved cdb path.
+    .EXAMPLE
+        Get-WindbgLaunchCommand -Config $cfg -Inventory $inv
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Config,
+        [Parameter(Mandatory)][object]$Inventory
+    )
+
+    if (-not $Inventory.Cdb) { return $null }
+
+    $venv = Get-ServerVenvPath -Config $Config -Name 'mcp-windbg'
+    $symbolPath = Get-SymbolPathValue -CacheDir $Config.paths.symbolCache `
+        -Server $Config.symbols.server
+
+    return [PSCustomObject]@{
+        Executable = Get-VenvPython -VenvPath $venv
+        Arguments  = @('-m', 'mcp_windbg',
+            '--cdb-path', $Inventory.Cdb,
+            '--symbols-path', $symbolPath)
+        Env        = @{ _NT_SYMBOL_PATH = $symbolPath }
+    }
+}
+
+function Get-ScheduledTaskRunState {
+    <#
+    .SYNOPSIS
+        Returns a task's State and LastRunTime, or $null when it does not exist.
+    .DESCRIPTION
+        A mock seam, like Get-ScheduledTaskActionText: it is the only part of
+        the restart decision that touches the host.
+    .PARAMETER Name
+        Task name.
+    .EXAMPLE
+        Get-ScheduledTaskRunState -Name 'ReLab-pyghidra-mcp'
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Name)
+
+    try {
+        $task = Get-ScheduledTask -TaskName $Name -ErrorAction Stop
+        $info = $task | Get-ScheduledTaskInfo -ErrorAction Stop
+        return [PSCustomObject]@{ State = "$($task.State)"; LastRunTime = $info.LastRunTime }
+    } catch {
+        return $null
+    }
+}
+
+function Test-ServerRestartNeeded {
+    <#
+    .SYNOPSIS
+        Decides whether a task-owned server is running the current launcher.
+    .DESCRIPTION
+        Registering the task compares only its action - the launcher path, which
+        never changes - so a rewritten launcher leaves the running server on its
+        old command line until the next logon. That is how pyghidra-mcp came to
+        serve an empty project: the process started at 19:04 and the launcher
+        naming the test binary was written at 19:47.
+
+        Comparing the task's last run against the launcher's write time catches
+        that directly. A task that is not running needs starting whatever the
+        times say; a task that does not exist is not this function's problem.
+    .PARAMETER RunState
+        From Get-ScheduledTaskRunState, or $null when the task is absent.
+    .PARAMETER LauncherWriteTime
+        Last write time of the generated launcher.
+    .EXAMPLE
+        Test-ServerRestartNeeded -RunState $s -LauncherWriteTime $t
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][AllowNull()][object]$RunState,
+        [Parameter(Mandatory)][datetime]$LauncherWriteTime
+    )
+
+    if (-not $RunState) { return $false }
+    if ($RunState.State -ne 'Running') { return $true }
+    if (-not $RunState.LastRunTime) { return $true }
+    return ($RunState.LastRunTime -lt $LauncherWriteTime)
+}
+
+function Test-TcpPortOpen {
+    <#
+    .SYNOPSIS
+        Reports whether something is listening on a loopback port.
+    .DESCRIPTION
+        A mock seam. Deliberately a bare TCP connect rather than an MCP
+        handshake: this answers "has the process finished starting", and the
+        handshake is what the verification phase is for.
+    .PARAMETER Bind
+        Address to connect to.
+    .PARAMETER Port
+        Port to connect to.
+    .EXAMPLE
+        Test-TcpPortOpen -Bind '127.0.0.1' -Port 8762
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Bind,
+        [Parameter(Mandatory)][int]$Port
+    )
+
+    $client = New-Object System.Net.Sockets.TcpClient
+    try {
+        $client.Connect($Bind, $Port)
+        return $client.Connected
+    } catch {
+        return $false
+    } finally {
+        $client.Close()
+    }
+}
+
+function Wait-ServerListening {
+    <#
+    .SYNOPSIS
+        Waits for a restarted server to start listening, up to a timeout.
+    .DESCRIPTION
+        pyghidra-mcp imports and analyses its input binaries before it binds the
+        port, which takes minutes on a cold project. Without this the
+        verification phase probes a server the install phase restarted seconds
+        earlier and reports it unreachable - blaming the server for the
+        installer's own timing.
+
+        Returns $false on timeout rather than throwing: a slow server is a
+        degraded run, and verification will describe it better than an
+        exception would.
+    .PARAMETER Bind
+        Address the server listens on.
+    .PARAMETER Port
+        Port the server listens on.
+    .PARAMETER TimeoutSeconds
+        How long to wait in total.
+    .PARAMETER PollSeconds
+        Delay between attempts.
+    .EXAMPLE
+        Wait-ServerListening -Bind '127.0.0.1' -Port 8762 -TimeoutSeconds 300
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Bind,
+        [Parameter(Mandatory)][int]$Port,
+        [int]$TimeoutSeconds = 300,
+        [int]$PollSeconds = 3
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    do {
+        if (Test-TcpPortOpen -Bind $Bind -Port $Port) { return $true }
+        Start-Sleep -Seconds $PollSeconds
+    } while ((Get-Date) -lt $deadline)
+
+    return (Test-TcpPortOpen -Bind $Bind -Port $Port)
+}
+
+function Get-ProcessIdByPath {
+    <#
+    .SYNOPSIS
+        Returns the ids of running processes started from an exact executable path.
+    .DESCRIPTION
+        A mock seam. Matching on the full path rather than the process name is
+        deliberate: it reaches this install's server and nothing else that
+        happens to share a name.
+    .PARAMETER Path
+        Full path to the executable.
+    .EXAMPLE
+        Get-ProcessIdByPath -Path 'C:\re\mcp\venvs\pyghidra-mcp\Scripts\pyghidra-mcp.exe'
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Path)
+
+    try {
+        return @(Get-CimInstance Win32_Process -Filter 'ExecutablePath IS NOT NULL' |
+                Where-Object { $_.ExecutablePath -eq $Path } |
+                ForEach-Object { [int]$_.ProcessId })
+    } catch {
+        return @()
+    }
+}
+
+function Stop-ProcessByPath {
+    <#
+    .SYNOPSIS
+        Stops every process running a given executable, returning how many.
+    .PARAMETER Path
+        Full path to the executable.
+    .EXAMPLE
+        Stop-ProcessByPath -Path $exe
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param([Parameter(Mandatory)][string]$Path)
+
+    $stopped = 0
+    foreach ($processId in @(Get-ProcessIdByPath -Path $Path)) {
+        if (-not $PSCmdlet.ShouldProcess("pid $processId", "Stop '$Path'")) { continue }
+        try {
+            Stop-ProcessById -Id $processId
+            $stopped++
+        } catch {
+            Write-ReAgentLog -Level WARN -Message (
+                "Could not stop pid $processId running '$Path': $($_.Exception.Message)")
+        }
+    }
+    return $stopped
+}
+
+function Stop-ProcessById {
+    <#
+    .SYNOPSIS
+        Stops one process by id. A mock seam, so tests never kill anything.
+    .PARAMETER Id
+        Process id.
+    .EXAMPLE
+        Stop-ProcessById -Id 4792
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param([Parameter(Mandatory)][int]$Id)
+
+    if (-not $PSCmdlet.ShouldProcess("pid $Id", 'Stop process')) { return }
+    Stop-Process -Id $Id -Force -ErrorAction Stop
+}
+
+function Restart-StaleServerTask {
+    <#
+    .SYNOPSIS
+        Restarts a task-owned server when it is not running the current launcher.
+    .DESCRIPTION
+        Stop-ScheduledTask only reaches instances the task started in this
+        session, so a server left running from an earlier logon survives it -
+        and then holds the Ghidra project lock, killing the replacement with
+        'LockException: Unable to lock project'. The executable is therefore
+        stopped by path as well.
+    .PARAMETER Name
+        Task name.
+    .PARAMETER LauncherPath
+        The generated launcher the task runs.
+    .PARAMETER ExecutablePath
+        The server executable the launcher runs, stopped before restarting.
+    .EXAMPLE
+        Restart-StaleServerTask -Name 'ReLab-pyghidra-mcp' -LauncherPath $p -ExecutablePath $exe
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$LauncherPath,
+        [Parameter(Mandatory)][string]$ExecutablePath
+    )
+
+    $written = (Get-Item -LiteralPath $LauncherPath).LastWriteTime
+    if (-not (Test-ServerRestartNeeded -RunState (Get-ScheduledTaskRunState -Name $Name) `
+                -LauncherWriteTime $written)) {
+        return $false
+    }
+    if (-not $PSCmdlet.ShouldProcess($Name, 'Restart the server task')) { return $false }
+
+    Write-ReAgentLog -Level INFO -Message (
+        "Restarting '$Name': it is not running the current launcher.")
+    Stop-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue
+    $stopped = Stop-ProcessByPath -Path $ExecutablePath -Confirm:$false
+    if ($stopped -gt 0) {
+        Write-ReAgentLog -Level INFO -Message (
+            "Stopped $stopped orphaned process(es) still holding '$ExecutablePath'.")
+    }
+    Start-ScheduledTask -TaskName $Name
+    return $true
+}
+
 function Install-VenvStdioServer {
     <#
     .SYNOPSIS
@@ -351,9 +640,6 @@ function Install-VenvStdioServer {
     $version = Install-VenvPackage -VenvPath $venv -Package $Server.source.package `
         -Pin $Server.source.pin -UvPath $Inventory.Uv
 
-    $symbolPath = Get-SymbolPathValue -CacheDir $Config.paths.symbolCache `
-        -Server $Config.symbols.server
-
     # mcp-windbg has no live-process tool, so its tier-1 check needs a dump on
     # disk. The server is installed and usable without one; only verification
     # suffers, so a failure here warns rather than failing the install.
@@ -366,13 +652,7 @@ function Install-VenvStdioServer {
             'mcp-windbg is installed; its tier-1 check will report not-testable.')
     }
 
-    $command = [PSCustomObject]@{
-        Executable = Get-VenvPython -VenvPath $venv
-        Arguments  = @('-m', 'mcp_windbg',
-            '--cdb-path', $Inventory.Cdb,
-            '--symbols-path', $symbolPath)
-        Env        = @{ _NT_SYMBOL_PATH = $symbolPath }
-    }
+    $command = Get-WindbgLaunchCommand -Config $Config -Inventory $Inventory
 
     return New-ServerResult -Server $Server -Status 'installed' -Version $version `
         -Command $command
@@ -440,6 +720,21 @@ function Install-VenvHttpServer {
         -Environment @{ GHIDRA_INSTALL_DIR = $Inventory.GhidraRoot }
 
     $null = Register-ServerScheduledTask -Name $Server.scheduledTask -LauncherPath $launcher
+
+    # Registering compares the task's action - the launcher path - which never
+    # changes, so a rewritten launcher would otherwise not reach the running
+    # server until the next logon.
+    if (Restart-StaleServerTask -Name $Server.scheduledTask -LauncherPath $launcher `
+            -ExecutablePath $exe) {
+        # It imports and analyses its binaries before binding the port, so
+        # verification would otherwise probe a server this phase just stopped.
+        if (-not (Wait-ServerListening -Bind $Server.bind -Port $Server.port)) {
+            Write-ReAgentLog -Level WARN -Message (
+                "'$($Server.name)' has not started listening on $($Server.bind):" +
+                "$($Server.port) yet. Its live check will report not-testable; " +
+                're-run with -VerifyOnly once it is up.')
+        }
+    }
 
     $command = [PSCustomObject]@{
         Executable = $exe
@@ -1011,5 +1306,8 @@ Export-ModuleMember -Function New-ServerResult, Get-VenvPython, Get-VenvPackageV
     Get-ScheduledTaskActionText, Register-ServerScheduledTask, Install-VenvStdioServer, `
     Install-VenvHttpServer, Install-McpServer, Install-AllMcpServer, New-TestCrashDump, `
     Get-X64dbgConfigPath, Write-X64dbgPreseed, Install-GuiBuiltinHttpServer, `
+    Get-WindbgLaunchCommand, Get-ScheduledTaskRunState, Test-ServerRestartNeeded, `
+    Restart-StaleServerTask, Get-ProcessIdByPath, Stop-ProcessByPath, Stop-ProcessById, `
+    Test-TcpPortOpen, Wait-ServerListening, `
     Install-GuiPluginHttpServer, Install-PluginInprocServer, Get-VerifiedRelease, `
     Expand-X64dbgPlugin, Invoke-Download, Copy-PluginFile

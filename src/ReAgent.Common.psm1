@@ -188,5 +188,81 @@ function Write-Utf8NoBomFile {
         (New-Object System.Text.UTF8Encoding($false)))
 }
 
+
+function Select-Phase {
+    <#
+    .SYNOPSIS
+        Chooses which phases a run executes.
+    .DESCRIPTION
+        -VerifyOnly deliberately keeps phase 0. Verification decides almost
+        everything from the host inventory, so running it without one turns
+        every check into a confident false negative - which is worse than no
+        report at all. It does not run phase 3: verifying must not install.
+    .PARAMETER PhaseTable
+        The full phase table, in execution order.
+    .PARAMETER Phases
+        Run only these phase ids.
+    .PARAMETER VerifyOnly
+        Run preflight, verification and the manifest. Wins over -Phases.
+    .EXAMPLE
+        Select-Phase -PhaseTable $phaseTable -VerifyOnly
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][array]$PhaseTable,
+        [int[]]$Phases,
+        [switch]$VerifyOnly
+    )
+
+    if ($VerifyOnly) { return @($PhaseTable | Where-Object { $_.Id -in @(0, 5, 6) }) }
+    if ($Phases) { return @($PhaseTable | Where-Object { $_.Id -in $Phases }) }
+    return @($PhaseTable)
+}
+
+
+function Grant-PathFullControl {
+    <#
+    .SYNOPSIS
+        Gives an identity inheritable full control of a directory.
+    .DESCRIPTION
+        The installer runs elevated, so everything it creates under
+        C:\ProgramData inherits that key's defaults - BUILTIN\Users gets
+        ReadAndExecute and nothing more. The analyst then cannot rewrite
+        manifest.json, and an unelevated -VerifyOnly dies on its last phase.
+
+        The ace is written with both inheritance flags so files created later
+        pick it up; existing children are covered by the same inheritance once
+        it is set. Failure warns rather than throwing: a run that cannot re-acl
+        its state directory is degraded, not broken.
+    .PARAMETER Path
+        Directory to grant on.
+    .PARAMETER Identity
+        User to grant to, typically $env:USERNAME.
+    .EXAMPLE
+        Grant-PathFullControl -Path $config.paths.stateRoot -Identity $env:USERNAME
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Identity
+    )
+
+    if (-not $PSCmdlet.ShouldProcess($Path, "Grant $Identity full control")) { return $false }
+
+    try {
+        $acl = Get-Acl -Path $Path
+        $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+            $Identity, 'FullControl',
+            'ContainerInherit, ObjectInherit', 'None', 'Allow')
+        $acl.SetAccessRule($rule)
+        Set-Acl -Path $Path -AclObject $acl
+        return $true
+    } catch {
+        Write-Warning ("Could not grant '$Identity' full control of '$Path': " +
+            "$($_.Exception.Message) An unelevated -VerifyOnly may fail to write its manifest.")
+        return $false
+    }
+}
+
 Export-ModuleMember -Function Write-ReAgentLog, New-PhaseResult, Get-ReAgentExitCode, `
-    Invoke-Phase, Write-Utf8NoBomFile
+    Invoke-Phase, Select-Phase, Write-Utf8NoBomFile, Grant-PathFullControl
