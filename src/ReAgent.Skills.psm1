@@ -165,5 +165,193 @@ function Select-UnwaivedFinding {
     return @($Findings | Where-Object { $waived -notcontains $_.RuleId })
 }
 
+
+function Get-ToolCatalog {
+    <#
+    .SYNOPSIS
+        Loads the pinned per-server tool surface.
+    .DESCRIPTION
+        Checked into the repo, not stateRoot: stateRoot holds per-machine
+        derived state, while the catalog is the EXPECTED surface, versioned
+        alongside the skills that depend on it.
+
+        This is what lets the adaptation gate run unattended. Three of four
+        target servers need a GUI open, so a live-only gate would sit at
+        not-testable on almost every run - the false-confidence failure of
+        HANDOFF defect 1.
+    .PARAMETER Path
+        Catalog file. Defaults to data/tool-catalog.json beside the module.
+    .EXAMPLE
+        Get-ToolCatalog
+    #>
+    [CmdletBinding()]
+    param([string]$Path = '')
+
+    if (-not $Path) {
+        $root = Join-Path $PSScriptRoot '..'
+        $Path = Join-Path $root 'data	ool-catalog.json'
+    }
+    if (-not (Test-Path -LiteralPath $Path)) {
+        throw ("Tool catalog not found at '$Path'. Capture one with " +
+            '.\Install-REAgent.ps1 -Attended -UpdateToolCatalog.')
+    }
+    return (Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json)
+}
+
+function Get-CatalogServerTool {
+    <#
+    .SYNOPSIS
+        Reads one server's entry out of the catalog.
+    .DESCRIPTION
+        Distinguishes 'no entry' from 'an entry with no tools'. Collapsing
+        those would let a missing entry read as a server that advertises
+        nothing, which is a silent pass.
+    .PARAMETER Catalog
+        From Get-ToolCatalog.
+    .PARAMETER Server
+        Server name.
+    .EXAMPLE
+        Get-CatalogServerTool -Catalog $c -Server 'pyghidra-mcp'
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Catalog,
+        [Parameter(Mandatory)][string]$Server
+    )
+
+    if ($Catalog.servers.PSObject.Properties.Name -notcontains $Server) {
+        return @{ Known = $false; Tools = @(); Pin = '' }
+    }
+    $e = $Catalog.servers.$Server
+    return @{ Known = $true; Tools = @($e.tools); Pin = $e.pin }
+}
+
+function Compare-ToolCatalog {
+    <#
+    .SYNOPSIS
+        Diffs a live tool list against the catalog.
+    .DESCRIPTION
+        Returns names, not just a boolean. A drop in tool count after an
+        upgrade is a useful regression signal (docs/mvp/HANDOFF.md), and it is
+        only actionable if the message says which tools went.
+    .PARAMETER Catalog
+        From Get-ToolCatalog.
+    .PARAMETER Server
+        Server name.
+    .PARAMETER LiveTools
+        Names the server advertised just now.
+    .EXAMPLE
+        Compare-ToolCatalog -Catalog $c -Server 'pyghidra-mcp' -LiveTools $t
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Catalog,
+        [Parameter(Mandatory)][string]$Server,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$LiveTools
+    )
+
+    $known = Get-CatalogServerTool -Catalog $Catalog -Server $Server
+    return @{
+        Added      = @($LiveTools | Where-Object { $known.Tools -notcontains $_ })
+        Removed    = @($known.Tools | Where-Object { $LiveTools -notcontains $_ })
+        CountDelta = ($LiveTools.Count - $known.Tools.Count)
+    }
+}
+
+
+function Get-ToolCatalog {
+    <#
+    .SYNOPSIS
+        Loads the pinned per-server tool surface.
+    .DESCRIPTION
+        Checked into the repo, not stateRoot: stateRoot holds per-machine
+        derived state, while the catalog is the EXPECTED surface, versioned
+        alongside the skills that depend on it.
+
+        This is what lets the adaptation gate run unattended. Three of four
+        target servers need a GUI open, so a live-only gate would sit at
+        not-testable on almost every run - the false-confidence failure of
+        HANDOFF defect 1.
+    .PARAMETER Path
+        Catalog file. Defaults to data/tool-catalog.json beside the module.
+    .EXAMPLE
+        Get-ToolCatalog
+    #>
+    [CmdletBinding()]
+    param([string]$Path = '')
+
+    if (-not $Path) {
+        $root = Join-Path $PSScriptRoot '..'
+        $Path = Join-Path $root 'data\tool-catalog.json'
+    }
+    if (-not (Test-Path -LiteralPath $Path)) {
+        throw ("Tool catalog not found at '$Path'. Capture one with " +
+            '.\Install-REAgent.ps1 -Attended -UpdateToolCatalog.')
+    }
+    return (Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json)
+}
+
+function Get-CatalogServerTool {
+    <#
+    .SYNOPSIS
+        Reads one server's entry out of the catalog.
+    .DESCRIPTION
+        Distinguishes 'no entry' from 'an entry with no tools'. Collapsing
+        those would let a missing entry read as a server that advertises
+        nothing, which is a silent pass.
+    .PARAMETER Catalog
+        From Get-ToolCatalog.
+    .PARAMETER Server
+        Server name.
+    .EXAMPLE
+        Get-CatalogServerTool -Catalog $c -Server 'pyghidra-mcp'
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Catalog,
+        [Parameter(Mandatory)][string]$Server
+    )
+
+    if ($Catalog.servers.PSObject.Properties.Name -notcontains $Server) {
+        return @{ Known = $false; Tools = @(); Pin = '' }
+    }
+    $e = $Catalog.servers.$Server
+    return @{ Known = $true; Tools = @($e.tools); Pin = $e.pin }
+}
+
+function Compare-ToolCatalog {
+    <#
+    .SYNOPSIS
+        Diffs a live tool list against the catalog.
+    .DESCRIPTION
+        Returns names, not just a boolean. A drop in tool count after an
+        upgrade is a useful regression signal (docs/mvp/HANDOFF.md), and it is
+        only actionable if the message says which tools went.
+    .PARAMETER Catalog
+        From Get-ToolCatalog.
+    .PARAMETER Server
+        Server name.
+    .PARAMETER LiveTools
+        Names the server advertised just now.
+    .EXAMPLE
+        Compare-ToolCatalog -Catalog $c -Server 'pyghidra-mcp' -LiveTools $t
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Catalog,
+        [Parameter(Mandatory)][string]$Server,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$LiveTools
+    )
+
+    $known = Get-CatalogServerTool -Catalog $Catalog -Server $Server
+    return @{
+        Added      = @($LiveTools | Where-Object { $known.Tools -notcontains $_ })
+        Removed    = @($known.Tools | Where-Object { $LiveTools -notcontains $_ })
+        CountDelta = ($LiveTools.Count - $known.Tools.Count)
+    }
+}
+
 Export-ModuleMember -Function New-SkillResult, Get-SkillScanRule, Test-SkillContent, `
-    Select-UnwaivedFinding
+    Select-UnwaivedFinding, Get-ToolCatalog, Get-CatalogServerTool, `
+    Compare-ToolCatalog, Get-ToolCatalog, Get-CatalogServerTool, `
+    Compare-ToolCatalog

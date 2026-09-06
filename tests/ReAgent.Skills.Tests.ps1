@@ -131,3 +131,40 @@ Describe 'Select-UnwaivedFinding' {
             Should -Be 1
     }
 }
+
+Describe 'Get-CatalogServerTool' {
+    BeforeAll { $Script:Cat = Get-ToolCatalog }
+
+    It 'returns the measured pyghidra-mcp surface' {
+        $e = Get-CatalogServerTool -Catalog $Script:Cat -Server 'pyghidra-mcp'
+        $e.Known | Should -BeTrue
+        $e.Tools | Should -Contain 'decompile_function'
+        $e.Tools | Should -Contain 'rename_function'
+        $e.Tools.Count | Should -Be 20
+    }
+
+    It 'distinguishes an unknown server from one with an empty tool list' {
+        (Get-CatalogServerTool -Catalog $Script:Cat -Server 'nope').Known | Should -BeFalse
+    }
+}
+
+Describe 'Compare-ToolCatalog' {
+    BeforeAll { $Script:Cat = Get-ToolCatalog }
+
+    It 'reports added and removed names and the count delta, not just that it differs' {
+        # HANDOFF notes a tool-count drop after an upgrade is a useful regression signal,
+        # so the delta has to survive into the message.
+        $live = @('decompile_function', 'brand_new_tool')
+        $d = Compare-ToolCatalog -Catalog $Script:Cat -Server 'pyghidra-mcp' -LiveTools $live
+        $d.Added | Should -Contain 'brand_new_tool'
+        $d.Removed | Should -Contain 'rename_function'
+        $d.CountDelta | Should -Be (2 - 20)
+    }
+
+    It 'reports no difference when the live list matches the catalog' {
+        $e = Get-CatalogServerTool -Catalog $Script:Cat -Server 'pyghidra-mcp'
+        $d = Compare-ToolCatalog -Catalog $Script:Cat -Server 'pyghidra-mcp' -LiveTools $e.Tools
+        $d.Added | Should -BeNullOrEmpty
+        $d.Removed | Should -BeNullOrEmpty
+    }
+}

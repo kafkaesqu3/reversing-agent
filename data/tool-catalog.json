@@ -1,0 +1,22 @@
+{
+  "capturedAt": "2026-09-06T09:05:00.0000000+01:00",
+  "capturedBy": "david",
+  "servers": {
+    "pyghidra-mcp": {
+      "pin": "0.2.5",
+      "toolCount": 20,
+      "tools": ["decompile_function", "delete_project_binary", "disassemble",
+        "gen_callgraph", "import_binary", "list_exports", "list_imports",
+        "list_project_binaries", "list_project_binary_metadata", "list_xrefs",
+        "read_bytes", "rename_function", "rename_variable", "save", "search_code",
+        "search_strings", "search_symbols_by_name", "set_comment",
+        "set_function_prototype", "set_variable_type"]
+    },
+    "mcp-windbg": {
+      "pin": "1.2.1",
+      "toolCount": 2,
+      "tools": ["open_cdb_dump", "run_cdb_command"],
+      "note": "No module-list tool. Use run_cdb_command with 'lm'."
+    }
+  }
+}
