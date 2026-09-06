@@ -228,3 +228,72 @@ Describe 'Get-SkillToolReference' {
         @(Get-SkillToolReference -Frontmatter @{ name = 'x' }) | Should -BeNullOrEmpty
     }
 }
+
+Describe 'Test-SkillAdaptation' {
+    BeforeAll {
+        $Script:Cat = Get-ToolCatalog
+        function New-SkillText {
+            # Pure factory: builds and returns a string, writes nothing.
+            [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+                'PSUseShouldProcessForStateChangingFunctions', '')]
+            param($Name = 'ghidra-iter', $Tools = @('mcp__pyghidra-mcp__decompile_function'),
+                  $Body = 'Decompile, then verify.')
+            $lines = @('---', "name: $Name", 'description: Test skill.')
+            if ($Tools.Count -gt 0) {
+                $lines += 'allowed-tools:'
+                foreach ($t in $Tools) { $lines += "  - $t" }
+            }
+            $lines += @('---', $Body)
+            return ($lines -join "`n")
+        }
+    }
+
+    It 'passes a correctly adapted skill' {
+        $f = @(Test-SkillAdaptation -Text (New-SkillText) -DirectoryName 'ghidra-iter' `
+                -Catalog $Script:Cat -TargetServers @('pyghidra-mcp') -ToolRenames @{})
+        $f | Should -BeNullOrEmpty
+    }
+
+    It 'fails G0 when the frontmatter name does not match the directory name' {
+        # Claude Code will not load the skill at all in this state.
+        $f = @(Test-SkillAdaptation -Text (New-SkillText) -DirectoryName 'ghidra-other' `
+                -Catalog $Script:Cat -TargetServers @('pyghidra-mcp') -ToolRenames @{})
+        ($f | Where-Object { $_.Check -eq 'G0' }).Message | Should -BeLike '*ghidra-other*'
+    }
+
+    It 'fails G1 naming the tool and the advertised list when a tool does not exist' {
+        $t = New-SkillText -Tools @('mcp__pyghidra-mcp__no_such_tool')
+        $f = @(Test-SkillAdaptation -Text $t -DirectoryName 'ghidra-iter' `
+                -Catalog $Script:Cat -TargetServers @('pyghidra-mcp') -ToolRenames @{})
+        $g1 = $f | Where-Object { $_.Check -eq 'G1' }
+        $g1.Message | Should -BeLike '*no_such_tool*'
+        $g1.Message | Should -BeLike '*decompile_function*'
+    }
+
+    It 'fails G2 when an upstream tool name survives anywhere in the body' {
+        # The classic half-adaptation: allowed-tools renamed, prose still says the old API.
+        $t = New-SkillText -Body 'First call x64dbg_automate.get_regs to read registers.'
+        $f = @(Test-SkillAdaptation -Text $t -DirectoryName 'ghidra-iter' `
+                -Catalog $Script:Cat -TargetServers @('pyghidra-mcp') `
+                -ToolRenames @{ 'x64dbg_automate.get_regs' = 'GetRegisters' })
+        ($f | Where-Object { $_.Check -eq 'G2' }).Message |
+            Should -BeLike '*x64dbg_automate.get_regs*'
+    }
+
+    It 'passes a skill declaring no MCP tools, because nothing needs checking' {
+        # A methodology-only skill is correctly adapted by definition. Reporting
+        # not-testable here would be noise that trains the operator to ignore the status.
+        $t = New-SkillText -Tools @()
+        $f = @(Test-SkillAdaptation -Text $t -DirectoryName 'ghidra-iter' `
+                -Catalog $Script:Cat -TargetServers @() -ToolRenames @{})
+        $f | Should -BeNullOrEmpty
+    }
+
+    It 'reports an unknown catalog entry as its own finding, never a silent pass' {
+        $t = New-SkillText -Tools @('mcp__binaryninja__bn_binary_view_list')
+        $f = @(Test-SkillAdaptation -Text $t -DirectoryName 'ghidra-iter' `
+                -Catalog $Script:Cat -TargetServers @('binaryninja') -ToolRenames @{})
+        ($f | Where-Object { $_.Check -eq 'CATALOG' }).Message |
+            Should -BeLike '*UpdateToolCatalog*'
+    }
+}

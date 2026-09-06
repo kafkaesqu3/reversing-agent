@@ -395,7 +395,195 @@ function Get-SkillToolReference {
     return $refs
 }
 
+function Test-SkillNameCheck {
+    <#
+    .SYNOPSIS
+        Runs check G0: the frontmatter name must match the install directory.
+    .DESCRIPTION
+        Claude Code keys a skill's identity off its directory name, not its
+        frontmatter. A mismatch here means the skill will not load at all, so
+        this is checked ahead of anything about the tools it declares.
+    .PARAMETER Frontmatter
+        From Get-SkillFrontmatter.
+    .PARAMETER DirectoryName
+        The directory the skill will be installed into.
+    .OUTPUTS
+        [array] Zero or one {Check='G0'; Message} findings.
+    .EXAMPLE
+        Test-SkillNameCheck -Frontmatter $fm -DirectoryName 'windbg-crash'
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][hashtable]$Frontmatter,
+        [Parameter(Mandatory)][string]$DirectoryName
+    )
+
+    $findings = @()
+    if ("$($Frontmatter['name'])" -ne $DirectoryName) {
+        $findings += [PSCustomObject]@{ Check = 'G0'; Message = (
+                "Frontmatter name '$($Frontmatter['name'])' does not match directory " +
+                "'$DirectoryName'. Claude Code will not load this skill.") }
+    }
+    return $findings
+}
+
+function Test-SkillCatalogCheck {
+    <#
+    .SYNOPSIS
+        Runs check CATALOG: every target server must have a catalog entry.
+    .DESCRIPTION
+        A skill targeting a server the catalog has never measured cannot be
+        checked by G1 at all, so that gap is reported on its own rather than
+        silently skipped.
+    .PARAMETER Catalog
+        From Get-ToolCatalog.
+    .PARAMETER TargetServers
+        Servers this pack declares it drives.
+    .OUTPUTS
+        [array] One {Check='CATALOG'; Message} finding per unknown server.
+    .EXAMPLE
+        Test-SkillCatalogCheck -Catalog $c -TargetServers @('pyghidra-mcp')
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Catalog,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$TargetServers
+    )
+
+    $findings = @()
+    foreach ($server in $TargetServers) {
+        $entry = Get-CatalogServerTool -Catalog $Catalog -Server $server
+        if (-not $entry.Known) {
+            $findings += [PSCustomObject]@{ Check = 'CATALOG'; Message = (
+                    "No tool catalog entry for '$server'. Skills targeting it cannot be " +
+                    'checked. Open the application, start its MCP server, then run: ' +
+                    '.\Install-REAgent.ps1 -Attended -UpdateToolCatalog') }
+        }
+    }
+    return $findings
+}
+
+function Test-SkillToolExistenceCheck {
+    <#
+    .SYNOPSIS
+        Runs check G1: every declared tool must exist on its server.
+    .DESCRIPTION
+        Skips references to a server with no catalog entry, since
+        Test-SkillCatalogCheck already flags that gap and a second finding
+        here would be redundant noise.
+    .PARAMETER ToolReferences
+        From Get-SkillToolReference.
+    .PARAMETER Catalog
+        From Get-ToolCatalog.
+    .OUTPUTS
+        [array] One {Check='G1'; Message} finding per tool the server does not advertise.
+    .EXAMPLE
+        Test-SkillToolExistenceCheck -ToolReferences $refs -Catalog $c
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][array]$ToolReferences,
+        [Parameter(Mandatory)][object]$Catalog
+    )
+
+    $findings = @()
+    foreach ($ref in $ToolReferences) {
+        $entry = Get-CatalogServerTool -Catalog $Catalog -Server $ref.Server
+        if (-not $entry.Known) { continue }
+        if ($entry.Tools -notcontains $ref.Tool) {
+            $findings += [PSCustomObject]@{ Check = 'G1'; Message = (
+                    "Declares tool '$($ref.Tool)', which '$($ref.Server)' does not " +
+                    "advertise. Advertised: [$($entry.Tools -join ', ')]. The adaptation " +
+                    'is wrong or upstream drifted.') }
+        }
+    }
+    return $findings
+}
+
+function Test-SkillRenameCompletenessCheck {
+    <#
+    .SYNOPSIS
+        Runs check G2: no upstream tool name may survive in the skill's body.
+    .DESCRIPTION
+        Asserts over the file's whole text, not just frontmatter. That is
+        what catches the half-adaptation where allowed-tools was renamed but
+        the prose still names the old API.
+    .PARAMETER Text
+        The skill file's content.
+    .PARAMETER ToolRenames
+        Upstream-to-adapted tool name map, from the pack's adaptation block.
+    .OUTPUTS
+        [array] One {Check='G2'; Message} finding per upstream name still present.
+    .EXAMPLE
+        Test-SkillRenameCompletenessCheck -Text $md -ToolRenames @{ 'old' = 'New' }
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Text,
+        [Parameter(Mandatory)][hashtable]$ToolRenames
+    )
+
+    $findings = @()
+    foreach ($old in $ToolRenames.Keys) {
+        if ($Text -like "*$old*") {
+            $findings += [PSCustomObject]@{ Check = 'G2'; Message = (
+                    "Upstream name '$old' still appears in the body. The adaptation is " +
+                    "incomplete; it should now read '$($ToolRenames[$old])'.") }
+        }
+    }
+    return $findings
+}
+
+function Test-SkillAdaptation {
+    <#
+    .SYNOPSIS
+        Runs the static adaptation checks G0, CATALOG, G1 and G2 over one skill.
+    .DESCRIPTION
+        None of these needs a running server: they read the vendored file and
+        the checked-in catalog. That is what lets the gate run on every
+        installer run rather than only when a GUI happens to be open.
+
+        A skill declaring no MCP tools passes. It is correctly adapted by
+        definition, and a not-testable here would be noise.
+    .PARAMETER Text
+        The skill file's content.
+    .PARAMETER DirectoryName
+        The directory the skill will be installed into.
+    .PARAMETER Catalog
+        From Get-ToolCatalog.
+    .PARAMETER TargetServers
+        Servers this pack declares it drives.
+    .PARAMETER ToolRenames
+        Upstream-to-adapted tool name map, from the pack's adaptation block.
+    .OUTPUTS
+        [array] Combined {Check; Message} findings from all four checks.
+    .EXAMPLE
+        Test-SkillAdaptation -Text $md -DirectoryName 'windbg-crash' -Catalog $c `
+            -TargetServers @('mcp-windbg') -ToolRenames @{}
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Text,
+        [Parameter(Mandatory)][string]$DirectoryName,
+        [Parameter(Mandatory)][object]$Catalog,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$TargetServers,
+        [Parameter(Mandatory)][hashtable]$ToolRenames
+    )
+
+    $fm = Get-SkillFrontmatter -Text $Text
+    $refs = @(Get-SkillToolReference -Frontmatter $fm)
+
+    $findings = @()
+    $findings += Test-SkillNameCheck -Frontmatter $fm -DirectoryName $DirectoryName
+    $findings += Test-SkillCatalogCheck -Catalog $Catalog -TargetServers $TargetServers
+    $findings += Test-SkillToolExistenceCheck -ToolReferences $refs -Catalog $Catalog
+    $findings += Test-SkillRenameCompletenessCheck -Text $Text -ToolRenames $ToolRenames
+    return $findings
+}
+
 Export-ModuleMember -Function New-SkillResult, Get-SkillScanRule, Test-SkillContent, `
     Select-UnwaivedFinding, Get-ToolCatalog, Get-CatalogServerTool, `
     Compare-ToolCatalog, Find-FrontmatterEnd, ConvertFrom-FrontmatterLine, `
-    Get-SkillFrontmatter, Get-SkillToolReference
+    Get-SkillFrontmatter, Get-SkillToolReference, Test-SkillNameCheck, `
+    Test-SkillCatalogCheck, Test-SkillToolExistenceCheck, `
+    Test-SkillRenameCompletenessCheck, Test-SkillAdaptation
