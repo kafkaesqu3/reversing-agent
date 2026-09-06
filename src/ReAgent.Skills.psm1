@@ -581,9 +581,333 @@ function Test-SkillAdaptation {
     return $findings
 }
 
+function Remove-OrphanedSkill {
+    <#
+    .SYNOPSIS
+        Removes managed skill directories that are no longer wanted.
+    .DESCRIPTION
+        Only touches directories carrying our marker file. An operator's own
+        skill directory is never ours to delete - the installer must never
+        destroy something it did not create.
+    .PARAMETER SkillRoot
+        The .claude\skills directory.
+    .PARAMETER Wanted
+        Skill directory names that should survive.
+    .EXAMPLE
+        Remove-OrphanedSkill -SkillRoot $r -Wanted @('windbg-crash')
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)][string]$SkillRoot,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Wanted
+    )
+
+    if (-not (Test-Path -LiteralPath $SkillRoot)) { return 0 }
+
+    $removed = 0
+    foreach ($d in (Get-ChildItem -LiteralPath $SkillRoot -Directory)) {
+        if ($Wanted -contains $d.Name) { continue }
+        $marker = Join-Path $d.FullName '.re-agent-managed'
+        if (-not (Test-Path -LiteralPath $marker)) {
+            Write-ReAgentLog -Level WARN -Message (
+                "Leaving '$($d.Name)' alone: it carries no re-agent marker, so it is not " +
+                'ours to remove.')
+            continue
+        }
+        if ($PSCmdlet.ShouldProcess($d.FullName, 'Remove orphaned skill')) {
+            Remove-Item -LiteralPath $d.FullName -Recurse -Force
+            Write-ReAgentLog -Level INFO -Message "Removed orphaned skill '$($d.Name)'."
+            $removed++
+        }
+    }
+    return $removed
+}
+
+function Remove-FailedPackSkill {
+    <#
+    .SYNOPSIS
+        Removes any installed copy of a skill whose pack now fails the gate.
+    .DESCRIPTION
+        Fail-closed cleanup for Install-SkillPack: a newly-detected red flag
+        must not leave the bad skill live on disk, or the failing check is
+        cosmetic. Only a directory carrying our marker is touched - the same
+        rule Remove-OrphanedSkill enforces - so this never reaches into a
+        directory the installer did not create.
+    .PARAMETER SkillRoot
+        The .claude\skills directory.
+    .PARAMETER Wanted
+        The pack's enabled skill directory names.
+    .EXAMPLE
+        Remove-FailedPackSkill -SkillRoot $skillRoot -Wanted $wanted
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)][string]$SkillRoot,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Wanted
+    )
+
+    foreach ($n in $Wanted) {
+        $d = Join-Path $SkillRoot $n
+        if (-not (Test-Path -LiteralPath (Join-Path $d '.re-agent-managed'))) { continue }
+        if ($PSCmdlet.ShouldProcess($d, 'Remove skill that now fails the security scan')) {
+            Remove-Item -LiteralPath $d -Recurse -Force
+            Write-ReAgentLog -Level WARN -Message (
+                "Removed '$n': its pack now fails the security scan.")
+        }
+    }
+}
+
+function Test-SkillPackReviewed {
+    <#
+    .SYNOPSIS
+        Reports whether a pack's human review sign-off has been recorded.
+    .DESCRIPTION
+        A treeSha256 pin proves the vendored bytes did not change underneath
+        the operator; it says nothing about whether a human ever read them.
+        Both reviewedBy and reviewedAt must be present, or the pack is not
+        considered reviewed.
+    .PARAMETER Pack
+        The pack's config entry.
+    .OUTPUTS
+        [bool] True when both review fields are recorded.
+    .EXAMPLE
+        Test-SkillPackReviewed -Pack $pack
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][object]$Pack)
+
+    return -not ([string]::IsNullOrWhiteSpace($Pack.review.reviewedBy) -or
+        [string]::IsNullOrWhiteSpace($Pack.review.reviewedAt))
+}
+
+function Write-SkillPackFile {
+    <#
+    .SYNOPSIS
+        Copies one skill's files into place and writes its management marker.
+    .DESCRIPTION
+        Every file is routed through Write-FileIfChanged, so a second
+        identical run touches nothing on disk and LastWriteTimeUtc holds
+        still. The marker is written last: it is what lets Remove-OrphanedSkill
+        later tell an installed skill apart from an operator's own
+        hand-written directory.
+    .PARAMETER PackRoot
+        The vendored pack's root, holding one directory per upstream skill.
+    .PARAMETER SkillRoot
+        The .claude\skills directory skills are installed into.
+    .PARAMETER Namespace
+        The pack's namespace, recorded in the marker.
+    .PARAMETER Skill
+        One entry from $Pack.skills, carrying .upstream and .name.
+    .OUTPUTS
+        [bool] True when any file or the marker was actually written.
+    .EXAMPLE
+        Write-SkillPackFile -PackRoot $packRoot -SkillRoot $skillRoot `
+            -Namespace 'windbg' -Skill $skill
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$PackRoot,
+        [Parameter(Mandatory)][string]$SkillRoot,
+        [Parameter(Mandatory)][string]$Namespace,
+        [Parameter(Mandatory)][object]$Skill
+    )
+
+    $src = Join-Path $PackRoot $Skill.name
+    $dst = Join-Path $SkillRoot $Skill.name
+
+    $wrote = $false
+    foreach ($f in (Get-ChildItem -LiteralPath $src -Recurse -File)) {
+        $rel = $f.FullName.Substring($src.Length).TrimStart('\')
+        $out = Join-Path $dst $rel
+        if (Write-FileIfChanged -Path $out -Text (Get-Content -LiteralPath $f.FullName -Raw)) {
+            $wrote = $true
+        }
+    }
+    $marker = Join-Path $dst '.re-agent-managed'
+    if (Write-FileIfChanged -Path $marker -Text "$Namespace/$($Skill.upstream)") {
+        $wrote = $true
+    }
+    return $wrote
+}
+
+function Install-SkillPack {
+    <#
+    .SYNOPSIS
+        Scans, gates and installs one vendored skill pack.
+    .DESCRIPTION
+        Fail-closed: the scan and the adaptation gate run BEFORE any write, and
+        a pack that trips a block rule has any previously-installed copy
+        removed. A newly-detected red flag must not leave the bad skill live.
+    .PARAMETER Pack
+        The pack's config entry.
+    .PARAMETER Config
+        The parsed configuration object.
+    .PARAMETER RepoRoot
+        Repository root holding vendor\skills.
+    .PARAMETER Catalog
+        From Get-ToolCatalog.
+    .EXAMPLE
+        Install-SkillPack -Pack $p -Config $cfg -RepoRoot $r -Catalog $c
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)][object]$Pack,
+        [Parameter(Mandatory)][object]$Config,
+        [Parameter(Mandatory)][string]$RepoRoot,
+        [Parameter(Mandatory)][object]$Catalog
+    )
+
+    $skillRoot = Join-Path $Config.paths.agentRoot '.claude\skills'
+    $wanted = @($Pack.skills | Where-Object { $_.enabled } | ForEach-Object { $_.name })
+
+    if (-not $Pack.enabled) {
+        $null = Remove-OrphanedSkill -SkillRoot $skillRoot -Wanted @() -Confirm:$false
+        return New-SkillResult -Pack $Pack -Status 'not-installed' `
+            -Reason 'disabled in re-agent.config.json'
+    }
+
+    $packRoot = Join-Path $RepoRoot "vendor\skills\$($Pack.namespace)"
+    if (-not (Test-Path -LiteralPath $packRoot)) {
+        return New-SkillResult -Pack $Pack -Status 'not-installed' -Reason (
+            "not vendored yet; run tools\Update-VendoredSkill.ps1 -Namespace " +
+            "$($Pack.namespace)")
+    }
+
+    if (-not (Test-SkillPackReviewed -Pack $Pack)) {
+        return New-SkillResult -Pack $Pack -Status 'failed' -Reason (
+            'human review gate: no sign-off recorded. Read every SKILL.md by hand, then ' +
+            "record reviewedBy and reviewedAt under skills[$($Pack.namespace)].review.")
+    }
+
+    $gate = Test-SkillPackGate -Pack $Pack -PackRoot $packRoot -Catalog $Catalog
+    if ($gate.Findings.Count -gt 0) {
+        Remove-FailedPackSkill -SkillRoot $skillRoot -Wanted $wanted -Confirm:$false
+        return New-SkillResult -Pack $Pack -Status 'failed' -Findings $gate.Findings `
+            -Reason $gate.Summary
+    }
+
+    $wrote = $false
+    foreach ($skill in ($Pack.skills | Where-Object { $_.enabled })) {
+        $wrote = $wrote -or (Write-SkillPackFile -PackRoot $packRoot -SkillRoot $skillRoot `
+                -Namespace $Pack.namespace -Skill $skill)
+    }
+
+    $status = if ($wrote) { 'installed' } else { 'skipped' }
+    return New-SkillResult -Pack $Pack -Status $status -SkillNames $wanted
+}
+
+function Test-SkillPackGate {
+    <#
+    .SYNOPSIS
+        Runs the scanner and the adaptation gate over a vendored pack.
+    .PARAMETER Pack
+        The pack's config entry.
+    .PARAMETER PackRoot
+        The vendored tree.
+    .PARAMETER Catalog
+        From Get-ToolCatalog.
+    .EXAMPLE
+        Test-SkillPackGate -Pack $p -PackRoot $r -Catalog $c
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Pack,
+        [Parameter(Mandatory)][string]$PackRoot,
+        [Parameter(Mandatory)][object]$Catalog
+    )
+
+    $rules = Get-SkillScanRule
+    $renames = @{}
+    if ($Pack.PSObject.Properties.Name -contains 'adaptation') {
+        foreach ($p in $Pack.adaptation.toolRenames.PSObject.Properties) {
+            $renames[$p.Name] = $p.Value
+        }
+    }
+
+    $findings = @()
+    foreach ($skill in ($Pack.skills | Where-Object { $_.enabled })) {
+        $dir = Join-Path $PackRoot $skill.name
+        if (-not (Test-Path -LiteralPath $dir)) {
+            $findings += [PSCustomObject]@{ RuleId = 'missing-skill'; Severity = 'block'
+                File = $skill.name; Line = 0
+                Text = "Declared skill '$($skill.name)' is not in the vendored tree." }
+            continue
+        }
+        foreach ($f in (Get-ChildItem -LiteralPath $dir -Recurse -File)) {
+            $text = Get-Content -LiteralPath $f.FullName -Raw
+            $raw = @(Test-SkillContent -Text $text -Rules $rules -File $f.Name)
+            $findings += @(Select-UnwaivedFinding -Findings $raw `
+                    -Exceptions @($Pack.scanExceptions) -Skill $skill.upstream) |
+                Where-Object { $_.Severity -eq 'block' }
+        }
+        $md = Join-Path $dir 'SKILL.md'
+        foreach ($a in @(Test-SkillAdaptation -Text (Get-Content -LiteralPath $md -Raw) `
+                    -DirectoryName $skill.name -Catalog $Catalog `
+                    -TargetServers @($Pack.targetServers) -ToolRenames $renames)) {
+            $findings += [PSCustomObject]@{ RuleId = $a.Check; Severity = 'block'
+                File = "$($skill.upstream)/SKILL.md"; Line = 0; Text = $a.Message }
+        }
+    }
+
+    $summary = if ($findings.Count -gt 0) {
+        "$($findings.Count) blocking finding(s): " +
+        (@($findings | ForEach-Object { $_.RuleId } | Select-Object -Unique) -join ', ')
+    } else { '' }
+    return @{ Findings = $findings; Summary = $summary }
+}
+
+function Install-AllSkill {
+    <#
+    .SYNOPSIS
+        Installs every configured skill pack.
+    .DESCRIPTION
+        Mirrors Install-AllMcpServer: one pack failing does not stop the rest,
+        and each outcome becomes a record the manifest carries.
+    .PARAMETER Config
+        The parsed configuration object.
+    .PARAMETER RepoRoot
+        Repository root.
+    .EXAMPLE
+        Install-AllSkill -Config $cfg -RepoRoot $PSScriptRoot
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Config,
+        [Parameter(Mandatory)][string]$RepoRoot
+    )
+
+    if ($Config.PSObject.Properties.Name -notcontains 'skills') { return @() }
+
+    $catalog = Get-ToolCatalog
+    $results = @()
+    foreach ($pack in $Config.skills) {
+        try {
+            $results += Install-SkillPack -Pack $pack -Config $Config -RepoRoot $RepoRoot `
+                -Catalog $catalog -Confirm:$false
+        } catch {
+            $results += New-SkillResult -Pack $pack -Status 'failed' `
+                -Reason $_.Exception.Message
+        }
+    }
+
+    $wanted = @($results | Where-Object { $_.Installed } |
+            ForEach-Object { $_.SkillNames } | Where-Object { $_ })
+    $null = Remove-OrphanedSkill -SkillRoot (
+        Join-Path $Config.paths.agentRoot '.claude\skills') -Wanted $wanted -Confirm:$false
+
+    foreach ($r in $results) {
+        $level = if ($r.Status -eq 'failed') { 'ERROR' }
+        elseif ($r.Installed) { 'INFO' } else { 'WARN' }
+        Write-ReAgentLog -Level $level -Message "[$($r.Status)] skill pack $($r.Namespace)"
+    }
+    return $results
+}
+
 Export-ModuleMember -Function New-SkillResult, Get-SkillScanRule, Test-SkillContent, `
     Select-UnwaivedFinding, Get-ToolCatalog, Get-CatalogServerTool, `
     Compare-ToolCatalog, Find-FrontmatterEnd, ConvertFrom-FrontmatterLine, `
     Get-SkillFrontmatter, Get-SkillToolReference, Test-SkillNameCheck, `
     Test-SkillCatalogCheck, Test-SkillToolExistenceCheck, `
-    Test-SkillRenameCompletenessCheck, Test-SkillAdaptation
+    Test-SkillRenameCompletenessCheck, Test-SkillAdaptation, Remove-OrphanedSkill, `
+    Remove-FailedPackSkill, Test-SkillPackReviewed, Write-SkillPackFile, `
+    Install-SkillPack, Test-SkillPackGate, Install-AllSkill
