@@ -647,7 +647,7 @@ function Expand-X64dbgPlugin {
                 $null = New-Item -ItemType Directory -Path $dest -Force
             }
             foreach ($f in Get-ChildItem -LiteralPath $source.FullName -File) {
-                Copy-PluginFile -Source $f.FullName -Destination (Join-Path $dest $f.Name)
+                $null = Copy-PluginFile -Source $f.FullName -Destination (Join-Path $dest $f.Name)
             }
         }
     } finally {

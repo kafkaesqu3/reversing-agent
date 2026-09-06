@@ -588,6 +588,28 @@ Describe 'Install-GuiPluginHttpServer' {
     }
 }
 
+Describe 'Expand-X64dbgPlugin' {
+    It 'writes nothing to the output stream' {
+        # Copy-PluginFile returns a Boolean. Leaking it makes every caller
+        # return an array, and the failure only shows up much further away as
+        # "the property 'Name' cannot be found on this object".
+        $staging = Join-Path $TestDrive 'rel-src'
+        foreach ($a in @('x32', 'x64')) {
+            $null = New-Item -ItemType Directory -Path (Join-Path $staging "$a\plugins") -Force
+            'payload' | Set-Content (Join-Path $staging "$a\plugins\plug.dp")
+        }
+        $zip = Join-Path $TestDrive 'plugin.zip'
+        Compress-Archive -Path (Join-Path $staging '*') -DestinationPath $zip -Force
+        $root = Join-Path $TestDrive 'x64dbg-out'
+
+        $out = @(Expand-X64dbgPlugin -ArchivePath $zip -ReleaseRoot $root)
+
+        $out.Count | Should -Be 0
+        Test-Path (Join-Path $root 'x64\plugins\plug.dp') | Should -BeTrue
+        Test-Path (Join-Path $root 'x32\plugins\plug.dp') | Should -BeTrue
+    }
+}
+
 Describe 'Install-PluginInprocServer' {
     BeforeAll {
         $Script:XSrv = [PSCustomObject]@{
