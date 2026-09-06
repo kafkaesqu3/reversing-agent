@@ -26,6 +26,35 @@ Describe 'the entry point script' {
         }
     }
 
+    It 'binds every argument it passes to a phase function' {
+        # A stray backtick before a parameter name escapes the hyphen, so the
+        # token binds positionally and the call fails only at runtime - which
+        # is how Phase 5 shipped broken past a green suite.
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $Script:Root 'Install-REAgent.ps1'), [ref]$null, [ref]$null)
+        $calls = $ast.FindAll({
+                param($n) $n -is [System.Management.Automation.Language.CommandAst]
+            }, $true)
+        foreach ($call in $calls) {
+            $name = $call.GetCommandName()
+            if (-not $name) { continue }
+            $cmd = Get-Command $name -ErrorAction SilentlyContinue
+            if (-not $cmd -or $cmd.CommandType -eq 'Application') { continue }
+
+            foreach ($el in $call.CommandElements) {
+                if ($el -is [System.Management.Automation.Language.StringConstantExpressionAst] -and
+                    $el.Value -match '^-[A-Za-z]') {
+                    throw ("'$name' is passed '$($el.Value)' as a positional argument. " +
+                        'An escaped hyphen (a backtick before the dash) is the usual cause.')
+                }
+                if ($el -is [System.Management.Automation.Language.CommandParameterAst]) {
+                    $cmd.Parameters.Keys | Should -Contain $el.ParameterName -Because `
+                        "$name has no -$($el.ParameterName) parameter"
+                }
+            }
+        }
+    }
+
     It 'calls every phase function it declares' {
         $text = Get-Content (Join-Path $Script:Root 'Install-REAgent.ps1') -Raw
         foreach ($fn in @('Get-HostInventory', 'Assert-Preflight', 'Test-PrereqSatisfied',
