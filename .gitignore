@@ -36,3 +36,6 @@ desktop.ini
 # Agent tooling session state — per-machine, not project content
 .claude/autoharness/
 **/.claude/autoharness/
+
+# Vendor-time archive cache for skill packs — never part of the vendored output
+.vendor-cache/

@@ -865,6 +865,106 @@ Describe 'Write-ServerLauncher idempotency' {
     }
 }
 
+Describe 'Get-TreeHash' {
+    It 'is stable across path separator and case differences' {
+        $a = Join-Path $TestDrive 'th-a'; $b = Join-Path $TestDrive 'th-b'
+        foreach ($d in @($a, $b)) {
+            $null = New-Item -ItemType Directory -Path (Join-Path $d 'sub') -Force
+            'one' | Set-Content -LiteralPath (Join-Path $d 'sub\x.md')
+            'two' | Set-Content -LiteralPath (Join-Path $d 'y.md')
+        }
+        Get-TreeHash -Root $a | Should -Be (Get-TreeHash -Root $b)
+    }
+
+    It 'changes when any byte changes' {
+        $d = Join-Path $TestDrive 'th-c'
+        $null = New-Item -ItemType Directory -Path $d -Force
+        'one' | Set-Content -LiteralPath (Join-Path $d 'x.md')
+        $before = Get-TreeHash -Root $d
+        'two' | Set-Content -LiteralPath (Join-Path $d 'x.md')
+        Get-TreeHash -Root $d | Should -Not -Be $before
+    }
+
+    It 'changes when a stray file is added, which is exactly what it should catch' {
+        $d = Join-Path $TestDrive 'th-d'
+        $null = New-Item -ItemType Directory -Path $d -Force
+        'one' | Set-Content -LiteralPath (Join-Path $d 'x.md')
+        $before = Get-TreeHash -Root $d
+        'extra' | Set-Content -LiteralPath (Join-Path $d 'stray.ps1')
+        Get-TreeHash -Root $d | Should -Not -Be $before
+    }
+}
+
+Describe 'Expand-SkillPack' {
+    It 'locates skill directories by shape rather than an assumed path' {
+        $src = Join-Path $TestDrive 'esp-src\repo-abc123\skills\crash'
+        $null = New-Item -ItemType Directory -Path $src -Force
+        "---`nname: x`n---`nbody" | Set-Content -LiteralPath (Join-Path $src 'SKILL.md')
+        $zip = Join-Path $TestDrive 'esp.zip'
+        Compress-Archive -Path (Join-Path $TestDrive 'esp-src\*') -DestinationPath $zip
+        $dirs = @(Expand-SkillPack -ArchivePath $zip -SubPath '')
+        $dirs.Count | Should -Be 1
+        $dirs[0].Name | Should -Be 'crash'
+    }
+
+    It 'throws naming the layout change when the archive has no SKILL.md anywhere' {
+        $src = Join-Path $TestDrive 'esp2-src\repo\docs'
+        $null = New-Item -ItemType Directory -Path $src -Force
+        'nothing' | Set-Content -LiteralPath (Join-Path $src 'README.md')
+        $zip = Join-Path $TestDrive 'esp2.zip'
+        Compress-Archive -Path (Join-Path $TestDrive 'esp2-src\*') -DestinationPath $zip
+        { Expand-SkillPack -ArchivePath $zip -SubPath '' } |
+            Should -Throw '*upstream layout*'
+    }
+}
+
+Describe 'Get-VerifiedGitHubArchive' {
+    BeforeAll {
+        function Get-ArchPack {
+            [PSCustomObject]@{
+                namespace = 'demo'
+                source = [PSCustomObject]@{ repo = 'someone/pack'
+                    commit = ('c' * 40); treeSha256 = 'PIN-ME' }
+            }
+        }
+    }
+
+    It 'fetches the archive at the pinned commit, not at a branch' {
+        Mock -ModuleName ReAgent.Servers Invoke-Download {
+            $Script:CapturedUri = $Uri
+            'payload' | Set-Content -LiteralPath $OutFile
+        }
+        $null = Get-VerifiedGitHubArchive -Pack (Get-ArchPack) `
+            -CacheRoot (Join-Path $TestDrive 'vc1')
+        $Script:CapturedUri | Should -BeLike "*/archive/$('c' * 40).zip"
+    }
+
+    It 'names the cached archive after the commit so two pins never collide' {
+        Mock -ModuleName ReAgent.Servers Invoke-Download {
+            'payload' | Set-Content -LiteralPath $OutFile
+        }
+        $out = Get-VerifiedGitHubArchive -Pack (Get-ArchPack) `
+            -CacheRoot (Join-Path $TestDrive 'vc2')
+        (Split-Path -Leaf $out) | Should -Be "demo-$('c' * 40).zip"
+    }
+
+    It 'reuses a cached archive rather than downloading twice' {
+        # Caching is what makes the PIN-ME loop tolerable: the first run throws with
+        # the tree hash, the operator records it, the second run reuses the bytes.
+        Mock -ModuleName ReAgent.Servers Invoke-Download {
+            'payload' | Set-Content -LiteralPath $OutFile
+        }
+        $root = Join-Path $TestDrive 'vc3'
+        $null = Get-VerifiedGitHubArchive -Pack (Get-ArchPack) -CacheRoot $root
+        $null = Get-VerifiedGitHubArchive -Pack (Get-ArchPack) -CacheRoot $root
+        Should -Invoke -ModuleName ReAgent.Servers Invoke-Download -Times 1 -Exactly
+    }
+}
+
+# Note: this function does NOT verify a hash. The tree digest needs the EXPANDED
+# tree, so Assert-FileHash is called by tools\Update-VendoredSkill.ps1 (Task 15)
+# after Expand-SkillPack. Keeping the fetch dumb keeps the mock seam narrow.
+
 Describe 'Wait-ServerListening' {
     It 'returns as soon as the port answers' {
         $Script:Polls = 0

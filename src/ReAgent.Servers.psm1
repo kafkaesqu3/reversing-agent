@@ -1283,6 +1283,142 @@ function New-TestCrashDump {
     return $OutputPath
 }
 
+function Get-TreeHash {
+    <#
+    .SYNOPSIS
+        Deterministic digest of a directory tree.
+    .DESCRIPTION
+        Pinning a codeload archive's own hash is fragile: GitHub generates
+        archives on demand and has changed compression before, invalidating
+        pinned hashes across whole ecosystems. A control that fails for
+        non-attack reasons teaches the operator to re-pin on mismatch, which
+        destroys it.
+
+        So the commit SHA is the identity and this is the integrity check:
+        relative paths normalised to forward slashes and lowercased (a
+        case-insensitive filesystem must not yield two answers), ordinal
+        sorted, each paired with its file hash. Nothing is excluded - a stray
+        file inside a vendored pack is precisely what this should catch.
+    .PARAMETER Root
+        Directory to digest.
+    .EXAMPLE
+        Get-TreeHash -Root 'vendor\skills\windbg'
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Root)
+
+    $full = (Resolve-Path -LiteralPath $Root).Path
+    $entries = @()
+    foreach ($f in (Get-ChildItem -LiteralPath $full -Recurse -File)) {
+        $rel = $f.FullName.Substring($full.Length).TrimStart('\', '/')
+        $rel = $rel.Replace('\', '/').ToLowerInvariant()
+        $h = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        $entries += "$rel`n$h`n"
+    }
+    $sorted = [string[]]$entries
+    [Array]::Sort($sorted, [StringComparer]::Ordinal)
+
+    $bytes = [Text.Encoding]::UTF8.GetBytes(($sorted -join ''))
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        return ([BitConverter]::ToString($sha.ComputeHash($bytes)) -replace '-', '').ToLowerInvariant()
+    } finally { $sha.Dispose() }
+}
+
+function Get-VerifiedGitHubArchive {
+    <#
+    .SYNOPSIS
+        Downloads a repo archive at a pinned commit. Vendor-time only.
+    .DESCRIPTION
+        No installer run calls this: vendoring means the repo is the source of
+        truth at install time, and a phase that needs network after seal is a
+        documented top failure mode.
+
+        The archive is cached rather than deleted so the PIN-ME loop is
+        tolerable: the first run throws with the tree hash, the operator
+        records it, the second run reuses the bytes.
+    .PARAMETER Pack
+        The pack's config entry.
+    .PARAMETER CacheRoot
+        Directory for cached archives.
+    .EXAMPLE
+        Get-VerifiedGitHubArchive -Pack $p -CacheRoot '.vendor-cache'
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Pack,
+        [Parameter(Mandatory)][string]$CacheRoot
+    )
+
+    if (-not (Test-Path -LiteralPath $CacheRoot)) {
+        $null = New-Item -ItemType Directory -Path $CacheRoot -Force
+    }
+    $target = Join-Path $CacheRoot "$($Pack.namespace)-$($Pack.source.commit).zip"
+
+    if (-not (Test-Path -LiteralPath $target)) {
+        $uri = "https://github.com/$($Pack.source.repo)/archive/$($Pack.source.commit).zip"
+        Write-ReAgentLog -Level INFO -Message "Downloading $($Pack.namespace) from $uri"
+        Invoke-Download -Uri $uri -OutFile $target
+    }
+    return $target
+}
+
+function Expand-SkillPack {
+    <#
+    .SYNOPSIS
+        Expands a pack archive and locates its skill directories by shape.
+    .DESCRIPTION
+        GitHub archives expand to {repo}-{sha}\... and pack layouts vary -
+        skills/, plugins/<name>/skills/, or skill dirs at the root. So the
+        locator searches for SKILL.md rather than trusting a path, and says so
+        when it finds none.
+
+        The staging directory is always removed, including on throw.
+    .PARAMETER ArchivePath
+        The downloaded zip.
+    .PARAMETER SubPath
+        Optional subtree filter, from source.subPath.
+    .OUTPUTS
+        DirectoryInfo per directory containing a SKILL.md, under a staging
+        directory this function leaves in place on success so the caller can
+        copy from it. The staging directory is removed only on failure; the
+        caller owns it afterwards. Vendor-time only, so the leftover lives in
+        TEMP on a maintainer's box, never on the target.
+    .EXAMPLE
+        Expand-SkillPack -ArchivePath $zip -SubPath 'skills'
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ArchivePath,
+        [string]$SubPath = ''
+    )
+
+    $staging = Join-Path ([IO.Path]::GetTempPath()) (
+        'reagent-skills-' + [Guid]::NewGuid().ToString('N'))
+    $null = New-Item -ItemType Directory -Path $staging -Force
+    $ok = $false
+    try {
+        Expand-Archive -LiteralPath $ArchivePath -DestinationPath $staging -Force
+        $dirs = @(Get-ChildItem -LiteralPath $staging -Recurse -Filter 'SKILL.md' -File |
+                ForEach-Object { $_.Directory })
+        if ($dirs.Count -eq 0) {
+            throw ("Archive '$ArchivePath' contains no SKILL.md anywhere. The upstream " +
+                'layout has changed, or the pinned commit is wrong.')
+        }
+        if ($SubPath) {
+            $dirs = @($dirs | Where-Object { $_.FullName -match [regex]::Escape($SubPath) })
+            if ($dirs.Count -eq 0) {
+                throw ("No SKILL.md under subPath '$SubPath'. The upstream layout has " +
+                    'changed; re-check the pinned commit.')
+            }
+        }
+        $ok = $true
+        return $dirs
+    } finally {
+        if (-not $ok) { Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
 Export-ModuleMember -Function New-ServerResult, Get-VenvPython, Get-VenvPackageVersion, `
     Install-VenvPackage, Write-ServerLauncher, Get-ServerVenvPath, Invoke-ChromaPrewarm, `
     Get-ScheduledTaskActionText, Register-ServerScheduledTask, Install-VenvStdioServer, `
@@ -1292,4 +1428,5 @@ Export-ModuleMember -Function New-ServerResult, Get-VenvPython, Get-VenvPackageV
     Restart-StaleServerTask, Get-ProcessIdByPath, Stop-ProcessByPath, Stop-ProcessById, `
     Test-TcpPortOpen, Wait-ServerListening, `
     Install-GuiPluginHttpServer, Install-PluginInprocServer, Get-VerifiedRelease, `
-    Expand-X64dbgPlugin, Invoke-Download, Copy-PluginFile
+    Expand-X64dbgPlugin, Invoke-Download, Copy-PluginFile, Get-TreeHash, `
+    Get-VerifiedGitHubArchive, Expand-SkillPack
