@@ -60,13 +60,32 @@ async def probe_stdio(args):
             return await run_checks(session, args)
 
 
+def http_transport(url, headers):
+    """Open a streamable-http transport across both mcp client generations.
+
+    mcp 1.x exposes streamablehttp_client(url, headers=...) and yields three
+    streams; mcp 2.x renamed it, moved headers onto a pre-built http client,
+    and yields two. Both live on this host - one per server venv - so the probe
+    has to speak either.
+    """
+    try:
+        from mcp.client.streamable_http import streamablehttp_client
+
+        return streamablehttp_client(url, headers=headers)
+    except ImportError:
+        import httpx2
+        from mcp.client.streamable_http import streamable_http_client
+
+        return streamable_http_client(
+            url, http_client=httpx2.AsyncClient(headers=headers)
+        )
+
+
 async def probe_http(args):
     from mcp import ClientSession
-    from mcp.client.streamable_http import streamablehttp_client
 
-    headers = parse_pairs(args.header)
-    async with streamablehttp_client(args.url, headers=headers) as (read, write, _):
-        async with ClientSession(read, write) as session:
+    async with http_transport(args.url, parse_pairs(args.header)) as streams:
+        async with ClientSession(streams[0], streams[1]) as session:
             return await run_checks(session, args)
 
 
