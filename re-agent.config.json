@@ -17,7 +17,7 @@
     {
       "name": "x64dbg-x64", "enabled": true, "kind": "plugin-inproc", "arch": "x64",
       "source": { "type": "github-release", "repo": "duty1g/x64dbg-mcp-server",
-                  "pin": "v1.3", "sha256": { "x64dbg-MCP-Server-v1.3.zip": "PIN-ME" } },
+                  "pin": "v1.3", "sha256": { "x64dbg-MCP-Server-v1.3.zip": "1763b3c494310114caada99551e24cea9a4b859065167bc6d09758bacd37a9aa" } },
       "transport": "http", "bind": "127.0.0.1", "port": 9094, "path": "/",
       "auth": "bearer-preseeded", "tokenHexChars": 32,
       "requiresHostApp": true, "verifyTier": "attended"
@@ -25,7 +25,7 @@
     {
       "name": "x64dbg-x32", "enabled": true, "kind": "plugin-inproc", "arch": "x32",
       "source": { "type": "github-release", "repo": "duty1g/x64dbg-mcp-server",
-                  "pin": "v1.3", "sha256": { "x64dbg-MCP-Server-v1.3.zip": "PIN-ME" } },
+                  "pin": "v1.3", "sha256": { "x64dbg-MCP-Server-v1.3.zip": "1763b3c494310114caada99551e24cea9a4b859065167bc6d09758bacd37a9aa" } },
       "transport": "http", "bind": "127.0.0.1", "port": 9095, "path": "/",
       "auth": "bearer-preseeded", "tokenHexChars": 32,
       "requiresHostApp": true, "verifyTier": "attended"
