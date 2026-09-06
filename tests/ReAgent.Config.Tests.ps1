@@ -98,6 +98,95 @@ Describe 'Write-PortsJson' {
     }
 }
 
+Describe 'Test-ReAgentConfigSchema skills validation' {
+    BeforeAll {
+        function New-SkillPack {
+            param($Namespace = 'windbg', $Commit = ('a' * 40), $Name = 'windbg-crash',
+                  $Enabled = $true, $Skills = $null, $Targets = @('mcp-windbg'))
+            if ($null -eq $Skills) {
+                $Skills = @([PSCustomObject]@{ upstream = 'crash'; name = $Name
+                        enabled = $Enabled })
+            }
+            [PSCustomObject]@{
+                namespace = $Namespace; enabled = $true
+                source = [PSCustomObject]@{ type = 'github-archive'
+                    repo = 'svnscha/mcp-windbg'; commit = $Commit
+                    treeSha256 = 'PIN-ME'; subPath = 'skills' }
+                review = [PSCustomObject]@{ reviewedBy = 'david'; reviewedAt = '2026-09-08'
+                    reviewedCommit = $Commit }
+                targetServers = $Targets
+                scanExceptions = @()
+                skills = $Skills
+            }
+        }
+        function New-CfgWith {
+            param($Packs)
+            [PSCustomObject]@{
+                version = 1
+                paths = [PSCustomObject]@{ toolRoot = 'C:\re'; agentRoot = 'C:\re\agent'
+                    stateRoot = 'C:\ProgramData\re-lab'; symbolCache = 'C:\re\symbols' }
+                symbols = [PSCustomObject]@{ enabled = $false; server = ''; prewarm = @() }
+                mcpServers = @([PSCustomObject]@{ name = 'mcp-windbg'; enabled = $true; kind = 'venv-stdio'; transport = 'stdio'; bind = '127.0.0.1'; port = 0 })
+                skills = $Packs
+            }
+        }
+    }
+
+    It 'accepts a config with no skills key at all, so an old config still loads' {
+        $cfg = New-CfgWith -Packs @()
+        $cfg.PSObject.Properties.Remove('skills')
+        { Test-ReAgentConfigSchema -Config $cfg } | Should -Not -Throw
+    }
+
+    It 'rejects a branch name where a 40-hex commit is required, because tags move' {
+        $p = New-SkillPack -Commit 'main'
+        { Test-ReAgentConfigSchema -Config (New-CfgWith -Packs @($p)) } |
+            Should -Throw '*commit*'
+    }
+
+    It 'rejects a sign-off recorded against a different commit as stale' {
+        $p = New-SkillPack
+        $p.review.reviewedCommit = ('b' * 40)
+        { Test-ReAgentConfigSchema -Config (New-CfgWith -Packs @($p)) } |
+            Should -Throw '*reviewedCommit*'
+    }
+
+    It 'rejects a skill name that does not start with its pack namespace' {
+        $p = New-SkillPack -Name 'crash-analysis'
+        { Test-ReAgentConfigSchema -Config (New-CfgWith -Packs @($p)) } |
+            Should -Throw '*namespace*'
+    }
+
+    It 'rejects two packs producing the same skill name' {
+        $a = New-SkillPack -Namespace 'windbg' -Name 'windbg-x'
+        $b = New-SkillPack -Namespace 'windbg' -Name 'windbg-x'
+        $b.namespace = 'windbg'
+        { Test-ReAgentConfigSchema -Config (New-CfgWith -Packs @($a, $b)) } |
+            Should -Throw '*unique*'
+    }
+
+    It 'rejects a targetServers entry naming a server that is not declared' {
+        $p = New-SkillPack -Targets @('does-not-exist')
+        { Test-ReAgentConfigSchema -Config (New-CfgWith -Packs @($p)) } |
+            Should -Throw '*does-not-exist*'
+    }
+
+    It 'rejects a disabled skill with no disabledReason, so an omission is never silent' {
+        $p = New-SkillPack -Skills @([PSCustomObject]@{ upstream = 'ttd'
+                name = 'windbg-ttd'; enabled = $false })
+        { Test-ReAgentConfigSchema -Config (New-CfgWith -Packs @($p)) } |
+            Should -Throw '*disabledReason*'
+    }
+
+    It 'rejects a scan exception with no justification, so no suppression is unreviewed' {
+        $p = New-SkillPack
+        $p.scanExceptions = @([PSCustomObject]@{ skill = 'crash'; ruleId = 'remote-fetch'
+                justification = '' })
+        { Test-ReAgentConfigSchema -Config (New-CfgWith -Packs @($p)) } |
+            Should -Throw '*justification*'
+    }
+}
+
 Describe 'the shipped re-agent.config.json' {
     BeforeAll {
         # Join-Path takes only -Path and -ChildPath on PowerShell 5.1; the

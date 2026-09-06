@@ -74,6 +74,7 @@ function Test-ReAgentConfigSchema {
             $seenPorts[$s.port] = $s.name
         }
     }
+    $null = Test-SkillPackSchema -Config $Config
     return $true
 }
 
@@ -126,5 +127,97 @@ function Write-PortsJson {
     Write-Utf8NoBomFile -Path $Path -Text ($PortMap | ConvertTo-Json -Depth 4)
 }
 
+
+function Test-SkillPackSchema {
+    <#
+    .SYNOPSIS
+        Validates the skills array in re-agent.config.json.
+    .DESCRIPTION
+        Supply-chain rule 1 as code: a branch or a tag is rejected here, not by
+        discipline. Tags move; a 40-hex commit cannot. A sign-off recorded
+        against a different commit is a sign-off for a different tree.
+    .PARAMETER Config
+        The parsed configuration object.
+    .EXAMPLE
+        Test-SkillPackSchema -Config $cfg
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][object]$Config)
+
+    if ($Config.PSObject.Properties.Name -notcontains 'skills') { return }
+
+    $serverNames = @($Config.mcpServers | ForEach-Object { $_.name })
+    $seenNames = @{}
+
+    foreach ($p in $Config.skills) {
+        if ($p.source.commit -notmatch '^[0-9a-f]{40}$') {
+            throw ("Skill pack '$($p.namespace)' pins source.commit to " +
+                "'$($p.source.commit)'. A 40-character commit SHA is required - a branch " +
+                'or tag moves under you.')
+        }
+        if ($p.review.reviewedCommit -ne $p.source.commit) {
+            throw ("Skill pack '$($p.namespace)' has review.reviewedCommit " +
+                "'$($p.review.reviewedCommit)' but source.commit " +
+                "'$($p.source.commit)'. The sign-off is for a different tree; re-review.")
+        }
+        foreach ($t in $p.targetServers) {
+            if ($serverNames -notcontains $t) {
+                throw ("Skill pack '$($p.namespace)' targets server '$t', which is not " +
+                    'declared in mcpServers.')
+            }
+        }
+        foreach ($x in $p.scanExceptions) {
+            if ([string]::IsNullOrWhiteSpace($x.justification)) {
+                throw ("Skill pack '$($p.namespace)' has a scan exception for rule " +
+                    "'$($x.ruleId)' with no justification. An unreviewed suppression is " +
+                    'not an exception.')
+            }
+        }
+        foreach ($s in $p.skills) {
+            Test-SkillEntrySchema -Pack $p -Skill $s -SeenNames $seenNames
+        }
+    }
+}
+
+function Test-SkillEntrySchema {
+    <#
+    .SYNOPSIS
+        Validates one skill entry inside a pack.
+    .PARAMETER Pack
+        The owning pack config entry.
+    .PARAMETER Skill
+        The skill entry.
+    .PARAMETER SeenNames
+        Hashtable accumulating names across all packs, for uniqueness.
+    .EXAMPLE
+        Test-SkillEntrySchema -Pack $p -Skill $s -SeenNames $seen
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Pack,
+        [Parameter(Mandatory)][object]$Skill,
+        [Parameter(Mandatory)][hashtable]$SeenNames
+    )
+
+    if ($Skill.name -notmatch '^[a-z0-9]+(-[a-z0-9]+)*$' -or $Skill.name.Length -gt 64) {
+        throw ("Skill name '$($Skill.name)' must be lowercase, hyphen-separated and at " +
+            'most 64 characters. Claude Code will not load a skill otherwise.')
+    }
+    if (-not $Skill.name.StartsWith($Pack.namespace + '-')) {
+        throw ("Skill name '$($Skill.name)' must start with its pack namespace " +
+            "'$($Pack.namespace)-'. Generic names collide across packs.")
+    }
+    if ($SeenNames.ContainsKey($Skill.name)) {
+        throw ("Skill name '$($Skill.name)' is not unique across packs; it is declared " +
+            "by both '$($SeenNames[$Skill.name])' and '$($Pack.namespace)'.")
+    }
+    $SeenNames[$Skill.name] = $Pack.namespace
+
+    if (-not $Skill.enabled -and [string]::IsNullOrWhiteSpace($Skill.disabledReason)) {
+        throw ("Skill '$($Skill.name)' is disabled with no disabledReason. An omission " +
+            'that is not written down becomes an oversight.')
+    }
+}
+
 Export-ModuleMember -Function Get-ReAgentConfig, Test-ReAgentConfigSchema, `
-    Get-ServerPortMap, Write-PortsJson
+    Get-ServerPortMap, Write-PortsJson, Test-SkillPackSchema, Test-SkillEntrySchema
