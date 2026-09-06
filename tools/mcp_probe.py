@@ -18,6 +18,11 @@ Usage
 For several calls that must share one session, pass --calls with a JSON array
 of {"tool": NAME, "args": {...}} instead of --tool.
 
+A call may also carry {"capture": {"NAME": "REGEX"}}: the first capturing group
+of REGEX is matched against that call's text and stored, and any later argument
+written as "{{NAME}}" is replaced with it. mcp-windbg needs this - open_cdb_dump
+mints a session_id that run_cdb_command then requires.
+
 Note: pass arguments as --opt=value. A bare '--arg --no-symbols' is parsed by
 argparse as a missing value, because the value itself starts with a dash.
 """
@@ -26,6 +31,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import sys
 
 
@@ -73,6 +79,15 @@ def planned_calls(args):
     return []
 
 
+def resolve(value, captured):
+    """Replace every {{name}} placeholder in a string with a captured value."""
+    if not isinstance(value, str):
+        return value
+    for key, found in captured.items():
+        value = value.replace("{{%s}}" % key, found)
+    return value
+
+
 async def run_checks(session, args):
     """Initialize, list tools, then make each planned call in ONE session.
 
@@ -89,8 +104,12 @@ async def run_checks(session, args):
         "calls": [],
     }
 
+    captured = {}
     for planned in planned_calls(args):
-        response = await session.call_tool(planned["tool"], planned.get("args", {}))
+        call_args = {
+            k: resolve(v, captured) for k, v in planned.get("args", {}).items()
+        }
+        response = await session.call_tool(planned["tool"], call_args)
         text = ""
         for block in response.content:
             text += getattr(block, "text", "") or ""
@@ -101,6 +120,17 @@ async def run_checks(session, args):
             "length": len(text),
         }
         result["calls"].append(record)
+        capture_failed = False
+        for key, pattern in (planned.get("capture") or {}).items():
+            match = re.search(pattern, text)
+            if not match:
+                record["captureFailed"] = key
+                result["ok"] = False
+                capture_failed = True
+                break
+            captured[key] = match.group(1)
+        if capture_failed:
+            break
         # A tool that errors is exactly the "connected but broken" case a bare
         # handshake would have reported as healthy.
         if record["isError"] or not text.strip():
@@ -110,6 +140,19 @@ async def run_checks(session, args):
     # Kept for single-call callers that read .call directly.
     result["call"] = result["calls"][0] if result["calls"] else None
     return result
+
+
+def describe(exc):
+    """Render an exception, flattening ExceptionGroup into its causes.
+
+    anyio wraps everything a TaskGroup raises, so the default text is always
+    'unhandled errors in a TaskGroup (1 sub-exception)' - which names neither
+    the server nor the fault.
+    """
+    subs = getattr(exc, "exceptions", None)
+    if subs:
+        return "%s: [%s]" % (type(exc).__name__, "; ".join(describe(s) for s in subs))
+    return "%s: %s" % (type(exc).__name__, exc)
 
 
 def main():
@@ -141,7 +184,7 @@ def main():
     except asyncio.TimeoutError:
         result = {"ok": False, "error": "timed out after %ss" % args.timeout}
     except Exception as exc:  # noqa: BLE001 - report any failure as data
-        result = {"ok": False, "error": "%s: %s" % (type(exc).__name__, exc)}
+        result = {"ok": False, "error": describe(exc)}
 
     json.dump(result, sys.stdout)
     sys.stdout.write("\n")

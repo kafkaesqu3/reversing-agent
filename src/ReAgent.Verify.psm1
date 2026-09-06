@@ -347,9 +347,16 @@ function Test-WindbgLive {
             "No verification dump at '$dump'. Phase 3 creates it; re-run phase 3.")
     }
 
+    # open_cdb_dump mints a session id and run_cdb_command requires it, so the
+    # id is captured out of the first call's text and substituted into the
+    # second. Both calls share one probe session; the server holds the state.
     $calls = @(
-        @{ tool = 'open_cdb_dump'; args = @{ dump_path = $dump } },
-        @{ tool = 'run_cdb_command'; args = @{ command = 'lm' } }
+        @{ tool = 'open_cdb_dump'; args = @{ dump_path = $dump }
+            capture = @{ session_id = 'session_id:\s*(\S+)' }
+        },
+        @{ tool = 'run_cdb_command'
+            args = @{ session_id = '{{session_id}}'; command = 'lm' }
+        }
     )
     $probeArgs = @('--transport=stdio', "--command=$($Result.Command.Executable)")
     foreach ($a in $Result.Command.Arguments) { $probeArgs += "--arg=$a" }
@@ -364,14 +371,18 @@ function Test-WindbgLive {
             -Detail ($r | ConvertTo-Json -Depth 6 -Compress)
     }
     $text = (@($r.calls | ForEach-Object { $_.text }) -join "`n")
-    if ($text -notmatch 'ntdll') {
+    # Judged on ntdll's own line, not the whole listing: cdb defers modules
+    # nothing has touched yet, and an unrelated '(deferred)' says nothing about
+    # whether the symbol path works.
+    $ntdll = @($text -split "`n" | Where-Object { $_ -match '\bntdll\b' }) -join ' '
+    if (-not $ntdll) {
         return New-CheckResult -Name $name -Status 'fail' `
             -Detail "Module list does not mention ntdll: $text"
     }
-    if ($text -match 'no symbols|deferred') {
+    if ($ntdll -match 'no symbols|deferred') {
         return New-CheckResult -Name $name -Status 'fail' -Detail (
             'ntdll is present but its symbols did not resolve, so Phase 2 has not ' +
-            "taken effect: $text")
+            "taken effect: $ntdll")
     }
     return New-CheckResult -Name $name -Status 'pass' `
         -Detail 'ntdll listed with symbols resolved.'

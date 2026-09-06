@@ -365,6 +365,17 @@ Describe 'New-TestCrashDump' {
         Should -Invoke -ModuleName ReAgent.Servers Invoke-CommandLine -Times 0 -Exactly
     }
 
+    It 'terminates the debuggee rather than detaching from it' {
+        # 'qd' leaves cmd.exe alive holding the inherited stdout pipe, and the
+        # caller blocks on the read long after the dump is complete.
+        $p = Join-Path $TestDrive 'terminates.dmp'
+        Mock -ModuleName ReAgent.Servers Invoke-CommandLine { 'x' | Set-Content $p }
+        New-TestCrashDump -CdbPath 'cdb.exe' -OutputPath $p -Confirm:$false | Out-Null
+        Should -Invoke -ModuleName ReAgent.Servers Invoke-CommandLine -Times 1 `
+            -ParameterFilter { ($Arguments -join ' ') -notmatch ';qd' -and
+                ($Arguments -join ' ') -match ';q(\s|$)' }
+    }
+
     It 'throws a specific error when cdb produces nothing' {
         Mock -ModuleName ReAgent.Servers Invoke-CommandLine { }
         { New-TestCrashDump -CdbPath 'cdb.exe' `

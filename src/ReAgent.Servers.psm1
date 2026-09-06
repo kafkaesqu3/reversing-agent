@@ -425,6 +425,15 @@ function Install-VenvHttpServer {
         '--project-path', $projectPath,
         '--project-name', 're-lab')
 
+    # pyghidra-mcp imports and analyses its positional input paths at startup.
+    # Without one the project is empty, list_project_binaries returns nothing,
+    # and the tier-1 check has nothing to decompile.
+    $hasTestBinary = $Config.PSObject.Properties.Name -contains 'testBinary'
+    if ($hasTestBinary -and $Config.testBinary -and
+        (Test-Path -LiteralPath $Config.testBinary)) {
+        $serverArgs += $Config.testBinary
+    }
+
     $launcher = Write-ServerLauncher `
         -Path (Join-Path $Config.paths.toolRoot "mcp\launch-$($Server.name).cmd") `
         -Executable $exe -Arguments $serverArgs `
@@ -983,8 +992,12 @@ function New-TestCrashDump {
 
     $target = Join-Path $env:SystemRoot 'System32\cmd.exe'
     Write-ReAgentLog -Level INFO -Message "Creating verification dump at '$OutputPath'."
+    # 'q' and not 'qd': quit-and-detach leaves the debuggee alive holding the
+    # inherited stdout pipe, and the caller blocks reading it forever. cmd.exe
+    # with no arguments never exits on its own, so the run hangs after a dump
+    # that already succeeded.
     $null = Invoke-CommandLine -FilePath $CdbPath -Arguments @(
-        '-c', ".dump /ma `"$OutputPath`";qd", $target)
+        '-c', ".dump /ma `"$OutputPath`";q", $target)
 
     if (-not (Test-Path -LiteralPath $OutputPath)) {
         throw ("cdb did not produce a dump at '$OutputPath'. " +

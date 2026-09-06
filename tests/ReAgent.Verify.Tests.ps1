@@ -94,6 +94,72 @@ Describe 'Test-ClaudeMcpList' {
     }
 }
 
+Describe 'Test-WindbgLive' {
+    BeforeAll {
+        $Script:WbCfg = [PSCustomObject]@{
+            paths = [PSCustomObject]@{ toolRoot = (Join-Path $TestDrive 'wb') }
+        }
+        $null = New-Item -ItemType Directory `
+            -Path (Join-Path $Script:WbCfg.paths.toolRoot 'scratch') -Force
+        'dump' | Set-Content (Join-Path $Script:WbCfg.paths.toolRoot 'scratch\test.dmp')
+        $Script:WbSrv = [PSCustomObject]@{ name = 'mcp-windbg' }
+        $Script:WbRes = [PSCustomObject]@{
+            Command = [PSCustomObject]@{
+                Executable = 'python.exe'; Arguments = @('-m', 'mcp_windbg'); Env = @{}
+            }
+        }
+        $Script:Lm = @'
+Command: lm
+
+Output:
+0:000> start             end                 module name
+00007ffb`bb4b0000 00007ffb`bb5fc000   ucrtbase   (deferred)
+00007ffb`bd8e0000 00007ffb`bdb46000   ntdll      (pdb symbols)          c:\re\symbols\ntdll.pdb\1D\ntdll.pdb
+'@
+    }
+
+    It 'passes when ntdll has symbols, even beside a deferred module' {
+        # cdb defers every module nothing has touched. An unrelated '(deferred)'
+        # says nothing about whether the symbol path resolves.
+        Mock -ModuleName ReAgent.Verify Invoke-McpProbe {
+            [PSCustomObject]@{ ok = $true
+                calls = @([PSCustomObject]@{ text = 'session_id: cdb-1' },
+                    [PSCustomObject]@{ text = $Script:Lm })
+            }
+        }
+        (Test-WindbgLive -Server $Script:WbSrv -Config $Script:WbCfg `
+                -Result $Script:WbRes).Status | Should -Be 'pass'
+    }
+
+    It 'fails when ntdll itself has no symbols' {
+        Mock -ModuleName ReAgent.Verify Invoke-McpProbe {
+            [PSCustomObject]@{ ok = $true
+                calls = @([PSCustomObject]@{ text = 'ntdll      (deferred)' })
+            }
+        }
+        $r = Test-WindbgLive -Server $Script:WbSrv -Config $Script:WbCfg -Result $Script:WbRes
+        $r.Status | Should -Be 'fail'
+        $r.Detail | Should -BeLike '*did not resolve*'
+    }
+
+    It 'threads the session id from open_cdb_dump into run_cdb_command' {
+        # run_cdb_command rejects a call without session_id, and the id only
+        # exists in the text open_cdb_dump returns.
+        Mock -ModuleName ReAgent.Verify Invoke-McpProbe {
+            [PSCustomObject]@{ ok = $true
+                calls = @([PSCustomObject]@{ text = 'session_id: cdb-1' },
+                    [PSCustomObject]@{ text = $Script:Lm })
+            }
+        }
+        Test-WindbgLive -Server $Script:WbSrv -Config $Script:WbCfg `
+            -Result $Script:WbRes | Out-Null
+        Should -Invoke -ModuleName ReAgent.Verify Invoke-McpProbe -Times 1 -ParameterFilter {
+            $json = ($ProbeArgs | Where-Object { $_ -like '--calls=*' })
+            $json -like '*session_id*' -and $json -like '*{{session_id}}*'
+        }
+    }
+}
+
 Describe 'Test-GeneratedConfig' {
     BeforeAll {
         $Script:Cfg = [PSCustomObject]@{
