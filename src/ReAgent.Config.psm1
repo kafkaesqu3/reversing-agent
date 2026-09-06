@@ -123,7 +123,7 @@ function Write-PortsJson {
     if ($dir -and -not (Test-Path -LiteralPath $dir)) {
         $null = New-Item -ItemType Directory -Path $dir -Force
     }
-    $PortMap | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $Path -Encoding UTF8
+    Write-Utf8NoBomFile -Path $Path -Text ($PortMap | ConvertTo-Json -Depth 4)
 }
 
 Export-ModuleMember -Function Get-ReAgentConfig, Test-ReAgentConfigSchema, `

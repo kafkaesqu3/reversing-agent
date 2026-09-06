@@ -160,5 +160,33 @@ function Invoke-Phase {
     }
 }
 
+function Write-Utf8NoBomFile {
+    <#
+    .SYNOPSIS
+        Writes text as UTF-8 with no byte order mark.
+    .DESCRIPTION
+        PowerShell 5.1's 'Set-Content -Encoding UTF8' always emits a BOM.
+        Binary Ninja refuses to load a settings.json that starts with one -
+        "Parse exception in JSON value at offset (0)" - and nothing that reads
+        these files needs it, so every generated file goes out without one.
+    .PARAMETER Path
+        Destination file. Created or overwritten.
+    .PARAMETER Text
+        The content. A trailing newline is added when it is missing.
+    .EXAMPLE
+        Write-Utf8NoBomFile -Path 'C:\re\agent\.mcp.json' -Text $json
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Text
+    )
+
+    $full = $PSCmdlet.GetUnresolvedProviderPathFromPSPath($Path)
+    $content = if ($Text.EndsWith("`n")) { $Text } else { $Text + "`r`n" }
+    [System.IO.File]::WriteAllText($full, $content,
+        (New-Object System.Text.UTF8Encoding($false)))
+}
+
 Export-ModuleMember -Function Write-ReAgentLog, New-PhaseResult, Get-ReAgentExitCode, `
-    Invoke-Phase
+    Invoke-Phase, Write-Utf8NoBomFile

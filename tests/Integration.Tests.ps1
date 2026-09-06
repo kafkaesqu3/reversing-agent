@@ -67,6 +67,41 @@ Describe 'the entry point script' {
     }
 }
 
+Describe 'every generated JSON file' {
+    # Binary Ninja refuses to load a settings.json that starts with a BOM:
+    # "Parse exception in JSON value: <Invalid value.> at offset (0)". PowerShell
+    # 5.1's 'Set-Content -Encoding UTF8' writes one, so no generated file may
+    # go through it.
+    It 'is written without a byte order mark by Write-JsonFile' {
+        $p = Join-Path $TestDrive 'generated.json'
+        Write-JsonFile -Object ([PSCustomObject]@{ a = 1 }) -Path $p | Out-Null
+        $bytes = [System.IO.File]::ReadAllBytes($p)
+        ($bytes[0..2] -join ',') | Should -Not -Be '239,187,191'
+        $bytes[0] | Should -Be 123
+    }
+
+    It 'is written without a byte order mark by Merge-JsonFile' {
+        $p = Join-Path $TestDrive 'merged.json'
+        Merge-JsonFile -Path $p -Values @{ 'ui.mcp.enabled' = $true } -Confirm:$false
+        $bytes = [System.IO.File]::ReadAllBytes($p)
+        ($bytes[0..2] -join ',') | Should -Not -Be '239,187,191'
+        (Get-Content -LiteralPath $p -Raw | ConvertFrom-Json).'ui.mcp.enabled' |
+            Should -BeTrue
+    }
+
+    It 'merges into a file that already carries one' {
+        # The first release wrote BOMs, so upgrading a host means reading them.
+        $p = Join-Path $TestDrive 'legacy.json'
+        [System.IO.File]::WriteAllText($p, '{ "keep": 1 }',
+            (New-Object System.Text.UTF8Encoding($true)))
+        Merge-JsonFile -Path $p -Values @{ added = 2 } -Confirm:$false
+        $o = Get-Content -LiteralPath $p -Raw | ConvertFrom-Json
+        $o.keep | Should -Be 1
+        $o.added | Should -Be 2
+        ([System.IO.File]::ReadAllBytes($p)[0..2] -join ',') | Should -Not -Be '239,187,191'
+    }
+}
+
 Describe 'the shipped config drives the real modules' {
     BeforeAll {
         $Script:Cfg = Get-ReAgentConfig -Path (Join-Path $Script:Root 're-agent.config.json')

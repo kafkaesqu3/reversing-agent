@@ -154,8 +154,7 @@ function Write-JsonFile {
     if ($dir -and -not (Test-Path -LiteralPath $dir)) {
         $null = New-Item -ItemType Directory -Path $dir -Force
     }
-    $json = $Object | ConvertTo-Json -Depth 12
-    Set-Content -LiteralPath $Path -Value $json -Encoding UTF8
+    Write-Utf8NoBomFile -Path $Path -Text ($Object | ConvertTo-Json -Depth 12)
     return $Path
 }
 

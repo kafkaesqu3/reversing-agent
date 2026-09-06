@@ -780,8 +780,8 @@ function Write-X64dbgPreseed {
         AutoStart = $true
         AuthToken = $Token
     }
-    ([PSCustomObject]$payload) | ConvertTo-Json -Depth 4 |
-        Set-Content -LiteralPath $ConfigPath -Encoding UTF8
+    Write-Utf8NoBomFile -Path $ConfigPath `
+        -Text (([PSCustomObject]$payload) | ConvertTo-Json -Depth 4)
 }
 
 function Install-GuiBuiltinHttpServer {

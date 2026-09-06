@@ -604,7 +604,7 @@ function Invoke-Verification {
 
     $path = Join-Path $Config.paths.stateRoot 'verify-report.json'
     $null = New-Item -ItemType Directory -Path $Config.paths.stateRoot -Force
-    $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $path -Encoding UTF8
+    Write-Utf8NoBomFile -Path $path -Text ($report | ConvertTo-Json -Depth 8)
 
     foreach ($c in $checks) {
         $level = if ($c.Status -eq 'fail') { 'ERROR' } elseif ($c.Status -eq 'pass') { 'INFO' } else { 'WARN' }

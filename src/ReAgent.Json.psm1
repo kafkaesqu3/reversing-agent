@@ -49,8 +49,8 @@ function Merge-JsonFile {
     foreach ($k in $Values.Keys) { $existing[$k] = $Values[$k] }
 
     if ($PSCmdlet.ShouldProcess($Path, 'Merge JSON settings')) {
-        ([PSCustomObject]$existing) | ConvertTo-Json -Depth 12 |
-            Set-Content -LiteralPath $Path -Encoding UTF8
+        Write-Utf8NoBomFile -Path $Path `
+            -Text (([PSCustomObject]$existing) | ConvertTo-Json -Depth 12)
     }
 }
 

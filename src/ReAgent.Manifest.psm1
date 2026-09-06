@@ -99,7 +99,7 @@ function Write-Manifest {
 
     $null = New-Item -ItemType Directory -Path $config.paths.stateRoot -Force
     $path = Join-Path $config.paths.stateRoot 'manifest.json'
-    $manifest | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $path -Encoding UTF8
+    Write-Utf8NoBomFile -Path $path -Text ($manifest | ConvertTo-Json -Depth 10)
     Write-ReAgentLog -Level INFO -Message "Wrote manifest to '$path'."
     return $path
 }
