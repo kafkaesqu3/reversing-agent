@@ -45,7 +45,7 @@ $ErrorActionPreference = 'Stop'
 if (-not $ConfigPath) { $ConfigPath = Join-Path $PSScriptRoot 're-agent.config.json' }
 
 $moduleNames = @('Common', 'Config', 'Discovery', 'Prereqs', 'Symbols',
-    'Tokens', 'Json', 'Servers', 'Generate', 'Verify', 'Manifest')
+    'Tokens', 'Json', 'Servers', 'Generate', 'Skills', 'Verify', 'Manifest')
 foreach ($m in $moduleNames) {
     $modulePath = "$PSScriptRoot\src\ReAgent.$m.psm1"
     if (-not (Test-Path -LiteralPath $modulePath)) {
