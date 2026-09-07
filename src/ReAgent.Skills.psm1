@@ -395,6 +395,31 @@ function Get-SkillToolReference {
     return $refs
 }
 
+function Get-SkillRelativePath {
+    <#
+    .SYNOPSIS
+        The path of a file inside a skill directory, as forward slashes.
+    .DESCRIPTION
+        A finding that names only 'symbols.md' does not say which of a pack's
+        fifteen reference files it came from.
+    .PARAMETER Root
+        The skill directory the path is relative to.
+    .PARAMETER File
+        A FileInfo under Root.
+    .OUTPUTS
+        [string] e.g. 'references/symbols.md'.
+    .EXAMPLE
+        Get-SkillRelativePath -Root $dir -File $f
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Root,
+        [Parameter(Mandatory)][object]$File
+    )
+
+    return $File.FullName.Substring($Root.Length).TrimStart('\', '/').Replace('\', '/')
+}
+
 function Test-SkillNameCheck {
     <#
     .SYNOPSIS
@@ -534,6 +559,49 @@ function Test-SkillRenameCompletenessCheck {
     return $findings
 }
 
+function Test-SkillTreeRename {
+    <#
+    .SYNOPSIS
+        Runs check G2 across every file in a vendored skill except its SKILL.md.
+    .DESCRIPTION
+        G2 turns "did we finish the rewrite?" into a mechanical assertion over
+        text, and the half-adaptation it exists to catch hides in the reference
+        files a skill loads at runtime every bit as readily as in SKILL.md - a
+        pack can carry six renames and fifteen reference files. SKILL.md itself
+        is skipped here because Test-SkillAdaptation already covers it, and one
+        finding reported twice trains the reader to skim.
+    .PARAMETER Directory
+        The vendored skill directory.
+    .PARAMETER ToolRenames
+        Upstream-to-adapted tool name map, from the pack's adaptation block.
+    .OUTPUTS
+        [array] {Check='G2'; File; Message} findings, each naming its file.
+    .EXAMPLE
+        Test-SkillTreeRename -Directory $dir -ToolRenames @{ 'old' = 'New' }
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Directory,
+        [Parameter(Mandatory)][hashtable]$ToolRenames
+    )
+
+    $findings = @()
+    if ($ToolRenames.Count -eq 0) { return $findings }
+    foreach ($f in (Get-ChildItem -LiteralPath $Directory -Recurse -File)) {
+        if ($f.Name -eq 'SKILL.md') { continue }
+        $text = Get-Content -LiteralPath $f.FullName -Raw
+        if (-not $text) { continue }
+        $rel = Get-SkillRelativePath -Root $Directory -File $f
+        foreach ($a in (Test-SkillRenameCompletenessCheck -Text $text `
+                    -ToolRenames $ToolRenames)) {
+            $findings += [PSCustomObject]@{ Check = 'G2'; File = $rel
+                Message = "$rel : $($a.Message)"
+            }
+        }
+    }
+    return $findings
+}
+
 function Test-SkillAdaptation {
     <#
     .SYNOPSIS
@@ -623,36 +691,45 @@ function Remove-OrphanedSkill {
     return $removed
 }
 
-function Remove-FailedPackSkill {
+function Remove-PackSkill {
     <#
     .SYNOPSIS
-        Removes any installed copy of a skill whose pack now fails the gate.
+        Removes one pack's own installed skill directories, and nothing else.
     .DESCRIPTION
-        Fail-closed cleanup for Install-SkillPack: a newly-detected red flag
-        must not leave the bad skill live on disk, or the failing check is
-        cosmetic. Only a directory carrying our marker is touched - the same
-        rule Remove-OrphanedSkill enforces - so this never reaches into a
-        directory the installer did not create.
+        Fail-closed cleanup for Install-SkillPack: a newly-detected red flag, or
+        a pack the operator switched off, must not leave its skills live on disk
+        or the refusal is cosmetic.
+
+        Scoped to the names passed in, never to everything under SkillRoot.
+        .claude\skills is shared by every pack, so a whole-root sweep from inside
+        one pack's handling deletes the skills a sibling pack installed moments
+        earlier in the same run - and because each run reinstalls them and then
+        deletes them again, it never converges. Only a directory carrying our
+        marker is touched, the same rule Remove-OrphanedSkill enforces, so this
+        never reaches into a directory the installer did not create.
     .PARAMETER SkillRoot
         The .claude\skills directory.
-    .PARAMETER Wanted
-        The pack's enabled skill directory names.
+    .PARAMETER Names
+        This pack's own skill directory names.
+    .PARAMETER Reason
+        Why they are going, recorded verbatim on the WARN line.
     .EXAMPLE
-        Remove-FailedPackSkill -SkillRoot $skillRoot -Wanted $wanted
+        Remove-PackSkill -SkillRoot $skillRoot -Names $wanted `
+            -Reason 'its pack now fails the security scan'
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory)][string]$SkillRoot,
-        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Wanted
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Names,
+        [Parameter(Mandatory)][string]$Reason
     )
 
-    foreach ($n in $Wanted) {
+    foreach ($n in $Names) {
         $d = Join-Path $SkillRoot $n
         if (-not (Test-Path -LiteralPath (Join-Path $d '.re-agent-managed'))) { continue }
-        if ($PSCmdlet.ShouldProcess($d, 'Remove skill that now fails the security scan')) {
+        if ($PSCmdlet.ShouldProcess($d, "Remove skill: $Reason")) {
             Remove-Item -LiteralPath $d -Recurse -Force
-            Write-ReAgentLog -Level WARN -Message (
-                "Removed '$n': its pack now fails the security scan.")
+            Write-ReAgentLog -Level WARN -Message "Removed '$n': $Reason."
         }
     }
 }
@@ -758,16 +835,74 @@ function Install-SkillPack {
     )
 
     $skillRoot = Join-Path $Config.paths.agentRoot '.claude\skills'
-    $wanted = @($Pack.skills | Where-Object { $_.enabled } | ForEach-Object { $_.name })
+    $packRoot = Join-Path $RepoRoot "vendor\skills\$($Pack.namespace)"
+
+    $refusal = Get-SkillPackRefusal -Pack $Pack -SkillRoot $skillRoot -PackRoot $packRoot
+    if ($refusal) { return $refusal }
+
+    $enabled = @($Pack.skills | Where-Object { $_.enabled })
+    $wanted = @($enabled | ForEach-Object { $_.name })
+    $gate = Test-SkillPackGate -Pack $Pack -PackRoot $packRoot -Catalog $Catalog
+    if ($gate.Findings.Count -gt 0) {
+        Remove-PackSkill -SkillRoot $skillRoot -Names $wanted -Confirm:$false `
+            -Reason 'its pack now fails the security scan'
+        return New-SkillResult -Pack $Pack -Status 'failed' -Findings $gate.Findings `
+            -Reason $gate.Summary
+    }
+
+    # Not '$wrote = $wrote -or (...)': -or short-circuits, so once one skill reports a
+    # write the rest of the pack is never written at all.
+    $wrote = $false
+    foreach ($skill in $enabled) {
+        if (Write-SkillPackFile -PackRoot $packRoot -SkillRoot $skillRoot `
+                -Namespace $Pack.namespace -Skill $skill) {
+            $wrote = $true
+        }
+    }
+
+    $status = if ($wrote) { 'installed' } else { 'skipped' }
+    return New-SkillResult -Pack $Pack -Status $status -SkillNames $wanted
+}
+
+function Get-SkillPackRefusal {
+    <#
+    .SYNOPSIS
+        The result to report when a pack must not be installed at all, or $null.
+    .DESCRIPTION
+        The three pre-flight refusals - switched off, never vendored, never
+        signed off - are grouped here so Install-SkillPack reads as scan, gate,
+        write rather than as a guard cascade with the pipeline buried in it.
+
+        Switching a pack off also takes its skills off disk, including any that
+        are individually disabled, because leaving them behind would make
+        'enabled: false' mean nothing until the next orphan sweep.
+    .PARAMETER Pack
+        The pack's config entry.
+    .PARAMETER SkillRoot
+        The .claude\skills directory.
+    .PARAMETER PackRoot
+        The pack's vendored tree.
+    .OUTPUTS
+        A New-SkillResult record, or $null when the pack should be installed.
+    .EXAMPLE
+        Get-SkillPackRefusal -Pack $p -SkillRoot $skillRoot -PackRoot $packRoot
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)][object]$Pack,
+        [Parameter(Mandatory)][string]$SkillRoot,
+        [Parameter(Mandatory)][string]$PackRoot
+    )
 
     if (-not $Pack.enabled) {
-        $null = Remove-OrphanedSkill -SkillRoot $skillRoot -Wanted @() -Confirm:$false
+        Remove-PackSkill -SkillRoot $SkillRoot -Confirm:$false `
+            -Names @($Pack.skills | ForEach-Object { $_.name }) `
+            -Reason 'its pack is disabled in re-agent.config.json'
         return New-SkillResult -Pack $Pack -Status 'not-installed' `
             -Reason 'disabled in re-agent.config.json'
     }
 
-    $packRoot = Join-Path $RepoRoot "vendor\skills\$($Pack.namespace)"
-    if (-not (Test-Path -LiteralPath $packRoot)) {
+    if (-not (Test-Path -LiteralPath $PackRoot)) {
         return New-SkillResult -Pack $Pack -Status 'not-installed' -Reason (
             "not vendored yet; run tools\Update-VendoredSkill.ps1 -Namespace " +
             "$($Pack.namespace)")
@@ -779,21 +914,7 @@ function Install-SkillPack {
             "record reviewedBy and reviewedAt under skills[$($Pack.namespace)].review.")
     }
 
-    $gate = Test-SkillPackGate -Pack $Pack -PackRoot $packRoot -Catalog $Catalog
-    if ($gate.Findings.Count -gt 0) {
-        Remove-FailedPackSkill -SkillRoot $skillRoot -Wanted $wanted -Confirm:$false
-        return New-SkillResult -Pack $Pack -Status 'failed' -Findings $gate.Findings `
-            -Reason $gate.Summary
-    }
-
-    $wrote = $false
-    foreach ($skill in ($Pack.skills | Where-Object { $_.enabled })) {
-        $wrote = $wrote -or (Write-SkillPackFile -PackRoot $packRoot -SkillRoot $skillRoot `
-                -Namespace $Pack.namespace -Skill $skill)
-    }
-
-    $status = if ($wrote) { 'installed' } else { 'skipped' }
-    return New-SkillResult -Pack $Pack -Status $status -SkillNames $wanted
+    return $null
 }
 
 function Test-SkillPackGate {
@@ -827,26 +948,16 @@ function Test-SkillPackGate {
     $findings = @()
     foreach ($skill in ($Pack.skills | Where-Object { $_.enabled })) {
         $dir = Join-Path $PackRoot $skill.name
-        if (-not (Test-Path -LiteralPath $dir)) {
+        if (-not (Test-Path -LiteralPath (Join-Path $dir 'SKILL.md'))) {
             $findings += [PSCustomObject]@{ RuleId = 'missing-skill'; Severity = 'block'
                 File = $skill.name; Line = 0
-                Text = "Declared skill '$($skill.name)' is not in the vendored tree." }
+                Text = ("Declared skill '$($skill.name)' has no SKILL.md in the " +
+                    'vendored tree.') }
             continue
         }
-        foreach ($f in (Get-ChildItem -LiteralPath $dir -Recurse -File)) {
-            $text = Get-Content -LiteralPath $f.FullName -Raw
-            $raw = @(Test-SkillContent -Text $text -Rules $rules -File $f.Name)
-            $findings += @(Select-UnwaivedFinding -Findings $raw `
-                    -Exceptions @($Pack.scanExceptions) -Skill $skill.upstream) |
-                Where-Object { $_.Severity -eq 'block' }
-        }
-        $md = Join-Path $dir 'SKILL.md'
-        foreach ($a in @(Test-SkillAdaptation -Text (Get-Content -LiteralPath $md -Raw) `
-                    -DirectoryName $skill.name -Catalog $Catalog `
-                    -TargetServers @($Pack.targetServers) -ToolRenames $renames)) {
-            $findings += [PSCustomObject]@{ RuleId = $a.Check; Severity = 'block'
-                File = "$($skill.upstream)/SKILL.md"; Line = 0; Text = $a.Message }
-        }
+        $findings += Get-SkillGateFinding -Skill $skill -Directory $dir -Rules $rules `
+            -Exceptions @($Pack.scanExceptions) -Catalog $Catalog `
+            -TargetServers @($Pack.targetServers) -ToolRenames $renames
     }
 
     $summary = if ($findings.Count -gt 0) {
@@ -854,6 +965,71 @@ function Test-SkillPackGate {
         (@($findings | ForEach-Object { $_.RuleId } | Select-Object -Unique) -join ', ')
     } else { '' }
     return @{ Findings = $findings; Summary = $summary }
+}
+
+function Get-SkillGateFinding {
+    <#
+    .SYNOPSIS
+        Scans and gates one vendored skill, in scanner finding shape.
+    .DESCRIPTION
+        Split out of Test-SkillPackGate so that function stays a thin loop over
+        the pack's skills. The red-flag scan and the adaptation gate both emit
+        the same {RuleId, Severity, File, Line, Text} record: a caller deciding
+        whether to install does not care which control refused, only that one
+        did.
+    .PARAMETER Skill
+        One entry from $Pack.skills, carrying .upstream and .name.
+    .PARAMETER Directory
+        The skill's vendored directory.
+    .PARAMETER Rules
+        Rules from Get-SkillScanRule.
+    .PARAMETER Exceptions
+        The pack's scanExceptions entries.
+    .PARAMETER Catalog
+        From Get-ToolCatalog.
+    .PARAMETER TargetServers
+        Servers the pack declares it drives.
+    .PARAMETER ToolRenames
+        Upstream-to-adapted tool name map, from the pack's adaptation block.
+    .OUTPUTS
+        [array] Blocking findings, empty when the skill is clean.
+    .EXAMPLE
+        Get-SkillGateFinding -Skill $s -Directory $d -Rules $r -Exceptions @() `
+            -Catalog $c -TargetServers @('mcp-windbg') -ToolRenames @{}
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Skill,
+        [Parameter(Mandatory)][string]$Directory,
+        [Parameter(Mandatory)][array]$Rules,
+        [Parameter(Mandatory)][AllowEmptyCollection()][array]$Exceptions,
+        [Parameter(Mandatory)][object]$Catalog,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$TargetServers,
+        [Parameter(Mandatory)][hashtable]$ToolRenames
+    )
+
+    $findings = @()
+    foreach ($f in (Get-ChildItem -LiteralPath $Directory -Recurse -File)) {
+        $rel = Get-SkillRelativePath -Root $Directory -File $f
+        $raw = @(Test-SkillContent -Text (Get-Content -LiteralPath $f.FullName -Raw) `
+                -Rules $Rules -File "$($Skill.name)/$rel")
+        $findings += @(Select-UnwaivedFinding -Findings $raw -Exceptions $Exceptions `
+                -Skill $Skill.upstream) | Where-Object { $_.Severity -eq 'block' }
+    }
+
+    $md = Join-Path $Directory 'SKILL.md'
+    foreach ($a in @(Test-SkillAdaptation -Text (Get-Content -LiteralPath $md -Raw) `
+                -DirectoryName $Skill.name -Catalog $Catalog `
+                -TargetServers $TargetServers -ToolRenames $ToolRenames)) {
+        $findings += [PSCustomObject]@{ RuleId = $a.Check; Severity = 'block'
+            File = "$($Skill.name)/SKILL.md"; Line = 0; Text = $a.Message }
+    }
+    foreach ($a in @(Test-SkillTreeRename -Directory $Directory `
+                -ToolRenames $ToolRenames)) {
+        $findings += [PSCustomObject]@{ RuleId = $a.Check; Severity = 'block'
+            File = "$($Skill.name)/$($a.File)"; Line = 0; Text = $a.Message }
+    }
+    return $findings
 }
 
 function Install-AllSkill {
@@ -906,8 +1082,9 @@ function Install-AllSkill {
 Export-ModuleMember -Function New-SkillResult, Get-SkillScanRule, Test-SkillContent, `
     Select-UnwaivedFinding, Get-ToolCatalog, Get-CatalogServerTool, `
     Compare-ToolCatalog, Find-FrontmatterEnd, ConvertFrom-FrontmatterLine, `
-    Get-SkillFrontmatter, Get-SkillToolReference, Test-SkillNameCheck, `
-    Test-SkillCatalogCheck, Test-SkillToolExistenceCheck, `
-    Test-SkillRenameCompletenessCheck, Test-SkillAdaptation, Remove-OrphanedSkill, `
-    Remove-FailedPackSkill, Test-SkillPackReviewed, Write-SkillPackFile, `
-    Install-SkillPack, Test-SkillPackGate, Install-AllSkill
+    Get-SkillFrontmatter, Get-SkillToolReference, Get-SkillRelativePath, `
+    Test-SkillNameCheck, Test-SkillCatalogCheck, Test-SkillToolExistenceCheck, `
+    Test-SkillRenameCompletenessCheck, Test-SkillTreeRename, Test-SkillAdaptation, `
+    Remove-OrphanedSkill, Remove-PackSkill, Test-SkillPackReviewed, `
+    Write-SkillPackFile, Get-SkillPackRefusal, Install-SkillPack, `
+    Get-SkillGateFinding, Test-SkillPackGate, Install-AllSkill
