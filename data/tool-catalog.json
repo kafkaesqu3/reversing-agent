@@ -1,6 +1,6 @@
 {
-  "capturedAt": "2026-09-06T09:05:00.0000000+01:00",
-  "capturedBy": "david",
+  "capturedAt": "2026-09-06T16:30:00.0000000+01:00",
+  "capturedBy": "david (manual correction of a Task 7 measurement error, not an -UpdateToolCatalog -Attended capture; see commit message for provenance)",
   "servers": {
     "pyghidra-mcp": {
       "pin": "0.2.5",
@@ -14,9 +14,11 @@
     },
     "mcp-windbg": {
       "pin": "1.2.1",
-      "toolCount": 2,
-      "tools": ["open_cdb_dump", "run_cdb_command"],
-      "note": "No module-list tool. Use run_cdb_command with 'lm'."
+      "toolCount": 10,
+      "tools": ["list_dumps", "open_cdb_dump", "open_cdb_remote", "open_kd_session",
+        "run_cdb_command", "run_kd_command", "close_cdb_session", "close_kd_session",
+        "send_ctrl_break", "wait_for_break"],
+      "note": "Verified directly against the live mcp_windbg/server.py on this host (under C:/re/mcp/venvs/mcp-windbg) and the PyPI mcp-windbg==1.2.1 wheel: on_list_tools returns all ten tools unconditionally, with no CLI-flag-based filtering."
     }
   }
 }
