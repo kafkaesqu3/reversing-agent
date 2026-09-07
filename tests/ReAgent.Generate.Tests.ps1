@@ -210,4 +210,22 @@ Describe 'the shipped CLAUDE.md template' {
     It 'warns that Ghidra binary names are program paths' {
         $Script:Tpl | Should -BeLike '*list_project_binaries*'
     }
+
+    It 'keeps the skill-boundary lines that stop a skill overriding the contract' {
+        # These are the in-band defence against a malware-free but dangerous-by-design
+        # pack, belt and braces with the scanner because the gate can be not-testable.
+        # A future edit must not quietly drop them.
+        $Script:Tpl | Should -BeLike '*THIS FILE WINS*'
+        $Script:Tpl | Should -BeLike '*ai_*'
+        $Script:Tpl | Should -BeLike '*Never substitute a similar-sounding tool*'
+    }
+
+    It 'does not repeat the corrected two-tool claim about mcp-windbg' {
+        # data/tool-catalog.json records the verified ten-tool surface; the contract text
+        # claimed a dump-only server, which is the same Task-7 measurement error the
+        # windbg skill content already had to be corrected for. Matched with -Match, not
+        # -BeLike: the claim is wrapped across two lines in the template.
+        $Script:Tpl | Should -Not -Match '(?s)has no\s+live-process tool'
+        $Script:Tpl | Should -BeLike '*open_cdb_remote*'
+    }
 }
