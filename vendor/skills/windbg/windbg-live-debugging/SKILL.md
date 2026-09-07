@@ -1,6 +1,12 @@
 ---
 name: windbg-live-debugging
 description: Attach to a running Windows process through a WinDbg debug server (via mcp-windbg) and inspect it live. Use when the user wants to debug a process on another machine, or one already under a .server session, rather than a crash dump.
+allowed-tools:
+  - mcp__mcp-windbg__open_cdb_remote
+  - mcp__mcp-windbg__run_cdb_command
+  - mcp__mcp-windbg__close_cdb_session
+  - mcp__mcp-windbg__send_ctrl_break
+  - mcp__mcp-windbg__wait_for_break
 ---
 
 # Debug a live user-mode process
