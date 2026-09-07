@@ -250,6 +250,29 @@
       "skills": [
         { "upstream": "ctf-reverse", "name": "route-triage", "enabled": true }
       ]
+    },
+    {
+      "namespace": "dotnet",
+      "enabled": true,
+      "source": {
+        "type": "github-archive",
+        "repo": "fenzel999/dotnet-artisan",
+        "commit": "55647e56dbc1375db7c25079d0e14928109cc5c8",
+        "treeSha256": "dda0d3d98a8cec2a101b2157bcbd6a9e41b9a4278769fc184cedbf124633caa5",
+        "subPath": "skills/dotnet-debugging"
+      },
+      "review": {
+        "reviewedBy": "",
+        "reviewedAt": "",
+        "reviewedCommit": "55647e56dbc1375db7c25079d0e14928109cc5c8",
+        "notes": ""
+      },
+      "targetServers": ["mcp-windbg"],
+      "adaptation": { "toolRenames": {} },
+      "scanExceptions": [],
+      "skills": [
+        { "upstream": "dotnet-debugging", "name": "dotnet-debugging", "enabled": true }
+      ]
     }
   ]
 }
