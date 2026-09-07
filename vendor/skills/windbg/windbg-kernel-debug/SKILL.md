@@ -5,11 +5,12 @@ description: Attach to a live Windows kernel target over KDNET, a named pipe, or
 
 # Debug a live Windows kernel target
 
-> **Disabled on this host.** mcp-windbg 1.2.1 is dump-only; `open_kd_session`,
-> `run_kd_command`, `close_kd_session`, `send_ctrl_break` and
-> `wait_for_break` are not in its tool surface. See `skills[windbg].skills`
-> in `re-agent.config.json` for the recorded reason. Kept vendored,
-> unmodified below, in case a future mcp-windbg release adds a kernel tool.
+> **Disabled on this host.** This host's mcp-windbg 1.2.1 build does advertise
+> `open_kd_session`, `run_kd_command`, `close_kd_session`, `send_ctrl_break` and
+> `wait_for_break`, but live/kernel debugging has not been reviewed or explicitly
+> enabled here. See `skills[windbg].skills` in `re-agent.config.json` for the
+> recorded reason. Kept vendored, unmodified below, pending an operator decision
+> to enable it.
 
 Drive a kernel target with the `mcp-windbg` kd tools. A kernel session halts the
 whole machine while it is broken in, so treat the target's running state as

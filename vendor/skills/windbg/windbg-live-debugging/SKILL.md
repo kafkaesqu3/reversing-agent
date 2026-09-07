@@ -5,11 +5,11 @@ description: Attach to a running Windows process through a WinDbg debug server (
 
 # Debug a live user-mode process
 
-> **Disabled on this host.** mcp-windbg 1.2.1 is dump-only; `open_cdb_remote`,
-> `send_ctrl_break`, `wait_for_break` and `close_cdb_session` are not in its
-> tool surface. See `skills[windbg].skills` in `re-agent.config.json` for the
-> recorded reason. Kept vendored, unmodified below, in case a future
-> mcp-windbg release adds a live-process tool.
+> **Disabled on this host.** This host's mcp-windbg 1.2.1 build does advertise
+> `open_cdb_remote`, `send_ctrl_break`, `wait_for_break` and `close_cdb_session`,
+> but live/kernel debugging has not been reviewed or explicitly enabled here.
+> See `skills[windbg].skills` in `re-agent.config.json` for the recorded reason.
+> Kept vendored, unmodified below, pending an operator decision to enable it.
 
 Attach to an existing WinDbg/CDB **debug server** with the `mcp-windbg` tools.
 This is user-mode only - for a kernel target use `/mcp-windbg:kernel-debug`.

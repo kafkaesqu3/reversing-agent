@@ -2,8 +2,10 @@
 name: windbg-crash-analysis
 description: Triage a Windows crash dump using the mcp-windbg MCP server - identify the exception, the faulting frame, and what to look at next. Use when the user points at a .dmp file or asks why a Windows process crashed.
 allowed-tools:
+  - mcp__mcp-windbg__list_dumps
   - mcp__mcp-windbg__open_cdb_dump
   - mcp__mcp-windbg__run_cdb_command
+  - mcp__mcp-windbg__close_cdb_session
 ---
 
 # Analyze a Windows crash dump
@@ -13,8 +15,8 @@ crashed, not just what the debugger printed.
 
 ## Getting a dump path
 
-Ask the user for the `.dmp` path directly. This install has no `list_dumps` tool to
-browse a crash-dump directory with - see Limitations.
+If the user gave a path, use it. If not, call `list_dumps` to show what is in
+the local crash dump directory and ask which one. Do not guess.
 
 ## Triage
 
@@ -28,8 +30,7 @@ browse a crash-dump directory with - see Limitations.
    - `lm` to see whether the faulting module has symbols
    - `.exr -1`, `.ecxr` for the exception record and context
    - `dt`, `dx`, `db`/`dd` to inspect the data the crash implicates
-4. There is no `close_cdb_session` tool in this install - see Limitations. Say
-   plainly that you are done with the dump; there is nothing left to close.
+4. `close_cdb_session` when you are done.
 
 ## Reporting
 
@@ -52,20 +53,14 @@ than a confident guess.
 
 ## Limitations
 
-- This install exposes only two mcp-windbg tools: `open_cdb_dump` and
-  `run_cdb_command`. The upstream skill also reaches for `list_dumps` to browse
-  a dump directory and `close_cdb_session` to end a session cleanly; neither is
-  in this host's mcp-windbg 1.2.1 pin, which is a dump-only, two-tool surface
-  (see `data/tool-catalog.json`). Ask the user for dump paths directly, and do
-  not expect an explicit close step.
-- Two `dbgeng.dll` gotchas, carried over from evaluating `glslang/windbg-mcp`
-  (a different WinDbg MCP server, not vendored here), apply to the debugging
-  engine this host runs too: replaying a Time Travel Debugging (TTD) `.run`
-  trace fails against the in-box engine with `0x80070057`, so say up front that
-  TTD replay is not available through this install if a user hands you a `.run`
-  file. And the deeper parts of `!analyze` that ship only with the full
-  packaged WinDbg app - rather than the redistributable `cdb.exe` this server
-  drives - are not guaranteed to be present. `!analyze -v` is still expected to
-  work for the common exception classes; treat a thin or unhelpful verdict on
-  an unusual bugcheck as an engine-depth gap, not proof there is nothing to
-  find, and say so rather than guessing further.
+Two `dbgeng.dll` gotchas, carried over from evaluating `glslang/windbg-mcp`
+(a different WinDbg MCP server, not vendored here), apply to the debugging
+engine this host runs too: replaying a Time Travel Debugging (TTD) `.run`
+trace fails against the in-box engine with `0x80070057`, so say up front that
+TTD replay is not available through this install if a user hands you a `.run`
+file. And the deeper parts of `!analyze` that ship only with the full
+packaged WinDbg app - rather than the redistributable `cdb.exe` this server
+drives - are not guaranteed to be present. `!analyze -v` is still expected to
+work for the common exception classes; treat a thin or unhelpful verdict on
+an unusual bugcheck as an engine-depth gap, not proof there is nothing to
+find, and say so rather than guessing further.

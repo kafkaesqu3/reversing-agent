@@ -175,9 +175,9 @@
       "skills": [
         { "upstream": "analyze-dump", "name": "windbg-crash-analysis", "enabled": true },
         { "upstream": "debug-remote", "name": "windbg-live-debugging", "enabled": false,
-          "disabledReason": "mcp-windbg 1.2.1 is dump-only; no live-process tool" },
+          "disabledReason": "live/kernel debugging capability exists in this mcp-windbg build but has not been reviewed or explicitly enabled; kept disabled pending operator decision" },
         { "upstream": "kernel-debug", "name": "windbg-kernel-debug", "enabled": false,
-          "disabledReason": "mcp-windbg 1.2.1 is dump-only; no live-process tool" },
+          "disabledReason": "live/kernel debugging capability exists in this mcp-windbg build but has not been reviewed or explicitly enabled; kept disabled pending operator decision" },
         { "upstream": "windbg-doctor", "name": "windbg-doctor", "enabled": true }
       ]
     }

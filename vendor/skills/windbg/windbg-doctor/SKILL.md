@@ -2,8 +2,7 @@
 name: windbg-doctor
 description: Check that this host can actually run the mcp-windbg MCP server - CDB present, uv available, symbols configured - and explain how to fix whatever is missing. Use when mcp-windbg tools fail, when a session will not open, or before a first debugging session.
 allowed-tools:
-  - mcp__mcp-windbg__open_cdb_dump
-  - mcp__mcp-windbg__run_cdb_command
+  - mcp__mcp-windbg__list_dumps
 ---
 
 # Check the debugging setup
@@ -50,11 +49,8 @@ what matters is what the server received. Report the effective value and note
 that without symbols, stacks resolve only to `module+0x1234` and any analysis
 built on them is guesswork.
 
-**6. Tools reachable.** If the MCP server is up, `open_cdb_dump` on any dump
-you have handy followed by `run_cdb_command` with a trivial command such as
-`version` proves the round trip works. There is no `list_dumps` tool in this
-build to check reachability without a dump in hand (see
-`windbg-crash-analysis`'s Limitations for the full two-tool surface).
+**6. Tools reachable.** If the MCP server is up, `list_dumps` returning anything
+at all - including "no dumps found" - proves the round trip works.
 
 ## Reporting
 
