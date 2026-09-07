@@ -203,6 +203,30 @@
       "skills": [
         { "upstream": "ghidra-iterative-re-55f2a0d57b1dc8224500ac00b9d5b3166074dffb", "name": "ghidra-iterative-re", "enabled": true }
       ]
+    },
+    {
+      "namespace": "re",
+      "enabled": true,
+      "source": {
+        "type": "github-archive",
+        "repo": "hackersifu/reverse-engineering-skills",
+        "commit": "5e675640e0ec94372298c57bb335ecf047360688",
+        "treeSha256": "4b8024f1b77fe99a6fc629e557dc186149147149a811dbd0d1b0fd01110679f8",
+        "subPath": ".agents/skills"
+      },
+      "review": {
+        "reviewedBy": "",
+        "reviewedAt": "",
+        "reviewedCommit": "5e675640e0ec94372298c57bb335ecf047360688",
+        "notes": ""
+      },
+      "targetServers": [],
+      "adaptation": { "toolRenames": {} },
+      "scanExceptions": [],
+      "skills": [
+        { "upstream": "re-ioc-extraction", "name": "re-ioc-extraction", "enabled": true },
+        { "upstream": "re-unpacker", "name": "re-unpacker", "enabled": true }
+      ]
     }
   ]
 }
