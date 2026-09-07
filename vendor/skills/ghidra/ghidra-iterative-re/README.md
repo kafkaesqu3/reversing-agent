@@ -75,16 +75,11 @@ Some of the load-bearing ideas:
 
 ## Install
 
-Clone it, then link it into your skills directory:
-
-```sh
-git clone https://github.com/GeReV/ghidra-iterative-re.git
-ln -s "$PWD/ghidra-iterative-re" ~/.claude/skills/ghidra-iterative-re
-```
-
-A symlink means `git pull` updates the installed skill with no second copy to go stale.
-If your setup can't follow symlinked skill directories, `cp -r` works too — but then
-re-copy after every update.
+**Not applicable to this vendored copy.** This tree is vendored into
+`vendor/skills/ghidra/ghidra-iterative-re/` at a pinned upstream commit and installed by
+this repo's own installer, which copies it into `.claude/skills/ghidra-iterative-re/` -
+do not `git clone` or symlink the upstream repo directly, or the pinned-commit and
+adaptation-gate guarantees this repo provides are bypassed.
 
 Invoke it with the `Skill` tool as `ghidra-iterative-re`, or `/ghidra-iterative-re`.
 

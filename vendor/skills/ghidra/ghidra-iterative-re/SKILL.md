@@ -1,6 +1,29 @@
 ---
 name: ghidra-iterative-re
-description: Use when reverse-engineering a game (or any binary) in Ghidra via MCP or PyGhidra - establishes the apply-cascade-verify loop, the SourceType trust model that stops an agent corroborating its own guesses, invariant bracketing against Ghidra's silent collateral damage, and the game-specific evidence sources worth sweeping before any analysis.
+description: Use when reverse-engineering a binary in Ghidra through the pyghidra-mcp MCP server - establishes the apply-cascade-verify loop, the ai_-prefix trust model that stops an agent corroborating its own guesses, invariant bracketing (gen_callgraph plus list_exports) against Ghidra's silent collateral damage, and the game-specific evidence sources worth sweeping before any analysis.
+allowed-tools:
+  - mcp__pyghidra-mcp__import_binary
+  - mcp__pyghidra-mcp__list_project_binaries
+  - mcp__pyghidra-mcp__list_project_binary_metadata
+  - mcp__pyghidra-mcp__delete_project_binary
+  - mcp__pyghidra-mcp__save
+  - mcp__pyghidra-mcp__decompile_function
+  - mcp__pyghidra-mcp__disassemble
+  - mcp__pyghidra-mcp__read_bytes
+  - mcp__pyghidra-mcp__list_exports
+  - mcp__pyghidra-mcp__list_imports
+  - mcp__pyghidra-mcp__list_xrefs
+  - mcp__pyghidra-mcp__search_code
+  - mcp__pyghidra-mcp__search_strings
+  - mcp__pyghidra-mcp__search_symbols_by_name
+  - mcp__pyghidra-mcp__gen_callgraph
+  - mcp__pyghidra-mcp__rename_function
+  - mcp__pyghidra-mcp__rename_variable
+  - mcp__pyghidra-mcp__set_comment
+  - mcp__pyghidra-mcp__set_function_prototype
+  - mcp__pyghidra-mcp__set_variable_type
+  - Read
+  - Bash
 ---
 
 # Iterative reverse engineering in Ghidra
@@ -18,6 +41,8 @@ it are in `references/`, keyed by the kind of work you are about to do.
 **Confidence convention.** Claims marked *(doc)* come from Ghidra's own documentation but
 have not been executed. Unmarked claims were either measured live or are project history.
 Quoted numbers from one binary are examples for calibration, not properties of yours.
+
+**This install exposes only the `pyghidra-mcp` MCP tools listed above in `allowed-tools`** — there is no raw PyGhidra Python scripting console here, unlike upstream's original environment. `references/api.md`, `references/applying-changes.md`, `references/cpp-abi.md` and `references/trust-and-circularity.md` retain upstream's scripting-oriented detail (`currentProgram`, `AutoAnalysisManager`, `ApplyFunctionDataTypesCmd`, `DataTypeWriter`, `ClassUtils`, raw `SourceType` values) because it documents Ghidra's own internal behaviour, which stays true regardless of how you reach it — but anything phrased as a script is not directly runnable on this surface. Reach for the nearest `pyghidra-mcp` tool instead (`set_function_prototype` / `set_variable_type` for what `DataTypeWriter` would emit, `rename_function` / `rename_variable` for what a script would call `setName`), and see `## Limitations` for what this adaptation could not carry over.
 
 ## Start here
 
@@ -150,10 +175,10 @@ Stop after two consecutive rounds produce nothing new — not when you run out o
 | Stage | What it means |
 |---|---|
 | **checkpoint** | `checkpoint.py`-style: end transaction, save, snapshot, version-control step |
-| **apply** | Write only this round's certainty tier, tagged `SourceType.AI`, gated on an `apply` argument |
+| **apply** | Write only this round's certainty tier, naming every symbol with an `ai_` prefix, gated on an `apply` argument |
 | **cascade** | `analyzeChanges` after telling `AutoAnalysisManager` precisely what changed |
 | **verify invariants** | Diff the whole-program invariant and `raise` on change |
-| **harvest** | Read evidence back out, **excluding `SourceType.AI`**, into versioned evidence files |
+| **harvest** | Read evidence back out via `search_symbols_by_name`, **excluding every `ai_`-prefixed name**, into versioned evidence files |
 | **adjudicate** | Turn raw evidence rows into *decided* layout/ownership records: apply the confidence rule (how many structurally independent witness kinds agree), resolve conflicts between witnesses, and **record what you deliberately excluded and why**. This is the step that produces a `confidence` column. Excluded evidence must be written down — a later reader re-deriving from raw rows will otherwise reach a different answer and think yours is wrong. |
 
 ### Cascade is the stage that gets skipped — build a forcing function
@@ -232,74 +257,58 @@ information all over the program."* The cascade propagates errors as well as fac
 
 ## The trust model — the load-bearing part
 
-Ghidra tracks provenance natively via `SourceType`. Its real priority order is
-**`USER_DEFINED` > `IMPORTED` > `ANALYSIS` = `AI` > `DEFAULT`** — note the tie:
+Ghidra tracks provenance natively via `SourceType` (`USER_DEFINED` > `IMPORTED` >
+`ANALYSIS` = `AI` > `DEFAULT`), and that native ordering is exactly what GeReV's
+original methodology tags AI-authored mutations against so a later harvest can filter
+them out and avoid corroborating its own guesses.
 
-| SourceType | Means | Usable as evidence? |
-|---|---|---|
-| `USER_DEFINED` | A human decided this | Yes, but record that a human is the source |
-| `IMPORTED` | Created by the **importer** from the file itself: export-table labels, debug records | **Yes — ground truth** |
-| `ANALYSIS` | Anything an analyzer produced — **including the demangler's output** | Only with the producing mechanism named |
-| `AI` | *"content produced through AI assistance"* — **yours**. Ghidra ranks this **equal to `ANALYSIS`**, not below it | **NEVER** (see below) |
-| `DEFAULT` | `FUN_`/`DAT_` placeholders | No — absence of information |
+**`pyghidra-mcp` exposes no `SourceType` parameter on any mutation tool** — not on
+`rename_function`, `rename_variable`, `set_function_prototype`, `set_variable_type`, or
+`set_comment`. Whatever tier those tools apply internally is undocumented and not
+queryable from outside this skill; auditing it would mean reading `pyghidra-mcp`'s own
+source, which is out of scope here. **A prior audit of a different Ghidra MCP server
+(`symgraph/GhidrAssistMCP`) found every one of its mutating tools hardcodes
+`SourceType.USER_DEFINED`** — 18 occurrences across `RenameSymbolTool`,
+`VariablesTool`, `StructTool`, `CreateFunctionTool`, `SetFunctionPrototypeTool` and
+`CreateDataVarTool` — silently laundering AI-authored guesses into the tier a human
+decision occupies, with `SourceType.AI` appearing nowhere in that codebase. Assume the
+same risk applies to `pyghidra-mcp` until proven otherwise.
 
-**"`AI` is never evidence" is a policy you impose, not something Ghidra enforces.**
-`SourceType.AI` and `SourceType.ANALYSIS` have *equal* priority — verified live:
-`AI.getPriority()` is 2 and `AI.isHigherPriorityThan(ANALYSIS)` is `False` in both
-directions. So Ghidra will let an AI-tagged symbol win against analyzer output exactly as
-often as the reverse, and any command that arbitrates via `isHigherPriorityThan` treats
-them as peers. The tier is a *label you can filter on*; the discipline has to live in your
-harvesters.
+**Adaptation: a mandatory `ai_` name prefix is this surface's provenance marker**,
+because the only query tool available — `search_symbols_by_name` — matches names,
+not comments or internal database fields. A prefix is therefore the only provenance
+marker this server can filter on, and it works even if the underlying `SourceType` tier
+is wrong or unknowable:
 
-**A tie in priority is not a tie in outcome — the cascade can revert your markup.**
-`DemangledFunction` applies its signature whenever the existing one
-`isHigherPriorityThan(SourceType.ANALYSIS)` is false — and `AI` is not higher than
-`ANALYSIS`, it is equal. So an ordinary demangler or analyzer pass, i.e. **the
-`analyzeChanges` you are told to run**, silently overwrites an `AI`-tagged signature. That
-is why "re-assert what you applied after the cascade" is not belt-and-braces: it is the only
-thing keeping it. A function count will not notice.
+- **Every name you propose, apply with `rename_function` or `rename_variable` prefixed
+  `ai_`** — e.g. `ai_ParseHeader`, `ai_g_soundManager`. Never drop the prefix, even
+  when confident; confidence is not what the filter checks.
+- **To harvest evidence, call `search_symbols_by_name` and exclude every match whose
+  name starts `ai_`** (in PowerShell terms, `-notlike 'ai_*'`) before treating the
+  result as corroboration. A second pass that still counts your own earlier guesses is
+  not confirming anything independent — it is the exact self-harvest failure this
+  pack exists to prevent.
+- **Record supporting detail with `set_comment`.** Comments carry what a name cannot
+  (which evidence source, which round, what confidence) — but never rely on a comment
+  as the *filterable* signal. `search_symbols_by_name` matches names only; a provenance
+  note buried in a comment cannot be queried back out.
+- **Verify the filter fires before trusting it on a real round.** Rename one known
+  symbol with the `ai_` prefix, run `search_symbols_by_name` for it, and confirm your
+  harvest query excludes it.
 
-**Two laundering paths promote `AI` markup out of the tier you filter on, and a
-demangled name is *not* `IMPORTED`** — `references/trust-and-circularity.md`.
+See `## Limitations` below — the prefix is a convention this skill imposes, not a
+property `pyghidra-mcp` or Ghidra enforces.
 
-**Tag every mutation you make `SourceType.AI`.** The anti-circularity rule then stops
-being a discipline and becomes a query filter:
+### Mutate through the pyghidra-mcp tools — the ai_ convention is the only lever here
 
-> **Harvesters must exclude `SourceType.AI` symbols from evidence.**
-
-A round's own applications then structurally cannot become evidence for the claim that
-motivated them. Verify the filter fires: tag one known symbol `AI`, confirm it drops out
-of the harvest.
-
-**The filter is needed before a harvester's *second* run, not its first** — which is why
-it is so often missing. Written before any apply exists, a harvester is correct; it turns
-circular the moment it is re-run after one, with nothing in it having changed. See
-"Self-harvest and circular evidence" in `references/harvesting-traps.md` for the
-measured case and the assertion that catches it.
-
-**Four corollaries make this cheap to exploit rather than merely to fear; types have no
-`SourceType` at all; and a tier cannot tell two sources apart that share it** — all
-three are in `references/trust-and-circularity.md`, and the second is the one most
-projects have no guard for.
-
-### Mutate through scripts, not MCP tools
-
-**Audited in GhidrAssistMCP source (`symgraph/GhidrAssistMCP@master`): every mutating tool
-hardcodes `SourceType.USER_DEFINED` — 18 occurrences across `RenameSymbolTool` (9),
-`VariablesTool` (3), `StructTool` (3), `CreateFunctionTool`, `SetFunctionPrototypeTool`,
-`CreateDataVarTool`. `SourceType.AI` appears nowhere in the codebase.**
-
-An MCP mutation therefore launders your inference into the *highest* provenance tier,
-indistinguishable from a human decision and permanently uncleanable from evidence. **Do
-all mutation from scripts.** MCP read-only queries are fine. Audit any other MCP server
-the same way before trusting it.
-
-> **Revisit:** GhidrAssistMCP issue **#66, "Consider SourceType.AI for mutation tools"**
-> (<https://github.com/symgraph/GhidrAssistMCP/issues/66>) is **open** and proposes exactly
-> this change, reaching the same conclusion independently. Check its state before assuming
-> the hardcoded behaviour is still current — once the server can emit `SourceType.AI`,
-> mutation through MCP becomes viable and this rule relaxes to "verify what tier the tool
-> writes."
+Upstream's original guidance, written against `symgraph/GhidrAssistMCP`, was to avoid
+that server's mutation tools entirely and mutate through raw PyGhidra scripts instead,
+because that server could not be told to tag `SourceType.AI`. **This install has no raw
+scripting tool at all — the 20 `pyghidra-mcp` tools are the only way to reach the
+program — so that escape hatch does not exist here.** The `ai_` prefix, applied
+consistently through `rename_function` and `rename_variable` on every name you
+propose, is the entire discipline available on this surface. Treat it as load-bearing,
+not optional.
 
 ## Mutation safety
 
@@ -311,28 +320,18 @@ type archive **destroyed two unrelated functions** — disassembly and function 
 gone, bytes reverted to undefined — with **no error, no exception, no log line.**
 `applyTo()` returned cleanly. Caught only by diffing function count (2640 → 2638).
 
-- Pick a cheap whole-program invariant (function count usually) and diff it across every
-  mutating operation.
-- Count the same way every time and write down which way. Ghidra has more than one
-  function count and they differ. `getFunctionCount()` **includes** externals;
-  `getFunctions(boolean)` returns **non-external** functions only — and note that its
-  boolean is **direction** (`true` = ascending address order), *not* a filter, and that an
-  internal thunk-to-DLL (a `JMP [IAT]` stub with an entry point in `.text`) **is** returned.
-  Tuning an invariant on the wrong mental model means mis-explaining a future delta.
-- **A clean return and no exception is not evidence nothing was damaged.**
-
-**The rest of the bracket** — `ProgramDiff`/`ProgramMerge` as the real change set, the
-no-op `setName`, the raised run that leaves your ledger ahead of the program, writing a
-multi-step apply to converge rather than assume, and the type-fold that moves your
-struct into another category — is in `references/applying-changes.md`.
-
-- Gate mutating scripts behind an explicit `apply` argument so a bare run is a dry run.
-- **Non-returning functions**: if Ghidra doesn't know a function never returns, it
-  disassembles the data after every call to it and corrupts the listing from there on. Check
-  Error bookmarks; `FixupNoReturnFunctionsScript.java` lists candidates and repairs damage.
-  *(An earlier revision put "wreaks havoc" in quotation marks as if citing Ghidra's own text; a
-  scan of the shipped 12.1.2 tree — 817 plain files plus all 79 `*-src.zip` — found the phrase
-  in 0 files. The mechanism is confirmed by that script's header; the quotation was not.)*
+- **On this surface, bracket every mutation batch with two numbers**: `gen_callgraph`'s
+  total edge count, and the full name list from `list_exports`. Capture both before the
+  batch, apply your renames and retyping through `rename_function`, `rename_variable`,
+  `set_function_prototype` or `set_variable_type`, then capture both again.
+- **Assert both are unchanged except for the names you intended to change.** A changed
+  edge count means the cascade rewired a call relationship you did not touch. A changed
+  or shrunk export list means a function or symbol was silently dropped. Either one is
+  Ghidra's "no error, no exception, no log line" collateral damage — the recorded
+  incident above (`ApplyFunctionDataTypesCmd` against a broad address set destroying two
+  unrelated functions) happened with a clean return from the tool call itself.
+- **A clean tool response is not evidence nothing was damaged.** Only the two-number
+  bracket — `gen_callgraph` edge count plus `list_exports` list — is.
 
 ### Checkpoint, and prove rollback works
 
@@ -452,6 +451,37 @@ scripting rules: `references/api.md`.**
   /array variable recovery baselines around 28% recall / 44% precision. None of that means
   don't do it — it means a round claiming high accuracy on those tasks is claiming to beat
   the field, and should be verified before it is believed.
+
+## Limitations
+
+The `ai_` prefix is a **naming convention**, not an enforced database property.
+`pyghidra-mcp` does not record or check it: nothing stops a name from being applied
+without the prefix, and nothing distinguishes an `ai_`-prefixed name typed by a human
+directly in the Ghidra GUI from one this skill actually derived from evidence. If a
+human renames symbols in the same project — with or without the prefix — the
+convention alone cannot tell your inference apart from theirs.
+
+**A mixed human/agent session weakens this guarantee.** A human who renames a function
+without the `ai_` prefix makes it look like ground truth to the harvest filter, even
+though it may itself be a guess. A human who happens to use the `ai_` prefix (for an
+unrelated reason, or by copying the convention) will have their name silently excluded
+from evidence — a false negative rather than a false positive, but still a discipline
+break. When a project has had both human and agent edits with no stricter tracking
+mechanism than this prefix, **say so explicitly in any report**: state that the trust
+boundary between AI-authored and human-authored names is a convention that may have
+been violated, not a database fact, and that findings built on filtering
+`search_symbols_by_name` results could include unfiltered self-corroboration or exclude
+genuine human ground truth.
+
+**The reference files carry upstream's original raw-scripting assumptions.**
+`references/api.md`, `references/applying-changes.md`, `references/cpp-abi.md` and
+`references/trust-and-circularity.md` were written against a PyGhidra scripting console
+this install does not expose. Their description of Ghidra's own internal behaviour
+(cascade mechanics, `SourceType` priority, silent collateral damage) still holds; any
+passage phrased as a script to run does not port to `pyghidra-mcp`'s 20 tools, and no
+attempt has been made in this adaptation to rewrite that material procedure-by-procedure
+— read it as background theory, not as a runnable script, and map its intent onto the
+nearest `pyghidra-mcp` tool by hand.
 
 ## Sources
 

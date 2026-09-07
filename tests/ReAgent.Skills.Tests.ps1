@@ -464,3 +464,27 @@ Describe 'Remove-OrphanedSkill' {
         Test-Path -LiteralPath (Join-Path $root 'operators-own') | Should -BeTrue
     }
 }
+
+Describe 'The vendored ghidra pack keeps its SourceType adaptation' {
+    # spec 2026-09-06-skills-vendoring-design.md section 5: pyghidra-mcp has no
+    # SourceType parameter, so the ai_ name-prefix convention (and the honesty
+    # about its limits) IS this pack's value. A future edit that silently drops
+    # either must fail this test, not slip through as a prose tidy-up.
+    BeforeAll {
+        $Script:GhidraSkillMd = Join-Path $PSScriptRoot `
+            '../vendor/skills/ghidra/ghidra-iterative-re/SKILL.md'
+    }
+
+    It 'still teaches the mandatory ai_ prefix convention in place of SourceType' {
+        Test-Path -LiteralPath $Script:GhidraSkillMd | Should -BeTrue
+        $text = Get-Content -LiteralPath $Script:GhidraSkillMd -Raw
+        $text | Should -Match 'ai_'
+        $text | Should -Match 'search_symbols_by_name'
+    }
+
+    It 'still carries a Limitations section naming the convention-not-enforcement gap' {
+        $text = Get-Content -LiteralPath $Script:GhidraSkillMd -Raw
+        $text | Should -Match '(?m)^## Limitations$'
+        $text | Should -Match 'naming convention'
+    }
+}
