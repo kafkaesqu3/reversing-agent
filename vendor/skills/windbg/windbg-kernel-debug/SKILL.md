@@ -1,9 +1,15 @@
 ---
-name: kernel-debug
-description: Attach to a live Windows kernel target over KDNET, a named pipe, or serial and drive it. Use when the user wants to debug a kernel, a driver, or a bugchecking VM.
+name: windbg-kernel-debug
+description: Attach to a live Windows kernel target over KDNET, a named pipe, or serial and drive it (via mcp-windbg). Use when the user wants to debug a kernel, a driver, or a bugchecking VM.
 ---
 
 # Debug a live Windows kernel target
+
+> **Disabled on this host.** mcp-windbg 1.2.1 is dump-only; `open_kd_session`,
+> `run_kd_command`, `close_kd_session`, `send_ctrl_break` and
+> `wait_for_break` are not in its tool surface. See `skills[windbg].skills`
+> in `re-agent.config.json` for the recorded reason. Kept vendored,
+> unmodified below, in case a future mcp-windbg release adds a kernel tool.
 
 Drive a kernel target with the `mcp-windbg` kd tools. A kernel session halts the
 whole machine while it is broken in, so treat the target's running state as

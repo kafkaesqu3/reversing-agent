@@ -172,7 +172,14 @@
       "targetServers": ["mcp-windbg"],
       "adaptation": { "toolRenames": {} },
       "scanExceptions": [],
-      "skills": []
+      "skills": [
+        { "upstream": "analyze-dump", "name": "windbg-crash-analysis", "enabled": true },
+        { "upstream": "debug-remote", "name": "windbg-live-debugging", "enabled": false,
+          "disabledReason": "mcp-windbg 1.2.1 is dump-only; no live-process tool" },
+        { "upstream": "kernel-debug", "name": "windbg-kernel-debug", "enabled": false,
+          "disabledReason": "mcp-windbg 1.2.1 is dump-only; no live-process tool" },
+        { "upstream": "windbg-doctor", "name": "windbg-doctor", "enabled": true }
+      ]
     }
   ]
 }

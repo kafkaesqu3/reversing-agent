@@ -1,9 +1,15 @@
 ---
-name: debug-remote
-description: Attach to a running Windows process through a WinDbg debug server and inspect it live. Use when the user wants to debug a process on another machine, or one already under a .server session, rather than a crash dump.
+name: windbg-live-debugging
+description: Attach to a running Windows process through a WinDbg debug server (via mcp-windbg) and inspect it live. Use when the user wants to debug a process on another machine, or one already under a .server session, rather than a crash dump.
 ---
 
 # Debug a live user-mode process
+
+> **Disabled on this host.** mcp-windbg 1.2.1 is dump-only; `open_cdb_remote`,
+> `send_ctrl_break`, `wait_for_break` and `close_cdb_session` are not in its
+> tool surface. See `skills[windbg].skills` in `re-agent.config.json` for the
+> recorded reason. Kept vendored, unmodified below, in case a future
+> mcp-windbg release adds a live-process tool.
 
 Attach to an existing WinDbg/CDB **debug server** with the `mcp-windbg` tools.
 This is user-mode only - for a kernel target use `/mcp-windbg:kernel-debug`.

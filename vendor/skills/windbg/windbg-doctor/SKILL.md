@@ -1,6 +1,9 @@
 ---
 name: windbg-doctor
-description: Check that this machine can actually debug - CDB present, uv available, symbols configured - and explain how to fix whatever is missing. Use when mcp-windbg tools fail, when a session will not open, or before a first debugging session.
+description: Check that this host can actually run the mcp-windbg MCP server - CDB present, uv available, symbols configured - and explain how to fix whatever is missing. Use when mcp-windbg tools fail, when a session will not open, or before a first debugging session.
+allowed-tools:
+  - mcp__mcp-windbg__open_cdb_dump
+  - mcp__mcp-windbg__run_cdb_command
 ---
 
 # Check the debugging setup
@@ -23,6 +26,11 @@ C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe
 %LOCALAPPDATA%\Microsoft\WindowsApps\cdbX64.exe
 ```
 
+Some hosts (this one included) ship `cdb.exe` inside the WinDbg Store package
+instead, under `(Get-AppxPackage -Name Microsoft.WinDbg).InstallLocation\amd64\cdb.exe`.
+That path embeds the package version, so discover it rather than hardcoding it,
+and check it too before concluding WinDbg is missing.
+
 Missing means WinDbg is not installed. Point at
 [aka.ms/windbg](https://aka.ms/windbg) (Microsoft Store) or the Windows SDK's
 Debugging Tools for Windows. If it is installed somewhere unusual, the server
@@ -42,8 +50,11 @@ what matters is what the server received. Report the effective value and note
 that without symbols, stacks resolve only to `module+0x1234` and any analysis
 built on them is guesswork.
 
-**6. Tools reachable.** If the MCP server is up, `list_dumps` returning anything
-at all - including "no dumps found" - proves the round trip works.
+**6. Tools reachable.** If the MCP server is up, `open_cdb_dump` on any dump
+you have handy followed by `run_cdb_command` with a trivial command such as
+`version` proves the round trip works. There is no `list_dumps` tool in this
+build to check reachability without a dump in hand (see
+`windbg-crash-analysis`'s Limitations for the full two-tool surface).
 
 ## Reporting
 
