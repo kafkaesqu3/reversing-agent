@@ -4,6 +4,10 @@
 ports.json
 manifest.json
 verify-report.json
+codex-manifest.json
+codex-verify-report.json
+.codex/config.toml
+config.toml.*.bak
 
 # Secrets. Bearer tokens live on disk with restrictive ACLs and never in git.
 tokens/
