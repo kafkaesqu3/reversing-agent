@@ -274,6 +274,12 @@ function Get-RecordedSkillResult {
     [CmdletBinding()]
     param([Parameter(Mandatory)][object]$Config)
 
+    # 'skills' is an optional top-level key so a config written before this
+    # subsystem still loads. Phase 6 calls this unconditionally, so reading
+    # straight through a config that lacks it would throw under Set-StrictMode
+    # and take verification down on exactly those older configs.
+    if ($Config.PSObject.Properties.Name -notcontains 'skills') { return @() }
+
     $path = Join-Path $Config.paths.stateRoot 'manifest.json'
     if (-not (Test-Path -LiteralPath $path)) {
         Write-ReAgentLog -Level WARN -Message (

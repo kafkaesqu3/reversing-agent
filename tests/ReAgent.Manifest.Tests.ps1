@@ -312,6 +312,18 @@ Describe 'Get-RecordedSkillResult' {
         $got[0].SkillNames | Should -Be @('x64dbg-find-oep')
     }
 
+    It 'returns nothing when the config has no skills key, even with a manifest present' {
+        # 'skills' is an optional top-level key so a config written before this subsystem
+        # still loads. Reading straight through it throws under Set-StrictMode, and phase
+        # 6 calls this unconditionally - so an old config would take verification down.
+        $state = Join-Path $TestDrive 'grs-nokey'
+        $null = New-Item -ItemType Directory -Path $state -Force
+        '{ "skills": [] }' | Set-Content -LiteralPath (Join-Path $state 'manifest.json')
+        $cfg = [PSCustomObject]@{
+            paths = [PSCustomObject]@{ stateRoot = $state } }
+        @(Get-RecordedSkillResult -Config $cfg) | Should -BeNullOrEmpty
+    }
+
     It 'returns nothing when the config declares no skill packs' {
         $cfg = [PSCustomObject]@{
             paths = [PSCustomObject]@{ stateRoot = (Join-Path $TestDrive 'grs-noskills') }
