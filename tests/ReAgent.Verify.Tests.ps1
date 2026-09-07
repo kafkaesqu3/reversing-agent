@@ -738,6 +738,20 @@ Describe 'Test-ToolCatalogLive' {
             -Server 'mcp-windbg' -Catalog $Script:LiveCat
         $c.Status | Should -Be 'pass'
     }
+
+    It 'is not-testable rather than fail when a live server has no catalog entry yet' {
+        # binaryninja has no entry in data/tool-catalog.json before its first attended
+        # capture (design doc SS8.3). Every one of its real tools would otherwise read
+        # as 'added' against an empty baseline, misreporting unmeasured as broken.
+        Mock -ModuleName ReAgent.Verify Invoke-McpProbe {
+            [PSCustomObject]@{ ok = $true; toolCount = 1; tools = @('some_tool') }
+        }
+        $c = Test-ToolCatalogLive -PythonPath 'py.exe' `
+            -ProbeArgs @('--transport=http', '--url=http://127.0.0.1:24642/mcp') `
+            -Server 'binaryninja' -Catalog $Script:LiveCat
+        $c.Status | Should -Be 'not-testable'
+        $c.Detail | Should -BeLike '*-UpdateToolCatalog*'
+    }
 }
 
 Describe 'Test-SkillDriftCheck' {

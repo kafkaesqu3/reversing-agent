@@ -862,6 +862,10 @@ function Test-ToolCatalogLive {
         "differs" - a tool-count drop after an upgrade is a useful regression
         signal (docs/mvp/HANDOFF.md). An unreachable server is not-testable,
         never fail: a closed GUI has told us nothing about an adaptation defect.
+        A server with no catalog entry is also not-testable, naming the exact
+        refresh command: with no baseline recorded, every live tool would
+        otherwise read as "added", turning an unmeasured server into a false
+        drift failure.
     .PARAMETER PythonPath
         Interpreter to run the probe with.
     .PARAMETER ProbeArgs
@@ -888,6 +892,13 @@ function Test-ToolCatalogLive {
         $why = if ($r.PSObject.Properties.Name -contains 'error') { $r.error } else { 'tool call failed' }
         return New-CheckResult -Name $name -Status 'not-testable' -Detail (
             "Could not reach '$Server' to compare its live tools against the catalog ($why).")
+    }
+
+    $entry = Get-CatalogServerTool -Catalog $Catalog -Server $Server
+    if (-not $entry.Known) {
+        return New-CheckResult -Name $name -Status 'not-testable' -Detail (
+            "No tool catalog entry for '$Server'. Open the application, start its MCP " +
+            'server, then run: .\Install-REAgent.ps1 -Attended -UpdateToolCatalog')
     }
 
     $diff = Compare-ToolCatalog -Catalog $Catalog -Server $Server -LiveTools @($r.tools)
@@ -1149,9 +1160,10 @@ function Update-CatalogServerEntry {
     .SYNOPSIS
         Refreshes one server's catalog entry in place, or leaves it untouched.
     .DESCRIPTION
-        Never removes an entry. A disabled server, an attended-tier server
-        without -Attended, a server whose launch command cannot be resolved,
-        or a server that does not answer, is skipped with a WARN and its
+        Never removes an entry. A disabled server is skipped silently - that
+        is simply not a defect condition. An attended-tier server without
+        -Attended, a server whose launch command cannot be resolved, or a
+        server that does not answer, is skipped with a WARN, and its
         previous entry (if any) survives unchanged - a closed GUI must never
         silently erase a good catalog entry (S9).
     .PARAMETER Servers
