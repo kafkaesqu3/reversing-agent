@@ -227,6 +227,29 @@
         { "upstream": "re-ioc-extraction", "name": "re-ioc-extraction", "enabled": true },
         { "upstream": "re-unpacker", "name": "re-unpacker", "enabled": true }
       ]
+    },
+    {
+      "namespace": "route",
+      "enabled": true,
+      "source": {
+        "type": "github-archive",
+        "repo": "ljagiello/ctf-skills",
+        "commit": "36c72e53a96a035791821caff7440882ea0f5c57",
+        "treeSha256": "5e4b183922db37a23adfce02826939388685126a84abc0739ae149130bbb973e",
+        "subPath": "ctf-reverse"
+      },
+      "review": {
+        "reviewedBy": "",
+        "reviewedAt": "",
+        "reviewedCommit": "36c72e53a96a035791821caff7440882ea0f5c57",
+        "notes": ""
+      },
+      "targetServers": [],
+      "adaptation": { "toolRenames": {} },
+      "scanExceptions": [],
+      "skills": [
+        { "upstream": "ctf-reverse", "name": "route-triage", "enabled": true }
+      ]
     }
   ]
 }
