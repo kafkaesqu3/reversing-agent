@@ -180,6 +180,29 @@
           "disabledReason": "live/kernel debugging capability exists in this mcp-windbg build but has not been reviewed or explicitly enabled; kept disabled pending operator decision" },
         { "upstream": "windbg-doctor", "name": "windbg-doctor", "enabled": true }
       ]
+    },
+    {
+      "namespace": "ghidra",
+      "enabled": true,
+      "source": {
+        "type": "github-archive",
+        "repo": "GeReV/ghidra-iterative-re",
+        "commit": "55f2a0d57b1dc8224500ac00b9d5b3166074dffb",
+        "treeSha256": "bb7c817dcfc677d7fda5dbeb1b95ebfb795a5df8acdad555312c2d41b11ca955",
+        "subPath": ""
+      },
+      "review": {
+        "reviewedBy": "",
+        "reviewedAt": "",
+        "reviewedCommit": "55f2a0d57b1dc8224500ac00b9d5b3166074dffb",
+        "notes": ""
+      },
+      "targetServers": ["pyghidra-mcp"],
+      "adaptation": { "toolRenames": {} },
+      "scanExceptions": [],
+      "skills": [
+        { "upstream": "ghidra-iterative-re-55f2a0d57b1dc8224500ac00b9d5b3166074dffb", "name": "ghidra-iterative-re", "enabled": true }
+      ]
     }
   ]
 }
