@@ -3,6 +3,8 @@
 > **Quick Ref**: Crash → !analyze + !pe + !clrstack | Hang → !syncblk + !dlk + !threads | Memory → !dumpheap -stat + !gcroot | CPU → !runaway + !threadpool | Each scenario maps to a command sequence
 
 Choose one primary task, run its commands, then summarize findings with [report template](./report-template.md).
+Every command below is a string passed to `run_cdb_command` against a session opened with
+`open_cdb_dump` -- none of them are separate tools.
 
 - [task-crash](./task-crash.md)
 - [task-hang](./task-hang.md)

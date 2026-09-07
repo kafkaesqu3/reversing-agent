@@ -14,3 +14,6 @@
 Get-Command cdb -ErrorAction SilentlyContinue
 Get-Process | Where-Object { $_.ProcessName -match '<name-pattern>' } | Select-Object Id,ProcessName
 ```
+
+For a fuller diagnostic (uv, the server entry point, effective symbol path), run the `windbg`
+pack's `windbg-doctor` skill instead of re-deriving these checks by hand.

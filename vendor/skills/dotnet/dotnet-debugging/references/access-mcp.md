@@ -1,21 +1,17 @@
-# Access WinDbg MCP
+# Access mcp-windbg
 
-> **Quick Ref**: WinDbg MCP server must be running before commands | Connect via mcp__mcp-windbg__run_windbg_cmd | Test connection with basic command first | All WinDbg commands go through MCP tools | MCP handles symbol path and session management
+> **Quick Ref**: mcp-windbg is already registered by this install | Call tools with the
+> `mcp__mcp-windbg__` prefix | Test with `open_cdb_dump` on a known dump before relying on it |
+> All debugger commands, including SOS, go through `run_cdb_command`
 
-## 1. Install Prerequisites
-- Follow [mcp setup](./mcp-setup.md) to install `uvx` and `cdb.exe`.
+## Tool IDs
 
-## 2. Configure MCP Server
-Register WinDbg MCP in your MCP config (for example `mcp.json`) using:
+This skill's real, dispatchable tool IDs on this host are:
 
-```bash
-uvx --from git+https://github.com/svnscha/mcp-windbg mcp-windbg
-```
+- `mcp__mcp-windbg__open_cdb_dump`
+- `mcp__mcp-windbg__run_cdb_command`
+- `mcp__mcp-windbg__close_cdb_session`
 
-## 3. Verify MCP Access
-Confirm WinDbg MCP tools are callable:
-- `mcp_mcp-windbg_list_windbg_dumps`
-- `mcp_mcp-windbg_open_windbg_dump`
-- `mcp_mcp-windbg_open_windbg_remote`
-
-If these tools are unavailable, reload chat/session after MCP config changes.
+See `references/mcp-setup.md` if any of these fail -- this install already registers and launches
+`mcp-windbg`, so a failure here means the server or `cdb.exe` needs diagnosis (`windbg-doctor`),
+not re-registration.

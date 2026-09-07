@@ -2,6 +2,14 @@
 
 > **Quick Ref**: Collect .dmp before any analysis | procdump -ma for crash dumps | dotnet-dump collect for Linux | createdump for containers | Always capture with -ma (full dump) for .NET | Collect multiple dumps before restarting
 
+## Availability note
+
+`procdump64.exe` (Sysinternals) is not part of this install's pinned MCP tool surface -- it is
+not installed or managed by this repository. Check for it first (`Get-Command procdump64
+-ErrorAction SilentlyContinue`); if it is not already present, do not install it mid-session.
+Ask the user to supply a dump another way, or use `references/live-attach.md`'s `.dump`
+command once a session is open (also disabled on this host today -- see that file).
+
 ## Single Dump (Fast Snapshot)
 Use when app is unstable and may exit soon.
 

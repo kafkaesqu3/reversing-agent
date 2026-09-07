@@ -33,13 +33,6 @@ For Microsoft symbol server with local cache:
 .reload /f
 ```
 
-### Adding Both Servers (dotnet-dump / lldb)
-
-```bash
-# Environment variable for dotnet-dump and SOS
-export DOTNET_SYMBOL_SERVER="https://msdl.microsoft.com/download/symbols;https://symbols.nuget.org/download/symbols"
-```
-
 ### Adding NuGet Symbols in Visual Studio
 
 In Visual Studio: **Tools > Options > Debugging > Symbols**, add:

@@ -268,7 +268,14 @@
         "notes": ""
       },
       "targetServers": ["mcp-windbg"],
-      "adaptation": { "toolRenames": {} },
+      "adaptation": { "toolRenames": {
+        "open_windbg_dump": "open_cdb_dump",
+        "open_windbg_remote": "open_cdb_remote",
+        "close_windbg_dump": "close_cdb_session",
+        "close_windbg_remote": "close_cdb_session",
+        "run_windbg_cmd": "run_cdb_command",
+        "list_windbg_dumps": "list_dumps"
+      } },
       "scanExceptions": [],
       "skills": [
         { "upstream": "dotnet-debugging", "name": "dotnet-debugging", "enabled": true }

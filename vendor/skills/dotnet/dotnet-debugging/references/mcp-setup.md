@@ -1,52 +1,27 @@
 # MCP Setup
 
-> **Quick Ref**: WinDbg MCP server connects Claude to WinDbg | Install via WinDbg MCP GitHub releases | mcp__mcp-windbg__open_windbg_dump to load a dump | Symbols set via .sympath | Verify connection with basic command first
+> **Quick Ref**: mcp-windbg is already installed and launched by this install's installer, not
+> by this skill | Do not install cdb.exe, uv, or the server yourself | Use the windbg pack's
+> windbg-doctor skill to diagnose a broken setup | Verify with a basic run_cdb_command call first
 
-## Prerequisites
-- `uvx` installed and available in PATH.
-- `cdb.exe` installed (from Debugging Tools for Windows).
+## This install manages mcp-windbg's lifecycle -- this skill does not
 
-## Install cdb (Debugging Tools for Windows)
-Preferred non-interactive install:
+`mcp-windbg` 1.2.1 is one of this repository's pinned MCP servers (`re-agent.config.json`,
+`mcpServers[].name == "mcp-windbg"`), installed into a managed Python venv and launched as a
+stdio server by `Install-REAgent.ps1`. Registering it, installing `cdb.exe`, or installing `uv`/
+`uvx` are installer responsibilities, already done before this skill ever runs -- **do not attempt
+any of that from inside a debugging session.** Installing or reconfiguring tools mid-session is
+outside this install's reviewed tool surface, the same reason `re-unpacker`'s upstream package-
+manager bootstrap was removed rather than adapted.
 
-```powershell
-winget install 9PGJGD53TN86 --accept-source-agreements --accept-package-agreements
-```
+## If mcp-windbg tools are failing
 
-Fallback installer path:
-1. Download the Windows SDK installer from Microsoft: `https://developer.microsoft.com/windows/downloads/windows-sdk/`.
-2. Run setup and select only `Debugging Tools for Windows` (other SDK components are optional).
-3. Expected `cdb` paths after install:
-	- `C:/Program Files (x86)/Windows Kits/10/Debuggers/x64/cdb.exe`
-	- `C:/Program Files/Windows Kits/10/Debuggers/x64/cdb.exe`
+Run the `windbg` pack's `windbg-doctor` skill first. It checks platform, `cdb.exe` presence (in
+all the places this host's server actually looks, including the WinDbg Store package path), `uv`,
+the server entry point, and the effective symbol path -- the full diagnostic this file used to
+duplicate with install instructions instead of checks.
 
-## Verify cdb Installation
-Use one of these checks:
+## Validate availability
 
-```powershell
-Get-Command cdb -ErrorAction SilentlyContinue
-```
-
-```powershell
-Test-Path "C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe"
-Test-Path "C:\Program Files\Windows Kits\10\Debuggers\x64\cdb.exe"
-```
-
-## Required Server Command
-Use this launch command for the WinDbg MCP server:
-
-```bash
-uvx --from git+https://github.com/svnscha/mcp-windbg mcp-windbg
-```
-
-## VS Code MCP Configuration
-Add/update your MCP server configuration (for example in user `mcp.json`) so this server is available to the agent.
-
-## Validate Availability
-Before debugging, confirm WinDbg MCP tools are callable in chat (for example, open remote or dump actions succeed).
-
-## Troubleshooting
-- If tools are missing, verify the server entry in `mcp.json`.
-- Restart the chat/session after MCP config changes.
-- Confirm `uvx` is installed and reachable in PATH.
-- Confirm `cdb.exe` is installed and reachable by full path.
+Before debugging, confirm `mcp-windbg` tools are callable by opening a known dump with
+`open_cdb_dump` and issuing one `run_cdb_command` (for example `lm`).
