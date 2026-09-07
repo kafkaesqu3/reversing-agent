@@ -1,6 +1,8 @@
 ---
 name: re-ioc-extraction
-description: Extract and normalize defensive IOCs (domains, IPs, URLs, file hashes, mutexes, registry paths, file paths, user agents) from analyst-provided evidence such as strings output, sandbox logs, network logs, or reverse engineering notes. Use when the user wants IOCs for detection, blocking, hunting, or reporting.
+description: Extract and normalize defensive IOCs (domains, IPs, URLs, file hashes, mutexes, registry paths, file paths, user agents) from analyst-provided evidence such as strings output, sandbox logs, network logs, or reverse engineering notes. Use when the user wants IOCs for detection, blocking, hunting, or reporting. Declares no MCP tools: it works from evidence the analyst already has (or from output pasted from another skill), not by driving a live RE server itself.
+allowed-tools:
+  - Bash
 ---
 
 # re-ioc-extraction

@@ -1,6 +1,8 @@
 ---
 name: re-unpacker
-description: Identify packing/obfuscation indicators and guide a safe, analyst-in-the-loop unpacking workflow to recover a higher-fidelity sample for defensive analysis. Produces an unpacking plan and an unpacking report with traceable evidence.
+description: Identify packing/obfuscation indicators and guide a safe, analyst-in-the-loop unpacking workflow to recover a higher-fidelity sample for defensive analysis. Produces an unpacking plan and an unpacking report with traceable evidence. Declares no MCP tools: it works from static triage output the analyst already has, not by driving a live RE server itself.
+allowed-tools:
+  - Bash
 ---
 
 # re-unpacker
@@ -69,59 +71,31 @@ When available, gather:
 
 ---
 
-## Lean tool bootstrap (optional, but improves success)
-This skill can **check for** and **suggest installing** a lean set of tools. It must:
-- prefer OS package managers when possible
-- avoid long one-liners
-- never install anything without explicit user approval
-- record tool presence/versions as evidence when provided
-- Tool installation/checks are allowed (with approval), but **must never include running the suspicious sample** as part of installation validation.
+## Tool availability on this install (important)
+This repository provides Windows RE tooling exclusively through the pinned MCP servers declared
+in `re-agent.config.json` (x64dbg-x64, x64dbg-x32, binaryninja, pyghidra-mcp, mcp-windbg). It does
+not vendor or install `capa`, `FLOSS`, `YARA`, `upx`, or Detect It Easy (`diec`) -- upstream's
+"lean tool bootstrap" assumed a Linux/macOS CTF-style environment where installing small static
+tools ad hoc is normal, but that is not this install. **Do not install new tools during a
+session.** A skill reaching outside this repo's pinned, reviewed tool surface after setup is the
+exact failure mode the vendoring pipeline exists to prevent -- installing an unreviewed binary
+mid-analysis defeats every guarantee the pinned-commit and adaptation-gate machinery provides.
 
+### Step 0 -- Tool check (safe, read-only)
+Run (or ask the user to run) one check command to see what already happens to be present. This is
+informational only: a missing tool is expected and normal, not a gap to fill by installing it.
 
-### Minimal tool set (lean)
-**Baseline (recommended):**
-- `file`, `strings`, `objdump` (or `readelf`), `sha256sum`/`shasum`, `md5sum`/`md5`
-
-**High-value optional (still lean):**
-- `diec` (Detect It Easy command-line) for packer/signature hints
-- `upx` for known UPX-packed samples (only use `upx -d` if evidence indicates UPX)
-- `floss` for higher-quality strings extraction
-- `capa` for before/after unpack comparison
-
-> References: Detect It Easy provides `diec` CLI; capa and FLOSS are available as standalone releases and/or Python packages. citeturn0search3turn0search9turn0search6
-
-### Step 0 — Tool check (safe)
-Run (or ask the user to run) one check command:
-
-**POSIX shells (Linux/macOS):**
-- `command -v file strings objdump sha256sum shasum md5sum md5 upx diec floss capa yara || true`
+**POSIX shells (Git Bash on this host):**
+- `command -v file strings objdump sha256sum md5sum capa yara upx || true`
 
 **Windows (PowerShell):**
-- `Get-Command file, strings, objdump, sha256sum, upx, diec, floss, capa, yara -ErrorAction SilentlyContinue`
+- `Get-Command file, strings, objdump, sha256sum, capa, yara, upx -ErrorAction SilentlyContinue`
 
-### Step 0b — Suggested installs (only if missing; user must approve)
-Choose the smallest applicable path:
-
-**Ubuntu/Debian (apt):**
-- `sudo apt-get update`
-- `sudo apt-get install -y file binutils coreutils upx-ucl yara`
-
-**Fedora/RHEL-like (dnf):**
-- `sudo dnf install -y file binutils coreutils upx yara`
-
-**macOS (Homebrew):**
-- `brew install file-formula binutils upx yara`
-
-**Python-based tools (when OS packages aren’t available)**
-Use one of:
-- `python3 -m pip install --user flare-capa`  (capa) citeturn0search1turn0search5
-- `python3 -m pip install --user flare-floss` (FLOSS) citeturn0search2turn0search6
-
-**Windows (Chocolatey, if present):**
-- `choco install -y die upx yara`
-(If Chocolatey isn’t available, provide manual install guidance at a high level.)
-
-> NOTE: FLOSS requires a newer Python; if Python is too old, prefer using the FLOSS standalone release instead of pip-installing. citeturn0search2
+If `capa`, `yara`, or `upx` happen to already be present on the host, they may be used as
+**supporting** static context, exactly as `re-ioc-extraction`'s "Optional evidence generation"
+notes describe for capa there. Their absence changes nothing about the plan below: the baseline
+static-triage steps (`file`, `strings`, section/import inspection, hash tools) do not depend on
+them.
 
 ---
 
