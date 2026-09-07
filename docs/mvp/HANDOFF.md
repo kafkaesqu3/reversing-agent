@@ -26,7 +26,7 @@ the tier-2 `verify` blocks, described below.
 ```powershell
 cd Z:\REVERSING_AGENT
 Import-Module Pester -MinimumVersion 5.5.0
-Invoke-Pester -Path tests/ -Output Normal          # expect 314 passed, 0 failed
+Invoke-Pester -Path tests/ -Output Normal          # expect 430 passed, 0 failed
 Invoke-ScriptAnalyzer -Path . -Settings PSScriptAnalyzerSettings.psd1 -Recurse   # expect no output
 ```
 
@@ -43,8 +43,10 @@ Then, against the live host, with x64dbg / x32dbg and Binary Ninja open on a bin
 
 ## What is done
 
-All 16 tasks are implemented: 11 modules under `src/`, the `Install-REAgent.ps1` entry point,
-`tools/mcp_probe.py`, `templates/CLAUDE.md.template`, and `re-agent.config.json` with real pins.
+All 16 MVP tasks are implemented: 12 modules under `src/`, the `Install-REAgent.ps1` entry point,
+`tools/mcp_probe.py`, `tools/Update-VendoredSkill.ps1`, `templates/CLAUDE.md.template`, and
+`re-agent.config.json` with real pins. The skills-vendoring subsystem on top of it is partially
+landed — see "Skills: vendor, adapt, install" below for what is and is not done.
 
 ### The elevated end-to-end run happened (2026-09-05 19:47)
 
@@ -296,8 +298,100 @@ mock seams: `Get-MachineFact`, `Get-AppxInstallLocation`, `Test-FileContainsAsci
 `Get-MachineSymbolPath`, `Get-ScheduledTaskActionText`, `Invoke-Download`, `Test-NetworkReachable`.
 
 Modules depend on each other through the session, not through imports — `Install-REAgent.ps1`
-imports all 11 before any run. Each module's header comment names what it expects. Tests import the
+imports all 12 before any run. Each module's header comment names what it expects. Tests import the
 siblings they need.
 
 `kind` in `re-agent.config.json` selects the install strategy and keeps the dispatcher generic:
 `plugin-inproc`, `venv-stdio`, `venv-http`, `gui-builtin-http`, `gui-plugin-http`.
+
+---
+
+## Skills: vendor, adapt, install
+
+Spec: `docs/superpowers/specs/2026-09-06-skills-vendoring-design.md`.
+Plan and progress: `docs/superpowers/plans/2026-09-06-skills-vendoring.md` and
+`.superpowers/sdd/2026-09-06-skills-vendoring/progress.md`.
+
+### Three paths, and only one of them has a network
+
+| Path | Who runs it | Network | Entry point |
+|---|---|---|---|
+| **Vendor** | a maintainer, rarely | yes | `tools/Update-VendoredSkill.ps1 -Namespace <ns>` |
+| **Adapt** | a human, reviewed | no | git — a second commit on top of the import |
+| **Install** | every installer run | **no** | phase 5 |
+
+Vendoring commits the pristine upstream import as **one** commit and the adaptation as a
+**second** one, so `git log -p` *is* the adaptation record. The installer never fetches: the
+repo is the source of truth at install time, because a phase that needs egress after seal is a
+documented top failure mode.
+
+### Two hashes, and why one would not do
+
+Vendoring means the installed bytes are the **adapted** bytes, which by construction do not
+match upstream. `source.treeSha256` pins the pristine upstream tree and is checked **only at
+vendor time**, by `Update-VendoredSkill.ps1`. The adapted tree in this repo is covered by git,
+not by a second hash — spec §4.1 describes per-file hashes verified on every install run and
+**that half is not implemented**. Do not "fix" the drift check to compare the installed tree
+against `treeSha256`: it would fail permanently while looking correct.
+
+### The catalog is never refreshed by accident
+
+`data/tool-catalog.json` is the *expected* tool surface per server, checked into the repo
+beside the pins it describes. It is what lets the adaptation gate run unattended: three of four
+target servers need a GUI open, and a live-only gate would sit at `not-testable` on almost
+every run — the false-confidence failure this repo already hit once.
+
+A baseline that updates itself to match what it observes cannot fail, so refresh is an explicit
+act: `.\Install-REAgent.ps1 -Attended -UpdateToolCatalog`. An unreachable server leaves its
+existing entry untouched and logs a WARN; a closed GUI must never silently erase a good entry.
+
+The entry for `mcp-windbg` was wrong once (2 tools recorded, 10 advertised) and every decision
+built on it was wrong with it. If a claim about a server's surface matters, check it against
+the catalog and the live server, not against prose.
+
+### The gate
+
+Per skill, over the repo's vendored files:
+
+| id | Needs a server? | Fails when |
+|---|---|---|
+| **G0** | no | frontmatter `name:` ≠ directory name — Claude Code will not load it |
+| **CATALOG** | no | a `targetServers` entry has no catalog entry, so G1 cannot judge it |
+| **G1** | no | a declared `mcp__<server>__<tool>` is absent from the catalog |
+| **G2** | no | an `adaptation.toolRenames` key survives anywhere in the skill's files |
+| **G3** | yes | the live tool list differs from the catalog |
+| **G4** | no | the catalog's recorded pin ≠ the pin in config |
+
+G0–G2 and G4 read only the repo, so they run on **every** verification, including
+`-VerifyOnly` on a host where phase 5 has never written a file, and including a pack that is
+not installed. Only G3 is gated on install state and on `-Attended`. G2 covers the whole
+vendored skill directory, not just `SKILL.md` — a pack can ship six renames and fifteen
+reference files, and the half-adaptation hides in the reference files.
+
+`allowed-tools` is not an invented field. It is Claude Code's real permission mechanism, so the
+declaration both feeds G1 **and** restricts the skill at runtime. A skill that drives a tool it
+does not declare gets no grant *and* passes G1 vacuously.
+
+### Adding a pack
+
+1. Add the entry to `re-agent.config.json` `skills[]` with a 40-hex `source.commit`,
+   `treeSha256: "PIN-ME"`, and `review.reviewedCommit` equal to the commit.
+2. `.\tools\Update-VendoredSkill.ps1 -Namespace <ns>` — it throws with the computed tree hash.
+   Record that under `source.treeSha256` and run it again.
+3. Commit the pristine import on its own.
+4. Adapt: frontmatter `name:` to the directory name, `description:` to name the server it
+   drives, tool references to this host's names, and `allowed-tools` to exactly what it uses.
+   Commit that separately.
+5. **Read every `SKILL.md` by hand.** That is the security control; the scanner is the backstop
+   that catches what a tired reader misses. Work through
+   `docs/mvp/SKILLS_SIGNOFF.md`, then record `reviewedBy` and `reviewedAt`.
+6. `Invoke-Pester -Path tests/` and `.\Install-REAgent.ps1 -VerifyOnly`.
+
+Until step 5 is done, `Install-SkillPack` refuses the pack with "human review gate: no sign-off
+recorded" and `Get-ManualStep` says so in the manifest. That is not a bug to route around.
+
+### What is not done
+
+Plan tasks 18 (packs 6–8), 19 (x64dbg — deferred by decision), 20 (Binary Ninja) and 22 (local
+marketplace manifest) are outstanding. No pack has a recorded human sign-off yet, so no pack
+installs yet.

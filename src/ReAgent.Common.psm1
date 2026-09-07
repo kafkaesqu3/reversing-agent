@@ -320,11 +320,11 @@ function Assert-FileHash {
     .SYNOPSIS
         Enforces trust-on-first-use against a pinned hash.
     .DESCRIPTION
-        Pure: takes hash strings, touches no filesystem. Three callers share
-        it - the release download, the vendored archive, and the adapted-tree
-        drift check - and each needs a DIFFERENT record hint, because handing
-        an operator the wrong config key is the failure this message exists to
-        prevent.
+        Pure: takes hash strings, touches no filesystem. Two callers share it -
+        Get-VerifiedRelease for a server's release asset, and
+        tools\Update-VendoredSkill.ps1 for a skill pack's expanded upstream tree
+        - and each needs a DIFFERENT record hint, because handing an operator
+        the wrong config key is the failure this message exists to prevent.
     .PARAMETER Actual
         The computed hash.
     .PARAMETER Expected
