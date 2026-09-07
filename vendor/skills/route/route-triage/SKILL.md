@@ -1,43 +1,44 @@
 ---
-name: ctf-reverse
-description: Provides reverse engineering techniques for CTF challenges. Use when the main job is to understand how a compiled, obfuscated, packed, or virtualized target works before exploiting or solving it, including binaries, APKs, WASM, firmware, custom VMs, bytecode, game clients, malware-like loaders, and anti-debug or anti-analysis logic. Do not use it when the vulnerability is already understood and the remaining task is exploitation; use pwn instead. Do not use it for pure web workflows, log or disk forensics, or standalone crypto problems unless reversing the implementation is the real blocker.
+name: route-triage
+description: Route a reverse-engineering task to the right tool on this install and apply general binary-native RE technique (static/dynamic triage, anti-analysis, packer/VM/obfuscation patterns) while doing it. Declares no MCP tools: it decides which server or skill (windbg, ghidra, x64dbg-x64/x64dbg-x32, binaryninja, re) to reach for, then hands off. Use at the start of an unfamiliar RE task, before committing to a specific tool.
 license: MIT
-compatibility: Requires filesystem-based agent (Claude Code or similar) with bash, Python 3, and internet access for tool installation.
-allowed-tools: Bash Read Write Edit Glob Grep Task WebFetch WebSearch
-metadata:
-  user-invocable: "false"
+compatibility: Requires filesystem-based agent (Claude Code) with Bash. This install provides RE tooling exclusively through the five pinned MCP servers in re-agent.config.json; no additional tool installation is expected or supported.
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Edit
+  - Glob
+  - Grep
+  - Task
 ---
 
-# CTF Reverse Engineering
+# Reverse-Engineering Triage and Routing
 
-Quick reference for RE challenges. For detailed techniques, see supporting files.
+Quick reference for starting an unfamiliar RE task on this install: decide which real tool to
+reach for, then apply general binary-native technique while using it. For detailed technique
+notes, see the supporting files below.
 
-## Prerequisites
+**Scope note:** this skill is adapted from a CTF competition RE cheat-sheet
+(`ljagiello/ctf-skills`' `ctf-reverse`). Its own sibling skills for pwn/web/crypto/forensics/
+OSINT/AI-ML/malware categories were **not** vendored into this install and do not exist here -
+only this reverse-engineering slice was pulled in. The routing and tool-reference sections below
+were rewritten for this install's real servers (`x64dbg-x64`, `x64dbg-x32`, `binaryninja`,
+`pyghidra-mcp`, `mcp-windbg`); the technique sections and the ~19 reference files still carry
+upstream's original CTF framing and its `radare2`/`IDA`/`GDB`/`Frida`/`angr`/`Qiling` assumptions
+- see `## Limitations` at the end before treating anything in them as directly runnable.
 
-**Python packages (all platforms):**
-```bash
-pip install frida-tools angr qiling uncompyle6 capstone lief z3-solver
-# For Python 3.9+ bytecode: build pycdc from source
-git clone https://github.com/zrax/pycdc && cd pycdc && cmake . && make
-```
+## Tool availability on this install (important)
 
-**Linux (apt):**
-```bash
-apt install gdb radare2 binutils strace ltrace apktool upx
-```
-
-**macOS (Homebrew):**
-```bash
-brew install gdb radare2 binutils apktool upx ghidra
-```
-
-**radare2 plugins:**
-```bash
-r2pm -ci r2ghidra   # Native Ghidra decompiler for radare2
-```
-
-**Manual install:**
-- pwndbg — Linux: [GitHub](https://github.com/pwndbg/pwndbg), macOS: `brew install pwndbg/tap/pwndbg-gdb`
+This repository provides RE tooling exclusively through the five pinned MCP servers declared in
+`re-agent.config.json`: `x64dbg-x64` / `x64dbg-x32` (live Windows dynamic debugging), `binaryninja`
+(GUI-driven static analysis), `pyghidra-mcp` (headless static analysis and decompilation), and
+`mcp-windbg` (crash dump and live process triage). It does not vendor or install `gdb`, `radare2`,
+`Ghidra` (the desktop app or its `analyzeHeadless` CLI), `IDA`, `frida-tools`, `angr`, `qiling`,
+`uncompyle6`, `pycdc`, `capstone`, `lief`, `z3-solver`, or `pwndbg` - upstream's Prerequisites
+section assumed a Linux/macOS CTF-competition environment where installing this stack ad hoc is
+normal, but that is not this install. **Do not install new tools during a session.** Route to the
+skill or server that already exists instead (see `## Routing` below).
 
 ## Additional Resources
 
@@ -62,15 +63,30 @@ r2pm -ci r2ghidra   # Native Ghidra decompiler for radare2
 
 ---
 
-## When to Pivot
+## Routing
 
-- If you already understand the binary and now need heap, ROP, or kernel exploitation, switch to `/ctf-pwn`.
-- If the challenge is really about recovering deleted files, PCAP data, or disk artifacts, switch to `/ctf-forensics`.
-- If the target is a web app and you are only reversing a small client-side helper script, switch to `/ctf-web`.
-- If the binary implements a machine learning model and the challenge is about model attacks or adversarial inputs, switch to `/ctf-ai-ml`.
-- If the reversed binary's core logic is a cryptographic algorithm or math problem, switch to `/ctf-crypto`.
-- If the binary is a real malware sample with C2, packing, or evasion behavior, switch to `/ctf-malware`.
-- If the challenge is a toy VM, encoding puzzle, or pyjail rather than a real binary, switch to `/ctf-misc`.
+Upstream routed to sibling CTF-category skills (`/ctf-pwn`, `/ctf-web`, `/ctf-crypto`,
+`/ctf-forensics`, `/ctf-ai-ml`, `/ctf-misc`, `/ctf-malware`) that were never vendored into this
+install and do not exist here. Route to a real tool or skill on this host instead:
+
+- **Windows crash dump, hang, or live-process triage** -> the `windbg` skills
+  (`windbg-crash-analysis`, `windbg-doctor`), which drive `mcp-windbg`.
+- **Static disassembly, decompilation, or iterative rename/retype of a standalone binary** ->
+  the `ghidra-iterative-re` skill, which drives `pyghidra-mcp`. Binary Ninja (`binaryninja` MCP
+  server) is also available for GUI-driven static analysis; there is no dedicated skill for it
+  yet, so drive its `bn_*` tools directly.
+- **Live x86/x64 dynamic debugging** (breakpoints, stepping, memory/register inspection) ->
+  the `x64dbg-x64` / `x64dbg-x32` MCP servers directly. Both are attended (`requiresHostApp`):
+  x64dbg must already be running with its plugin loaded. There is no dedicated skill for x64dbg
+  yet (deferred; see the project plan's Task 19).
+- **You already have static triage output (file/strings/sections/imports) and need a packing
+  assessment or unpacking plan, or you already have strings/log output and need normalized
+  IOCs** -> the `re` pack's `re-unpacker` or `re-ioc-extraction` skills. Both are evidence-only:
+  they consume output you already produced with one of the tools above; they do not drive a
+  server themselves.
+- **The task turns out to be exploitation (ROP, heap, kernel), a web app, a standalone crypto
+  problem, disk/network forensics, OSINT, or an ML-model attack** -> outside this install's
+  scope. Say so plainly rather than reaching for a CTF-category skill that was never vendored.
 
 ## Problem-Solving Workflow
 
@@ -143,19 +159,10 @@ Two patterns: (1) `transform(flag) == stored_target` — reverse the transform. 
 
 ## Quick Tool Reference
 
-```bash
-# Radare2
-r2 -d ./binary     # Debug mode
-aaa                # Analyze
-afl                # List functions
-pdf @ main         # Disassemble main
-
-# Ghidra (headless)
-analyzeHeadless project/ tmp -import binary -postScript script.py
-
-# IDA
-ida64 binary       # Open in IDA64
-```
+Upstream's Radare2 and IDA command blocks are removed here - neither is a server on this install.
+For static disassembly/decompilation, use the `ghidra-iterative-re` skill's `pyghidra-mcp` tool
+calls (import, decompile, search, rename, retype, comment) instead of a raw `analyzeHeadless`
+invocation; there is no Ghidra desktop or headless CLI installed, only the `pyghidra-mcp` server.
 
 ## Deep-Dive Notes
 
@@ -165,3 +172,22 @@ Use [field-notes.md](field-notes.md) after the first round of triage when you kn
 - Technique notes: anti-debug bypass, VM analysis, x86-64 gotchas, iterative solvers, Unicorn, timing side channels
 - Platform notes: Godot, Roblox, macOS/iOS, embedded firmware, kernel drivers, game engines, Swift, Kotlin, Go, Rust, D
 - Case notes: modern CTF-specific reversing patterns and older classic challenge patterns
+
+
+## Limitations
+
+This is a bounded adaptation, not a line-by-line rewrite of the whole pack. The frontmatter,
+`## Tool availability on this install`, `## Routing`, and `## Quick Tool Reference` sections above
+are adapted for this install's real servers. The remaining sections (`Problem-Solving Workflow`
+through `Common Encryption Patterns`) and every file under `## Additional Resources` (`tools.md`,
+`tools-dynamic.md`, `tools-emulation.md`, `tools-advanced.md`, `tools-advanced-2.md`,
+`anti-analysis.md`, `anti-analysis-ctf.md`, `patterns*.md`, `languages*.md`, `platforms*.md`,
+`field-notes.md`) are vendored as-authored and still describe `radare2`, `IDA`, `GDB`, `Frida`,
+`angr`, `Qiling`, `Triton`, and similar tools this install does not provide. Read them as
+background technique literature - the underlying binary-analysis reasoning (how a custom VM's
+opcode dispatch works, how a timing side channel leaks a comparison, how a packer's stub
+transitions to payload) transfers to this install's real tools even where the exact command does
+not. Map the *intent* onto `pyghidra-mcp` / `binaryninja` / `x64dbg-x64` / `x64dbg-x32` /
+`mcp-windbg` tool calls rather than attempting to run a `radare2` or `IDA` command verbatim -
+`allowed-tools` above does not grant this skill any MCP tool, so it cannot invoke one directly in
+any case.
