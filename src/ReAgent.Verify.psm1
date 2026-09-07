@@ -697,14 +697,36 @@ function Get-ServerProbeContext {
     }
 }
 
+function Get-SkillPackDirectory {
+    <#
+    .SYNOPSIS
+        The repo path of one vendored skill.
+    .DESCRIPTION
+        Points at the repo's vendored tree rather than the installed copy under
+        agentRoot, so the adaptation gate runs under -VerifyOnly on a host where
+        phase 5 has never written a file.
+    .PARAMETER RepoRoot
+        Repository root holding vendor\skills.
+    .PARAMETER Namespace
+        The pack's namespace.
+    .PARAMETER SkillName
+        The skill's install directory name.
+    .EXAMPLE
+        Get-SkillPackDirectory -RepoRoot $r -Namespace 'windbg' -SkillName 'windbg-crash'
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$RepoRoot,
+        [Parameter(Mandatory)][string]$Namespace,
+        [Parameter(Mandatory)][string]$SkillName
+    )
+    return (Join-Path $RepoRoot "vendor\skills\$Namespace\$SkillName")
+}
+
 function Get-SkillPackFile {
     <#
     .SYNOPSIS
         Reads one skill's vendored SKILL.md, or throws naming the missing path.
-    .DESCRIPTION
-        Reads straight from the repo's vendored tree rather than the installed
-        copy under agentRoot, so the adaptation gate runs under -VerifyOnly on a
-        host where phase 5 has never written a file.
     .PARAMETER RepoRoot
         Repository root holding vendor\skills.
     .PARAMETER Namespace
@@ -720,7 +742,8 @@ function Get-SkillPackFile {
         [Parameter(Mandatory)][string]$Namespace,
         [Parameter(Mandatory)][string]$SkillName
     )
-    $path = Join-Path $RepoRoot "vendor\skills\$Namespace\$SkillName\SKILL.md"
+    $path = Join-Path (Get-SkillPackDirectory -RepoRoot $RepoRoot -Namespace $Namespace `
+            -SkillName $SkillName) 'SKILL.md'
     if (-not (Test-Path -LiteralPath $path)) {
         throw "Vendored skill file '$path' is missing."
     }
@@ -766,6 +789,11 @@ function Test-SkillAdaptationCheck {
         A pack whose skills declare no MCP tools at all passes with "nothing to
         check": it is correctly adapted by definition, and not-testable here
         would be noise the operator learns to ignore.
+
+        G2 runs over the whole vendored skill directory, not only SKILL.md: a
+        pack can carry six tool renames and fifteen reference files, and a
+        half-adaptation left in one of those reference files is exactly the
+        failure G2 exists to catch.
     .PARAMETER Pack
         The pack's config entry.
     .PARAMETER Catalog
@@ -798,6 +826,9 @@ function Test-SkillAdaptationCheck {
         $toolCount += @(Get-SkillToolReference -Frontmatter (Get-SkillFrontmatter -Text $text)).Count
         $findings += Test-SkillAdaptation -Text $text -DirectoryName $skill.name -Catalog $Catalog `
             -TargetServers @($Pack.targetServers) -ToolRenames $renames
+        $findings += Test-SkillTreeRename -ToolRenames $renames -Directory (
+            Get-SkillPackDirectory -RepoRoot $RepoRoot -Namespace $Pack.namespace `
+                -SkillName $skill.name)
     }
 
     if ($findings.Count -gt 0) {
@@ -1016,56 +1047,101 @@ function Test-SkillDriftCheck {
         -Detail $detail
 }
 
-function Get-InstalledPackCheck {
+function Get-PackAdaptationCheck {
     <#
     .SYNOPSIS
-        Runs one installed pack's adaptation and drift checks, each isolated by try/catch.
+        Runs one pack's adaptation check, whether or not the pack is installed.
     .DESCRIPTION
-        Split out of Get-SkillCheck so one broken pack's two checks cannot take
-        the rest of the suite down, and so Get-SkillCheck's own guard cascade
-        stays readable at a glance.
+        G0, CATALOG, G1 and G2 read the repo's vendored files and the checked-in
+        catalog and nothing else, so install state has no bearing on whether
+        they can run - and gating them behind it would switch the centrepiece
+        control off in exactly the states where it matters most: a pack held at
+        the human review gate, or a host where phase 5 has never run at all.
+        Design spec section 10.2 requires this to hold under -VerifyOnly.
+
+        Wrapped in its own try/catch so one pack with an unreadable vendored
+        tree cannot take the rest of the suite down.
+    .PARAMETER Pack
+        The pack's config entry.
+    .PARAMETER Catalog
+        From Get-ToolCatalog.
+    .PARAMETER RepoRoot
+        Repository root holding vendor\skills.
+    .OUTPUTS
+        The pack's "<ns> skill adaptation" check.
+    .EXAMPLE
+        Get-PackAdaptationCheck -Pack $p -Catalog $c -RepoRoot $root
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Pack,
+        [Parameter(Mandatory)][object]$Catalog,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$RepoRoot
+    )
+
+    try {
+        return Test-SkillAdaptationCheck -Pack $Pack -Catalog $Catalog -RepoRoot $RepoRoot
+    } catch {
+        return New-CheckResult -Name "$($Pack.namespace) skill adaptation" `
+            -Status 'not-testable' -Detail "The check could not run: $($_.Exception.Message)"
+    }
+}
+
+function Get-PackDriftCheck {
+    <#
+    .SYNOPSIS
+        Runs one pack's drift check, or says why install state rules it out.
+    .DESCRIPTION
+        Unlike the adaptation gate, drift is a statement about what is installed
+        here, so it keeps the guard cascade Get-ServerCheck uses: a pack with no
+        manifest record is unknown rather than uninstalled, and a pack the last
+        run did not install is not-testable with its recorded reason.
     .PARAMETER Pack
         The pack's config entry.
     .PARAMETER Config
         The parsed configuration object.
     .PARAMETER Catalog
         From Get-ToolCatalog.
-    .PARAMETER RepoRoot
-        Repository root holding vendor\skills.
+    .PARAMETER SkillResults
+        Results from Install-AllSkill, or replayed from the manifest.
     .PARAMETER Inventory
         The host inventory, for a stdio target server's live launch command.
     .PARAMETER Attended
         Whether the operator has GUI host apps open.
     .OUTPUTS
-        [array] The pack's "<ns> skill adaptation" and "<ns> skill drift" checks.
+        The pack's "<ns> skill drift" check.
     .EXAMPLE
-        Get-InstalledPackCheck -Pack $p -Config $cfg -Catalog $c -RepoRoot $root
+        Get-PackDriftCheck -Pack $p -Config $cfg -Catalog $c -SkillResults $r
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][object]$Pack,
         [Parameter(Mandatory)][object]$Config,
         [Parameter(Mandatory)][object]$Catalog,
-        [Parameter(Mandatory)][AllowEmptyString()][string]$RepoRoot,
+        [Parameter(Mandatory)][AllowEmptyCollection()][array]$SkillResults,
         [AllowNull()][object]$Inventory = $null,
         [switch]$Attended
     )
 
-    $checks = @()
-    try {
-        $checks += Test-SkillAdaptationCheck -Pack $Pack -Catalog $Catalog -RepoRoot $RepoRoot
-    } catch {
-        $checks += New-CheckResult -Name "$($Pack.namespace) skill adaptation" `
-            -Status 'not-testable' -Detail "The check could not run: $($_.Exception.Message)"
+    $name = "$($Pack.namespace) skill drift"
+    $result = $SkillResults | Where-Object { $_.Namespace -eq $Pack.namespace } |
+        Select-Object -First 1
+    if (-not $result) {
+        return New-CheckResult -Name $name -Status 'not-testable' -Detail (
+            'Install state unknown - no manifest entry for it. Run the installer ' +
+            'without -VerifyOnly, then verify again.')
+    }
+    if (-not $result.Installed) {
+        return New-CheckResult -Name $name -Status 'not-testable' `
+            -Detail "Not installed on this host: $($result.Reason)"
     }
     try {
-        $checks += Test-SkillDriftCheck -Pack $Pack -Config $Config -Catalog $Catalog `
+        return Test-SkillDriftCheck -Pack $Pack -Config $Config -Catalog $Catalog `
             -Inventory $Inventory -Attended:$Attended
     } catch {
-        $checks += New-CheckResult -Name "$($Pack.namespace) skill drift" `
-            -Status 'not-testable' -Detail "The check could not run: $($_.Exception.Message)"
+        return New-CheckResult -Name $name -Status 'not-testable' `
+            -Detail "The check could not run: $($_.Exception.Message)"
     }
-    return $checks
 }
 
 function Get-SkillCheck {
@@ -1073,16 +1149,14 @@ function Get-SkillCheck {
     .SYNOPSIS
         Builds the adaptation and drift verification checks for every configured skill pack.
     .DESCRIPTION
-        Mirrors Get-ServerCheck's guard cascade: a pack with no manifest record
-        is unknown, not uninstalled; a pack the last run marked not installed
-        is not-testable with its recorded reason. Only an installed pack's
-        vendored files are actually read, via Get-InstalledPackCheck.
-
-        G0-G2 and G4 need no server at all - they read the repo's vendored
-        files and the checked-in catalog directly, so a bad adaptation fails
-        verification even under -VerifyOnly on a host where phase 5 has never
-        run. G3's live half is gated per target server inside
-        Test-SkillDriftCheck.
+        Each pack yields two checks with deliberately different gating. The
+        adaptation check always runs: G0-G2 and G4 read the repo's vendored
+        files and the checked-in catalog and need no server, so a bad adaptation
+        fails verification even under -VerifyOnly on a host where phase 5 has
+        never run. The drift check keeps Get-ServerCheck's guard cascade,
+        because drift is a claim about what is installed here: a pack with no
+        manifest record is unknown, not uninstalled. G3's live half is gated per
+        target server inside Test-SkillDriftCheck.
     .PARAMETER Config
         The parsed configuration object.
     .PARAMETER SkillResults
@@ -1116,22 +1190,9 @@ function Get-SkillCheck {
 
     $checks = @()
     foreach ($pack in $Config.skills) {
-        $result = $SkillResults | Where-Object { $_.Namespace -eq $pack.namespace } |
-            Select-Object -First 1
-        if (-not $result) {
-            $checks += New-CheckResult -Name "$($pack.namespace) skill adaptation" `
-                -Status 'not-testable' -Detail (
-                    'Install state unknown - no manifest entry for it. Run the installer ' +
-                    'without -VerifyOnly, then verify again.')
-            continue
-        }
-        if (-not $result.Installed) {
-            $checks += New-CheckResult -Name "$($pack.namespace) skill adaptation" `
-                -Status 'not-testable' -Detail "Not installed on this host: $($result.Reason)"
-            continue
-        }
-        $checks += Get-InstalledPackCheck -Pack $pack -Config $Config -Catalog $catalog `
-            -RepoRoot $RepoRoot -Inventory $Inventory -Attended:$Attended
+        $checks += Get-PackAdaptationCheck -Pack $pack -Catalog $catalog -RepoRoot $RepoRoot
+        $checks += Get-PackDriftCheck -Pack $pack -Config $Config -Catalog $catalog `
+            -SkillResults $SkillResults -Inventory $Inventory -Attended:$Attended
     }
     return $checks
 }
@@ -1348,7 +1409,8 @@ Export-ModuleMember -Function New-CheckResult, Invoke-McpProbe, Test-ClaudeCli, 
     Test-ClaudeMcpList, Test-GeneratedConfig, Test-ServerNotTestable, `
     Get-ProbeScriptPath, Test-PyghidraLive, Test-WindbgLive, Invoke-Verification, `
     Test-HttpServerLive, Get-HostAppHint, Get-ProbeInterpreter, Get-ServerCheck, `
-    Get-ServerProbeContext, Get-SkillPackFile, Merge-CheckStatus, `
+    Get-ServerProbeContext, Get-SkillPackDirectory, Get-SkillPackFile, Merge-CheckStatus, `
     Test-SkillAdaptationCheck, Test-ToolCatalogPin, Test-ToolCatalogLive, `
-    Get-SkillDriftLiveCheck, Test-SkillDriftCheck, Get-InstalledPackCheck, Get-SkillCheck, `
+    Get-SkillDriftLiveCheck, Test-SkillDriftCheck, Get-PackAdaptationCheck, `
+    Get-PackDriftCheck, Get-SkillCheck, `
     ConvertFrom-CatalogServerMap, Update-CatalogServerEntry, Save-ToolCatalog

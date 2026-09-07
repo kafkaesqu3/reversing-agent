@@ -647,20 +647,22 @@ Describe 'Get-SkillCheck' {
         $c.Detail | Should -BeLike '*nothing to check*'
     }
 
-    It 'reports a pack with no manifest record as unknown, not as uninstalled' {
+    It 'reports a pack with no manifest record as drift-unknown, not as uninstalled' {
         $repo = Join-Path $TestDrive 'gsc-unknown'
+        New-VendoredSkillFile -Root $repo -Namespace 'ghidra' -SkillName 'ghidra-test'
         $cfg = [PSCustomObject]@{
             mcpServers = @([PSCustomObject]@{ name = 'pyghidra-mcp' })
             skills     = @(New-SkillPackFixture)
         }
         $checks = @(Get-SkillCheck -Config $cfg -SkillResults @() -RepoRoot $repo)
-        $c = $checks | Where-Object { $_.Name -eq 'ghidra skill adaptation' }
+        $c = $checks | Where-Object { $_.Name -eq 'ghidra skill drift' }
         $c.Status | Should -Be 'not-testable'
         $c.Detail | Should -BeLike '*no manifest entry*'
     }
 
-    It 'reports a not-installed pack as not-testable with its recorded reason' {
+    It 'reports a not-installed pack as drift-not-testable with its recorded reason' {
         $repo = Join-Path $TestDrive 'gsc-notinstalled'
+        New-VendoredSkillFile -Root $repo -Namespace 'ghidra' -SkillName 'ghidra-test'
         $cfg = [PSCustomObject]@{
             mcpServers = @([PSCustomObject]@{ name = 'pyghidra-mcp' })
             skills     = @(New-SkillPackFixture)
@@ -668,15 +670,70 @@ Describe 'Get-SkillCheck' {
         $results = @([PSCustomObject]@{ Namespace = 'ghidra'; Installed = $false
                 Reason = 'disabled in re-agent.config.json' })
         $checks = @(Get-SkillCheck -Config $cfg -SkillResults $results -RepoRoot $repo)
-        $c = $checks | Where-Object { $_.Name -eq 'ghidra skill adaptation' }
+        $c = $checks | Where-Object { $_.Name -eq 'ghidra skill drift' }
         $c.Status | Should -Be 'not-testable'
         $c.Detail | Should -BeLike '*disabled in re-agent.config.json*'
+    }
+
+    It 'still runs the adaptation gate on a pack the last run did not install' {
+        # Design spec 10.2: G0-G2 and G4 are static checks over the repo's vendored files
+        # and the checked-in catalog, so a bad adaptation must fail verification even on a
+        # host where phase 5 has never run. Gating them behind install state turns the
+        # centrepiece control off in exactly the state this repo ships in - every pack
+        # blocked at the human review gate.
+        $repo = Join-Path $TestDrive 'gsc-uninstalled-gate'
+        New-VendoredSkillFile -Root $repo -Namespace 'ghidra' -SkillName 'ghidra-test' `
+            -Tools @('mcp__pyghidra-mcp__not_a_real_tool')
+        $cfg = [PSCustomObject]@{
+            mcpServers = @([PSCustomObject]@{ name = 'pyghidra-mcp' })
+            skills     = @(New-SkillPackFixture)
+        }
+        $results = @([PSCustomObject]@{ Namespace = 'ghidra'; Installed = $false
+                Reason = 'human review gate: no sign-off recorded' })
+        $checks = @(Get-SkillCheck -Config $cfg -SkillResults $results -RepoRoot $repo)
+        $c = $checks | Where-Object { $_.Name -eq 'ghidra skill adaptation' }
+        $c.Status | Should -Be 'fail'
+        $c.Detail | Should -BeLike '*does not advertise*'
+    }
+
+    It 'still runs the adaptation gate on a pack with no manifest record at all' {
+        $repo = Join-Path $TestDrive 'gsc-unknown-gate'
+        New-VendoredSkillFile -Root $repo -Namespace 'ghidra' -SkillName 'ghidra-test' `
+            -Tools @('mcp__pyghidra-mcp__not_a_real_tool')
+        $cfg = [PSCustomObject]@{
+            mcpServers = @([PSCustomObject]@{ name = 'pyghidra-mcp' })
+            skills     = @(New-SkillPackFixture)
+        }
+        $checks = @(Get-SkillCheck -Config $cfg -SkillResults @() -RepoRoot $repo)
+        $c = $checks | Where-Object { $_.Name -eq 'ghidra skill adaptation' }
+        $c.Status | Should -Be 'fail'
     }
 
     It 'returns nothing when the config declares no skills key at all' {
         $cfg = [PSCustomObject]@{ mcpServers = @() }
         @(Get-SkillCheck -Config $cfg -SkillResults @() -RepoRoot $TestDrive).Count |
             Should -Be 0
+    }
+}
+
+Describe 'Test-SkillAdaptationCheck' {
+    It 'fails when an upstream tool name survives in a reference file' {
+        # The gate reads the whole vendored skill directory, not only SKILL.md: the
+        # classic half-adaptation renames allowed-tools and leaves the prose behind.
+        $repo = Join-Path $TestDrive 'tsac-reference'
+        New-VendoredSkillFile -Root $repo -Namespace 'dotnet' -SkillName 'dotnet-test' `
+            -Tools @('mcp__mcp-windbg__run_cdb_command')
+        $refs = Join-Path $repo 'vendor\skills\dotnet\dotnet-test\references'
+        $null = New-Item -ItemType Directory -Path $refs -Force
+        'Then call run_windbg_cmd with .sympath.' |
+            Set-Content -LiteralPath (Join-Path $refs 'symbols.md')
+        $pack = New-SkillPackFixture -Namespace 'dotnet' -TargetServers @('mcp-windbg') `
+            -SkillName 'dotnet-test'
+        $pack.adaptation = [PSCustomObject]@{
+            toolRenames = [PSCustomObject]@{ 'run_windbg_cmd' = 'run_cdb_command' } }
+        $c = Test-SkillAdaptationCheck -Pack $pack -Catalog (Get-ToolCatalog) -RepoRoot $repo
+        $c.Status | Should -Be 'fail'
+        $c.Detail | Should -BeLike '*symbols.md*'
     }
 }
 
