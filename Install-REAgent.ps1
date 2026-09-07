@@ -22,10 +22,16 @@
     Run only verification and manifest (phases 6 and 7).
 .PARAMETER Attended
     Include tier-2 verification, which needs x64dbg and Binary Ninja open.
+.PARAMETER UpdateToolCatalog
+    Refresh data/tool-catalog.json from every reachable server. Never runs on
+    its own (S9): a baseline that updates itself to match what it observes
+    cannot fail. An unreachable server's existing entry is left untouched.
 .EXAMPLE
     .\Install-REAgent.ps1
 .EXAMPLE
     .\Install-REAgent.ps1 -VerifyOnly -Attended
+.EXAMPLE
+    .\Install-REAgent.ps1 -Attended -UpdateToolCatalog
 .NOTES
     RUN ONLY ON A VIRTUAL MACHINE. Requires Administrator.
     Spec: docs/mvp/MVP_SPEC.md - Findings: docs/mvp/MVP_FINDINGS.md
@@ -36,7 +42,8 @@ param(
     [int[]] $Phases,
     [switch]$Force,
     [switch]$VerifyOnly,
-    [switch]$Attended
+    [switch]$Attended,
+    [switch]$UpdateToolCatalog
 )
 
 Set-StrictMode -Version Latest
@@ -124,8 +131,12 @@ $phaseTable = @(
                 $c.ServerResults = @(Get-RecordedServerResult -Config $c.Config `
                         -Inventory $c.Inventory)
             }
+            if (-not $c.SkillResults -or $c.SkillResults.Count -eq 0) {
+                $c.SkillResults = @(Get-RecordedSkillResult -Config $c.Config)
+            }
             $c.VerifyResults = Invoke-Verification -Config $c.Config `
-                -ServerResults $c.ServerResults -Inventory $c.Inventory -Attended:$c.Attended
+                -ServerResults $c.ServerResults -SkillResults $c.SkillResults `
+                -Inventory $c.Inventory -RepoRoot $PSScriptRoot -Attended:$c.Attended
         }
     }
     @{ Id   = 7; Name = 'Manifest'
@@ -152,6 +163,11 @@ foreach ($p in $selected) {
 
 foreach ($w in @(Get-PreflightWarning -Inventory $context.Inventory)) {
     Write-ReAgentLog -Level WARN -Message $w
+}
+
+if ($UpdateToolCatalog) {
+    Save-ToolCatalog -Config $config -Inventory $context.Inventory -Attended:$Attended `
+        -Confirm:$false
 }
 
 if ($transcribing) { Stop-Transcript | Out-Null }

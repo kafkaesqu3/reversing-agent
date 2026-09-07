@@ -4,8 +4,42 @@ BeforeAll {
     Import-Module "$PSScriptRoot/../src/ReAgent.Config.psm1" -Force
     Import-Module "$PSScriptRoot/../src/ReAgent.Symbols.psm1" -Force
     Import-Module "$PSScriptRoot/../src/ReAgent.Servers.psm1" -Force
+    Import-Module "$PSScriptRoot/../src/ReAgent.Skills.psm1" -Force
     Import-Module "$PSScriptRoot/../src/ReAgent.Verify.psm1" -Force
     Import-Module "$PSScriptRoot/../src/ReAgent.Manifest.psm1" -Force
+
+    function New-SkillPackFixture {
+        # Pure factory: builds and returns an in-memory PSCustomObject, writes nothing.
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+            'PSUseShouldProcessForStateChangingFunctions', '')]
+        param($Namespace = 'ghidra', $TargetServers = @('pyghidra-mcp'),
+              $SkillName = 'ghidra-test')
+        [PSCustomObject]@{
+            namespace      = $Namespace
+            enabled        = $true
+            targetServers  = $TargetServers
+            adaptation     = [PSCustomObject]@{ toolRenames = [PSCustomObject]@{} }
+            scanExceptions = @()
+            skills         = @([PSCustomObject]@{ upstream = 'x'; name = $SkillName
+                    enabled = $true })
+        }
+    }
+
+    function New-VendoredSkillFile {
+        # Test fixture: writes only under $TestDrive, never touches real system state.
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+            'PSUseShouldProcessForStateChangingFunctions', '')]
+        param($Root, $Namespace, $SkillName, $Tools = @(), $Body = 'Test skill body.')
+        $d = Join-Path $Root "vendor\skills\$Namespace\$SkillName"
+        $null = New-Item -ItemType Directory -Path $d -Force
+        $lines = @('---', "name: $SkillName", 'description: Test skill.')
+        if ($Tools.Count -gt 0) {
+            $lines += 'allowed-tools:'
+            foreach ($t in $Tools) { $lines += "  - $t" }
+        }
+        $lines += @('---', $Body)
+        ($lines -join "`n") | Set-Content -LiteralPath (Join-Path $d 'SKILL.md')
+    }
 }
 
 Describe 'New-CheckResult' {
@@ -579,5 +613,231 @@ Describe 'Test-PyghidraLive against the configured test binary' {
         }
         (Test-PyghidraLive -Server $Script:TbSrv -Config $Script:TbCfg).Status | Should -Be 'pass'
         $Script:TbBinary | Should -Be '/GoogleUpdate.exe-4dd864'
+    }
+}
+
+Describe 'Get-SkillCheck' {
+    It 'fails a pack whose skill declares a tool the catalog does not have' {
+        # names the server, the tool and the advertised list, so the fix is obvious
+        $repo = Join-Path $TestDrive 'gsc-badtool'
+        New-VendoredSkillFile -Root $repo -Namespace 'ghidra' -SkillName 'ghidra-test' `
+            -Tools @('mcp__pyghidra-mcp__not_a_real_tool')
+        $cfg = [PSCustomObject]@{
+            mcpServers = @([PSCustomObject]@{ name = 'pyghidra-mcp' })
+            skills     = @(New-SkillPackFixture)
+        }
+        $results = @([PSCustomObject]@{ Namespace = 'ghidra'; Installed = $true; Reason = '' })
+        $checks = @(Get-SkillCheck -Config $cfg -SkillResults $results -RepoRoot $repo)
+        $c = $checks | Where-Object { $_.Name -eq 'ghidra skill adaptation' }
+        $c.Status | Should -Be 'fail'
+        $c.Detail | Should -BeLike '*does not advertise*'
+    }
+
+    It 'passes a pack whose skills declare no MCP tools' {
+        $repo = Join-Path $TestDrive 'gsc-notools'
+        New-VendoredSkillFile -Root $repo -Namespace 'ghidra' -SkillName 'ghidra-test'
+        $cfg = [PSCustomObject]@{
+            mcpServers = @([PSCustomObject]@{ name = 'pyghidra-mcp' })
+            skills     = @(New-SkillPackFixture)
+        }
+        $results = @([PSCustomObject]@{ Namespace = 'ghidra'; Installed = $true; Reason = '' })
+        $checks = @(Get-SkillCheck -Config $cfg -SkillResults $results -RepoRoot $repo)
+        $c = $checks | Where-Object { $_.Name -eq 'ghidra skill adaptation' }
+        $c.Status | Should -Be 'pass'
+        $c.Detail | Should -BeLike '*nothing to check*'
+    }
+
+    It 'reports a pack with no manifest record as unknown, not as uninstalled' {
+        $repo = Join-Path $TestDrive 'gsc-unknown'
+        $cfg = [PSCustomObject]@{
+            mcpServers = @([PSCustomObject]@{ name = 'pyghidra-mcp' })
+            skills     = @(New-SkillPackFixture)
+        }
+        $checks = @(Get-SkillCheck -Config $cfg -SkillResults @() -RepoRoot $repo)
+        $c = $checks | Where-Object { $_.Name -eq 'ghidra skill adaptation' }
+        $c.Status | Should -Be 'not-testable'
+        $c.Detail | Should -BeLike '*no manifest entry*'
+    }
+
+    It 'reports a not-installed pack as not-testable with its recorded reason' {
+        $repo = Join-Path $TestDrive 'gsc-notinstalled'
+        $cfg = [PSCustomObject]@{
+            mcpServers = @([PSCustomObject]@{ name = 'pyghidra-mcp' })
+            skills     = @(New-SkillPackFixture)
+        }
+        $results = @([PSCustomObject]@{ Namespace = 'ghidra'; Installed = $false
+                Reason = 'disabled in re-agent.config.json' })
+        $checks = @(Get-SkillCheck -Config $cfg -SkillResults $results -RepoRoot $repo)
+        $c = $checks | Where-Object { $_.Name -eq 'ghidra skill adaptation' }
+        $c.Status | Should -Be 'not-testable'
+        $c.Detail | Should -BeLike '*disabled in re-agent.config.json*'
+    }
+
+    It 'returns nothing when the config declares no skills key at all' {
+        $cfg = [PSCustomObject]@{ mcpServers = @() }
+        @(Get-SkillCheck -Config $cfg -SkillResults @() -RepoRoot $TestDrive).Count |
+            Should -Be 0
+    }
+}
+
+Describe 'Test-ToolCatalogPin' {
+    BeforeAll { $Script:PinCat = Get-ToolCatalog }
+
+    It 'passes when the catalog pin matches the current config pin' {
+        (Test-ToolCatalogPin -Catalog $Script:PinCat -Server 'pyghidra-mcp' `
+                -CurrentPin '0.2.5').Status | Should -Be 'pass'
+    }
+
+    It 'fails when config has moved on from the recorded pin' {
+        $c = Test-ToolCatalogPin -Catalog $Script:PinCat -Server 'pyghidra-mcp' `
+            -CurrentPin '0.2.6'
+        $c.Status | Should -Be 'fail'
+        $c.Detail | Should -BeLike '*0.2.6*'
+    }
+
+    It 'is not-testable with the refresh command when the catalog has no entry' {
+        $c = Test-ToolCatalogPin -Catalog $Script:PinCat -Server 'binaryninja' `
+            -CurrentPin '6.0.10601'
+        $c.Status | Should -Be 'not-testable'
+        $c.Detail | Should -BeLike '*-UpdateToolCatalog*'
+    }
+}
+
+Describe 'Test-ToolCatalogLive' {
+    BeforeAll { $Script:LiveCat = Get-ToolCatalog }
+
+    It 'reports drift with the count delta and the names that changed' {
+        Mock -ModuleName ReAgent.Verify Invoke-McpProbe {
+            [PSCustomObject]@{ ok = $true; toolCount = 2
+                tools = @('decompile_function', 'brand_new') }
+        }
+        $c = Test-ToolCatalogLive -PythonPath 'py.exe' `
+            -ProbeArgs @('--transport=http', '--url=http://127.0.0.1:8762/mcp') `
+            -Server 'pyghidra-mcp' -Catalog $Script:LiveCat
+        $c.Status | Should -Be 'fail'
+        $c.Detail | Should -BeLike '*brand_new*'
+    }
+
+    It 'is not-testable rather than fail when the server is unreachable' {
+        # An unreachable attended server is a closed GUI, not an adaptation defect.
+        Mock -ModuleName ReAgent.Verify Invoke-McpProbe {
+            [PSCustomObject]@{ ok = $false; error = 'ConnectError' }
+        }
+        $c = Test-ToolCatalogLive -PythonPath 'py.exe' `
+            -ProbeArgs @('--transport=http', '--url=http://127.0.0.1:8762/mcp') `
+            -Server 'pyghidra-mcp' -Catalog $Script:LiveCat
+        $c.Status | Should -Be 'not-testable'
+    }
+
+    It 'passes when the live tool list matches the catalog exactly' {
+        Mock -ModuleName ReAgent.Verify Invoke-McpProbe {
+            [PSCustomObject]@{ ok = $true; toolCount = $Script:LiveCat.servers.'mcp-windbg'.toolCount
+                tools = @($Script:LiveCat.servers.'mcp-windbg'.tools) }
+        }
+        $c = Test-ToolCatalogLive -PythonPath 'py.exe' -ProbeArgs @('--transport=stdio') `
+            -Server 'mcp-windbg' -Catalog $Script:LiveCat
+        $c.Status | Should -Be 'pass'
+    }
+}
+
+Describe 'Test-SkillDriftCheck' {
+    It 'fails when the config pin has moved on from the catalog, with no server needed' {
+        $cat = Get-ToolCatalog
+        $cfg = [PSCustomObject]@{
+            mcpServers = @([PSCustomObject]@{ name = 'pyghidra-mcp'; verifyTier = 'unattended'
+                    transport = 'http'; bind = '127.0.0.1'; port = 8762; path = '/mcp'
+                    source = [PSCustomObject]@{ pin = '0.2.6' }
+                })
+        }
+        $pack = New-SkillPackFixture -Namespace 'ghidra' -TargetServers @('pyghidra-mcp')
+        $c = Test-SkillDriftCheck -Pack $pack -Config $cfg -Catalog $cat
+        $c.Name | Should -Be 'ghidra skill drift'
+        $c.Status | Should -Be 'fail'
+        $c.Detail | Should -BeLike '*0.2.6*'
+    }
+
+    It 'is not-testable when an attended target server has no -Attended run behind it' {
+        $cat = Get-ToolCatalog
+        $cfg = [PSCustomObject]@{
+            mcpServers = @([PSCustomObject]@{ name = 'binaryninja'; verifyTier = 'attended'
+                    transport = 'http'; bind = '127.0.0.1'; port = 24642; path = '/mcp'
+                    source = [PSCustomObject]@{ pin = '6.0.10601' }
+                })
+        }
+        $pack = New-SkillPackFixture -Namespace 'bn' -TargetServers @('binaryninja')
+        $c = Test-SkillDriftCheck -Pack $pack -Config $cfg -Catalog $cat
+        $c.Status | Should -Be 'not-testable'
+    }
+}
+
+Describe 'Save-ToolCatalog' {
+    BeforeAll {
+        function New-CatalogProbeConfig {
+            # Pure factory: builds and returns an in-memory PSCustomObject, writes nothing.
+            [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+                'PSUseShouldProcessForStateChangingFunctions', '')]
+            param($ToolRoot)
+            [PSCustomObject]@{
+                mcpServers = @([PSCustomObject]@{
+                        name = 'pyghidra-mcp'; enabled = $true; verifyTier = 'unattended'
+                        transport = 'http'; bind = '127.0.0.1'; port = 8762; path = '/mcp'
+                        source = [PSCustomObject]@{ pin = '0.2.6' }
+                    })
+                paths      = [PSCustomObject]@{ toolRoot = $ToolRoot }
+            }
+        }
+    }
+
+    It 'leaves an unreachable server entry untouched rather than erasing it' {
+        # A closed GUI must never silently wipe a good catalog entry.
+        $path = Join-Path $TestDrive 'stc-untouched.json'
+        $before = [ordered]@{
+            capturedAt = '2026-01-01T00:00:00.0000000Z'; capturedBy = 'previous-run'
+            servers    = [ordered]@{
+                'pyghidra-mcp' = [ordered]@{ pin = '0.2.5'; toolCount = 20
+                    tools = @('decompile_function') }
+            }
+        }
+        ($before | ConvertTo-Json -Depth 8) | Set-Content -LiteralPath $path
+
+        # No server venv exists under this ToolRoot, so the probe cannot even
+        # start - the same "unreachable" outcome a closed GUI produces.
+        $noServerRoot = Join-Path $TestDrive 'stc-noserver'
+        Save-ToolCatalog -Config (New-CatalogProbeConfig -ToolRoot $noServerRoot) -Path $path `
+            -Confirm:$false | Out-Null
+
+        $after = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+        $after.servers.'pyghidra-mcp'.pin | Should -Be '0.2.5'
+        $after.servers.'pyghidra-mcp'.tools | Should -Contain 'decompile_function'
+    }
+
+    It 'merges a reachable server''s live tools into the catalog' {
+        # Get-ProbeInterpreter needs a real interpreter file to find before the
+        # mocked Invoke-McpProbe is ever reached.
+        $toolRoot = Join-Path $TestDrive 'stc-merge-root'
+        $venvScripts = Join-Path $toolRoot 'mcp\venvs\pyghidra-mcp\Scripts'
+        $null = New-Item -ItemType Directory -Path $venvScripts -Force
+        $null = New-Item -ItemType File -Path (Join-Path $venvScripts 'python.exe') -Force
+
+        Mock -ModuleName ReAgent.Verify Invoke-McpProbe {
+            [PSCustomObject]@{ ok = $true; toolCount = 3
+                tools = @('a', 'b', 'c') }
+        }
+        $path = Join-Path $TestDrive 'stc-merge.json'
+        Save-ToolCatalog -Config (New-CatalogProbeConfig -ToolRoot $toolRoot) -Path $path `
+            -Confirm:$false | Out-Null
+
+        $after = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+        $after.servers.'pyghidra-mcp'.pin | Should -Be '0.2.6'
+        $after.servers.'pyghidra-mcp'.tools | Should -Contain 'b'
+    }
+
+    It 'is never called without the explicit switch' {
+        # A baseline that updates itself to match what it observes cannot fail.
+        $src = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\Install-REAgent.ps1') -Raw
+        $callSites = @($src -split "`n" | Select-String -SimpleMatch 'Save-ToolCatalog')
+        $callSites.Count | Should -Be 1
+        $src -match '(?s)if\s*\(\s*\$UpdateToolCatalog\s*\)\s*\{[^}]*Save-ToolCatalog' |
+            Should -BeTrue
     }
 }

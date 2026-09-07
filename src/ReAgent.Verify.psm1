@@ -1,8 +1,11 @@
 Set-StrictMode -Version Latest
 
 # Depends on functions exported by sibling modules, which Install-REAgent.ps1
-# imports into the session before this one: Write-ReAgentLog (Common),
-# Invoke-CommandLine (Discovery), Get-VenvPython / Get-ServerVenvPath (Servers).
+# imports into the session before this one: Write-ReAgentLog, Write-Utf8NoBomFile
+# (Common), Invoke-CommandLine (Discovery), Get-VenvPython / Get-ServerVenvPath /
+# Get-WindbgLaunchCommand (Servers), Get-ToolCatalog / Get-CatalogServerTool /
+# Compare-ToolCatalog / Test-SkillAdaptation / Get-SkillFrontmatter /
+# Get-SkillToolReference (Skills).
 
 $Script:ValidCheckStatus = @('pass', 'fail', 'not-testable')
 
@@ -642,6 +645,625 @@ function Get-ServerCheck {
     return $checks
 }
 
+function Get-ServerProbeContext {
+    <#
+    .SYNOPSIS
+        Resolves the interpreter and probe arguments needed to reach a server live.
+    .DESCRIPTION
+        Shared between the skill-drift G3 check and the tool-catalog refresh, so a
+        second caller never invents its own probe-argument dialect. HTTP servers
+        need only Config; a stdio server (mcp-windbg) also needs Inventory to
+        resolve its cdb path, so a missing Inventory - or a transport this probe
+        does not yet support - reports Ok = $false rather than throwing.
+    .PARAMETER Server
+        The server's config entry.
+    .PARAMETER Config
+        The parsed configuration object.
+    .PARAMETER Inventory
+        The host inventory, for a stdio server's launch command. May be $null.
+    .OUTPUTS
+        A {Ok; PythonPath; ProbeArgs; Reason} object.
+    .EXAMPLE
+        Get-ServerProbeContext -Server $s -Config $cfg -Inventory $inv
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Server,
+        [Parameter(Mandatory)][object]$Config,
+        [AllowNull()][object]$Inventory = $null
+    )
+
+    if ($Server.transport -eq 'http') {
+        $url = "http://$($Server.bind):$($Server.port)$($Server.path)"
+        return [PSCustomObject]@{ Ok = $true; Reason = ''
+            PythonPath = (Get-ProbeInterpreter -Config $Config)
+            ProbeArgs  = @('--transport=http', "--url=$url")
+        }
+    }
+    if ($Server.transport -eq 'stdio' -and $Inventory) {
+        $cmd = Get-WindbgLaunchCommand -Config $Config -Inventory $Inventory
+        if ($cmd) {
+            $probeArgs = @('--transport=stdio', "--command=$($cmd.Executable)")
+            foreach ($a in $cmd.Arguments) { $probeArgs += "--arg=$a" }
+            foreach ($k in $cmd.Env.Keys) { $probeArgs += "--env=$k=$($cmd.Env[$k])" }
+            return [PSCustomObject]@{ Ok = $true; Reason = ''
+                PythonPath = $cmd.Executable; ProbeArgs = $probeArgs
+            }
+        }
+    }
+    return [PSCustomObject]@{ Ok = $false; PythonPath = ''; ProbeArgs = @()
+        Reason = ("No live probe is available for '$($Server.name)' " +
+            "(transport '$($Server.transport)').")
+    }
+}
+
+function Get-SkillPackFile {
+    <#
+    .SYNOPSIS
+        Reads one skill's vendored SKILL.md, or throws naming the missing path.
+    .DESCRIPTION
+        Reads straight from the repo's vendored tree rather than the installed
+        copy under agentRoot, so the adaptation gate runs under -VerifyOnly on a
+        host where phase 5 has never written a file.
+    .PARAMETER RepoRoot
+        Repository root holding vendor\skills.
+    .PARAMETER Namespace
+        The pack's namespace.
+    .PARAMETER SkillName
+        The skill's install directory name.
+    .EXAMPLE
+        Get-SkillPackFile -RepoRoot $r -Namespace 'windbg' -SkillName 'windbg-crash'
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$RepoRoot,
+        [Parameter(Mandatory)][string]$Namespace,
+        [Parameter(Mandatory)][string]$SkillName
+    )
+    $path = Join-Path $RepoRoot "vendor\skills\$Namespace\$SkillName\SKILL.md"
+    if (-not (Test-Path -LiteralPath $path)) {
+        throw "Vendored skill file '$path' is missing."
+    }
+    return (Get-Content -LiteralPath $path -Raw)
+}
+
+function Merge-CheckStatus {
+    <#
+    .SYNOPSIS
+        Reduces several check results into one status: fail beats not-testable beats pass.
+    .DESCRIPTION
+        Used to combine G3 and G4 sub-results, one pair per target server, into
+        the single "<ns> skill drift" check Get-SkillCheck reports. A fail
+        anywhere is real drift; a not-testable anywhere means at least one
+        target told us nothing, and that must not be reported as a clean pass.
+    .PARAMETER Results
+        New-CheckResult-shaped objects to combine.
+    .OUTPUTS
+        [string] 'fail', 'not-testable', or 'pass'.
+    .EXAMPLE
+        Merge-CheckStatus -Results @($pinCheck, $liveCheck)
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][AllowEmptyCollection()][array]$Results)
+
+    if (@($Results | Where-Object { $_.Status -eq 'fail' }).Count -gt 0) { return 'fail' }
+    if (@($Results | Where-Object { $_.Status -eq 'not-testable' }).Count -gt 0) {
+        return 'not-testable'
+    }
+    return 'pass'
+}
+
+function Test-SkillAdaptationCheck {
+    <#
+    .SYNOPSIS
+        Runs checks G0, CATALOG, G1 and G2 over every enabled skill in one pack.
+    .DESCRIPTION
+        Reads each skill's vendored SKILL.md directly via Get-SkillPackFile and
+        delegates the actual checks to Test-SkillAdaptation (Skills.psm1) - this
+        function's job is only to loop the pack's skills and turn the combined
+        findings into one "<ns> skill adaptation" check.
+
+        A pack whose skills declare no MCP tools at all passes with "nothing to
+        check": it is correctly adapted by definition, and not-testable here
+        would be noise the operator learns to ignore.
+    .PARAMETER Pack
+        The pack's config entry.
+    .PARAMETER Catalog
+        From Get-ToolCatalog.
+    .PARAMETER RepoRoot
+        Repository root holding vendor\skills.
+    .EXAMPLE
+        Test-SkillAdaptationCheck -Pack $p -Catalog $c -RepoRoot $root
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Pack,
+        [Parameter(Mandatory)][object]$Catalog,
+        [Parameter(Mandatory)][string]$RepoRoot
+    )
+
+    $name = "$($Pack.namespace) skill adaptation"
+    $renames = @{}
+    if ($Pack.PSObject.Properties.Name -contains 'adaptation') {
+        foreach ($p in $Pack.adaptation.toolRenames.PSObject.Properties) {
+            $renames[$p.Name] = $p.Value
+        }
+    }
+
+    $findings = @()
+    $toolCount = 0
+    foreach ($skill in ($Pack.skills | Where-Object { $_.enabled })) {
+        $text = Get-SkillPackFile -RepoRoot $RepoRoot -Namespace $Pack.namespace `
+            -SkillName $skill.name
+        $toolCount += @(Get-SkillToolReference -Frontmatter (Get-SkillFrontmatter -Text $text)).Count
+        $findings += Test-SkillAdaptation -Text $text -DirectoryName $skill.name -Catalog $Catalog `
+            -TargetServers @($Pack.targetServers) -ToolRenames $renames
+    }
+
+    if ($findings.Count -gt 0) {
+        $detail = ($findings | ForEach-Object { $_.Message }) -join ' | '
+        return New-CheckResult -Name $name -Status 'fail' -Detail $detail
+    }
+    if ($toolCount -eq 0) {
+        return New-CheckResult -Name $name -Status 'pass' `
+            -Detail 'Declares no MCP tools; nothing to check.'
+    }
+    return New-CheckResult -Name $name -Status 'pass' `
+        -Detail "$toolCount declared tool(s) all correctly adapted."
+}
+
+function Test-ToolCatalogPin {
+    <#
+    .SYNOPSIS
+        Runs check G4: the catalog's recorded server pin must match config's current pin.
+    .DESCRIPTION
+        Needs no live server - catches what an operator will actually hit:
+        bumping a server's version in config without refreshing the catalog.
+        A server with no catalog entry is not-testable, naming the exact
+        refresh command, never a silent pass.
+    .PARAMETER Catalog
+        From Get-ToolCatalog.
+    .PARAMETER Server
+        Server name.
+    .PARAMETER CurrentPin
+        The server's pin as configured right now (mcpServers[].source.pin).
+    .EXAMPLE
+        Test-ToolCatalogPin -Catalog $c -Server 'pyghidra-mcp' -CurrentPin '0.2.5'
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Catalog,
+        [Parameter(Mandatory)][string]$Server,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$CurrentPin
+    )
+
+    $name = "$Server tool catalog pin"
+    $entry = Get-CatalogServerTool -Catalog $Catalog -Server $Server
+    if (-not $entry.Known) {
+        return New-CheckResult -Name $name -Status 'not-testable' -Detail (
+            "No tool catalog entry for '$Server'. Open the application, start its MCP " +
+            'server, then run: .\Install-REAgent.ps1 -Attended -UpdateToolCatalog')
+    }
+    if ($entry.Pin -ne $CurrentPin) {
+        return New-CheckResult -Name $name -Status 'fail' -Detail (
+            "Catalog recorded pin '$($entry.Pin)' for '$Server', but config now pins " +
+            "'$CurrentPin'. Refresh with: .\Install-REAgent.ps1 -Attended -UpdateToolCatalog")
+    }
+    return New-CheckResult -Name $name -Status 'pass' `
+        -Detail "Catalog pin '$CurrentPin' matches config."
+}
+
+function Test-ToolCatalogLive {
+    <#
+    .SYNOPSIS
+        Runs check G3: the live tool list must match the catalog.
+    .DESCRIPTION
+        Reports the count delta and the added/removed names, not just
+        "differs" - a tool-count drop after an upgrade is a useful regression
+        signal (docs/mvp/HANDOFF.md). An unreachable server is not-testable,
+        never fail: a closed GUI has told us nothing about an adaptation defect.
+    .PARAMETER PythonPath
+        Interpreter to run the probe with.
+    .PARAMETER ProbeArgs
+        Already-formed transport arguments for Invoke-McpProbe.
+    .PARAMETER Server
+        Server name, used to look up the catalog entry and name the check.
+    .PARAMETER Catalog
+        From Get-ToolCatalog.
+    .EXAMPLE
+        Test-ToolCatalogLive -PythonPath $py -ProbeArgs $a -Server 'pyghidra-mcp' -Catalog $c
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$PythonPath,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$ProbeArgs,
+        [Parameter(Mandatory)][string]$Server,
+        [Parameter(Mandatory)][object]$Catalog
+    )
+
+    $name = "$Server tool catalog"
+    $r = Invoke-McpProbe -PythonPath $PythonPath -ProbeScript (Get-ProbeScriptPath) `
+        -ProbeArgs $ProbeArgs
+    if (-not $r.ok) {
+        $why = if ($r.PSObject.Properties.Name -contains 'error') { $r.error } else { 'tool call failed' }
+        return New-CheckResult -Name $name -Status 'not-testable' -Detail (
+            "Could not reach '$Server' to compare its live tools against the catalog ($why).")
+    }
+
+    $diff = Compare-ToolCatalog -Catalog $Catalog -Server $Server -LiveTools @($r.tools)
+    if ($diff.Added.Count -gt 0 -or $diff.Removed.Count -gt 0) {
+        return New-CheckResult -Name $name -Status 'fail' -Detail (
+            "Live tool list differs from the catalog by $($diff.CountDelta): " +
+            "added [$($diff.Added -join ', ')], removed [$($diff.Removed -join ', ')].")
+    }
+    return New-CheckResult -Name $name -Status 'pass' -Detail (
+        "Live tool list matches the catalog ($($r.toolCount) tools).")
+}
+
+function Get-SkillDriftLiveCheck {
+    <#
+    .SYNOPSIS
+        Runs G3 for one target server, honoring the attended gate.
+    .DESCRIPTION
+        Mirrors Get-ServerCheck's own gate: an attended-tier server without
+        -Attended has told us nothing, so it is not-testable rather than
+        silently skipped.
+    .PARAMETER Server
+        The server's config entry.
+    .PARAMETER Config
+        The parsed configuration object.
+    .PARAMETER Catalog
+        From Get-ToolCatalog.
+    .PARAMETER Inventory
+        The host inventory, for a stdio server's launch command. May be $null.
+    .PARAMETER Attended
+        Whether the operator has GUI host apps open.
+    .EXAMPLE
+        Get-SkillDriftLiveCheck -Server $s -Config $cfg -Catalog $c -Attended
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Server,
+        [Parameter(Mandatory)][object]$Config,
+        [Parameter(Mandatory)][object]$Catalog,
+        [AllowNull()][object]$Inventory = $null,
+        [switch]$Attended
+    )
+
+    $name = "$($Server.name) tool catalog"
+    if ($Server.verifyTier -eq 'attended' -and -not $Attended) {
+        return New-CheckResult -Name $name -Status 'not-testable' -Detail (
+            'Needs its application open with the target loaded. Re-run with -Attended ' +
+            'once it is.')
+    }
+    # One target server's probe blowing up (e.g. no venv resolvable yet) must
+    # not take the rest of the pack's drift check down with it.
+    try {
+        $ctx = Get-ServerProbeContext -Server $Server -Config $Config -Inventory $Inventory
+        if (-not $ctx.Ok) {
+            return New-CheckResult -Name $name -Status 'not-testable' -Detail $ctx.Reason
+        }
+        return Test-ToolCatalogLive -PythonPath $ctx.PythonPath -ProbeArgs $ctx.ProbeArgs `
+            -Server $Server.name -Catalog $Catalog
+    } catch {
+        return New-CheckResult -Name $name -Status 'not-testable' `
+            -Detail "The check could not run: $($_.Exception.Message)"
+    }
+}
+
+function Test-SkillDriftCheck {
+    <#
+    .SYNOPSIS
+        Runs checks G3 and G4 over one pack's declared target servers.
+    .DESCRIPTION
+        G4 (catalog vs pin) needs no server and always runs. G3 (catalog vs
+        live) is gated per server by Get-SkillDriftLiveCheck. The two
+        sub-results per server are combined into the single "<ns> skill
+        drift" check via Merge-CheckStatus: a fail anywhere is real drift, a
+        not-testable anywhere means at least one target told us nothing.
+    .PARAMETER Pack
+        The pack's config entry.
+    .PARAMETER Config
+        The parsed configuration object.
+    .PARAMETER Catalog
+        From Get-ToolCatalog.
+    .PARAMETER Inventory
+        The host inventory, for a stdio target server's launch command.
+    .PARAMETER Attended
+        Whether the operator has GUI host apps open.
+    .EXAMPLE
+        Test-SkillDriftCheck -Pack $p -Config $cfg -Catalog $c -Attended
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Pack,
+        [Parameter(Mandatory)][object]$Config,
+        [Parameter(Mandatory)][object]$Catalog,
+        [AllowNull()][object]$Inventory = $null,
+        [switch]$Attended
+    )
+
+    $name = "$($Pack.namespace) skill drift"
+    $subChecks = @()
+    foreach ($serverName in @($Pack.targetServers)) {
+        $server = $Config.mcpServers | Where-Object { $_.name -eq $serverName } |
+            Select-Object -First 1
+        if (-not $server) {
+            $subChecks += New-CheckResult -Name "$serverName tool catalog pin" `
+                -Status 'not-testable' `
+                -Detail "'$serverName' is not a declared mcpServers entry."
+            continue
+        }
+        $subChecks += Test-ToolCatalogPin -Catalog $Catalog -Server $serverName `
+            -CurrentPin $server.source.pin
+        $subChecks += Get-SkillDriftLiveCheck -Server $server -Config $Config -Catalog $Catalog `
+            -Inventory $Inventory -Attended:$Attended
+    }
+
+    $detail = ($subChecks | ForEach-Object { $_.Detail }) -join ' | '
+    return New-CheckResult -Name $name -Status (Merge-CheckStatus -Results $subChecks) `
+        -Detail $detail
+}
+
+function Get-InstalledPackCheck {
+    <#
+    .SYNOPSIS
+        Runs one installed pack's adaptation and drift checks, each isolated by try/catch.
+    .DESCRIPTION
+        Split out of Get-SkillCheck so one broken pack's two checks cannot take
+        the rest of the suite down, and so Get-SkillCheck's own guard cascade
+        stays readable at a glance.
+    .PARAMETER Pack
+        The pack's config entry.
+    .PARAMETER Config
+        The parsed configuration object.
+    .PARAMETER Catalog
+        From Get-ToolCatalog.
+    .PARAMETER RepoRoot
+        Repository root holding vendor\skills.
+    .PARAMETER Inventory
+        The host inventory, for a stdio target server's live launch command.
+    .PARAMETER Attended
+        Whether the operator has GUI host apps open.
+    .OUTPUTS
+        [array] The pack's "<ns> skill adaptation" and "<ns> skill drift" checks.
+    .EXAMPLE
+        Get-InstalledPackCheck -Pack $p -Config $cfg -Catalog $c -RepoRoot $root
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Pack,
+        [Parameter(Mandatory)][object]$Config,
+        [Parameter(Mandatory)][object]$Catalog,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$RepoRoot,
+        [AllowNull()][object]$Inventory = $null,
+        [switch]$Attended
+    )
+
+    $checks = @()
+    try {
+        $checks += Test-SkillAdaptationCheck -Pack $Pack -Catalog $Catalog -RepoRoot $RepoRoot
+    } catch {
+        $checks += New-CheckResult -Name "$($Pack.namespace) skill adaptation" `
+            -Status 'not-testable' -Detail "The check could not run: $($_.Exception.Message)"
+    }
+    try {
+        $checks += Test-SkillDriftCheck -Pack $Pack -Config $Config -Catalog $Catalog `
+            -Inventory $Inventory -Attended:$Attended
+    } catch {
+        $checks += New-CheckResult -Name "$($Pack.namespace) skill drift" `
+            -Status 'not-testable' -Detail "The check could not run: $($_.Exception.Message)"
+    }
+    return $checks
+}
+
+function Get-SkillCheck {
+    <#
+    .SYNOPSIS
+        Builds the adaptation and drift verification checks for every configured skill pack.
+    .DESCRIPTION
+        Mirrors Get-ServerCheck's guard cascade: a pack with no manifest record
+        is unknown, not uninstalled; a pack the last run marked not installed
+        is not-testable with its recorded reason. Only an installed pack's
+        vendored files are actually read, via Get-InstalledPackCheck.
+
+        G0-G2 and G4 need no server at all - they read the repo's vendored
+        files and the checked-in catalog directly, so a bad adaptation fails
+        verification even under -VerifyOnly on a host where phase 5 has never
+        run. G3's live half is gated per target server inside
+        Test-SkillDriftCheck.
+    .PARAMETER Config
+        The parsed configuration object.
+    .PARAMETER SkillResults
+        Results from Install-AllSkill, or replayed from the manifest.
+    .PARAMETER RepoRoot
+        Repository root holding vendor\skills.
+    .PARAMETER Inventory
+        The host inventory, for a stdio target server's live launch command.
+    .PARAMETER Attended
+        Whether the operator has GUI host apps open.
+    .EXAMPLE
+        Get-SkillCheck -Config $cfg -SkillResults $r -RepoRoot $root
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Config,
+        [Parameter(Mandatory)][AllowEmptyCollection()][array]$SkillResults,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$RepoRoot,
+        [AllowNull()][object]$Inventory = $null,
+        [switch]$Attended
+    )
+
+    if ($Config.PSObject.Properties.Name -notcontains 'skills') { return @() }
+
+    try {
+        $catalog = Get-ToolCatalog
+    } catch {
+        return @(New-CheckResult -Name 'tool catalog' -Status 'not-testable' `
+                -Detail $_.Exception.Message)
+    }
+
+    $checks = @()
+    foreach ($pack in $Config.skills) {
+        $result = $SkillResults | Where-Object { $_.Namespace -eq $pack.namespace } |
+            Select-Object -First 1
+        if (-not $result) {
+            $checks += New-CheckResult -Name "$($pack.namespace) skill adaptation" `
+                -Status 'not-testable' -Detail (
+                    'Install state unknown - no manifest entry for it. Run the installer ' +
+                    'without -VerifyOnly, then verify again.')
+            continue
+        }
+        if (-not $result.Installed) {
+            $checks += New-CheckResult -Name "$($pack.namespace) skill adaptation" `
+                -Status 'not-testable' -Detail "Not installed on this host: $($result.Reason)"
+            continue
+        }
+        $checks += Get-InstalledPackCheck -Pack $pack -Config $Config -Catalog $catalog `
+            -RepoRoot $RepoRoot -Inventory $Inventory -Attended:$Attended
+    }
+    return $checks
+}
+
+function ConvertFrom-CatalogServerMap {
+    <#
+    .SYNOPSIS
+        Converts a catalog's .servers object into a plain hashtable, keyed by server name.
+    .PARAMETER Catalog
+        A tool-catalog document, or $null to start from an empty catalog.
+    .EXAMPLE
+        ConvertFrom-CatalogServerMap -Catalog $existing
+    #>
+    [CmdletBinding()]
+    param([AllowNull()][object]$Catalog)
+
+    $map = @{}
+    if ($Catalog -and $Catalog.PSObject.Properties.Name -contains 'servers') {
+        foreach ($p in $Catalog.servers.PSObject.Properties) { $map[$p.Name] = $p.Value }
+    }
+    return $map
+}
+
+function Update-CatalogServerEntry {
+    <#
+    .SYNOPSIS
+        Refreshes one server's catalog entry in place, or leaves it untouched.
+    .DESCRIPTION
+        Never removes an entry. A disabled server, an attended-tier server
+        without -Attended, a server whose launch command cannot be resolved,
+        or a server that does not answer, is skipped with a WARN and its
+        previous entry (if any) survives unchanged - a closed GUI must never
+        silently erase a good catalog entry (S9).
+    .PARAMETER Servers
+        The accumulator hashtable, mutated in place.
+    .PARAMETER Server
+        The server's config entry.
+    .PARAMETER Config
+        The parsed configuration object.
+    .PARAMETER Inventory
+        The host inventory, for a stdio server's launch command.
+    .PARAMETER Attended
+        Whether the operator has GUI host apps open.
+    .EXAMPLE
+        Update-CatalogServerEntry -Servers $map -Server $s -Config $cfg -Attended
+    #>
+    [CmdletBinding()]
+    # Mutates only the in-memory accumulator passed in by reference; the actual
+    # file write is gated by Save-ToolCatalog's own ShouldProcess check.
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+        'PSUseShouldProcessForStateChangingFunctions', '')]
+    param(
+        [Parameter(Mandatory)][hashtable]$Servers,
+        [Parameter(Mandatory)][object]$Server,
+        [Parameter(Mandatory)][object]$Config,
+        [AllowNull()][object]$Inventory = $null,
+        [switch]$Attended
+    )
+
+    if (-not $Server.enabled) { return }
+    if ($Server.verifyTier -eq 'attended' -and -not $Attended) {
+        Write-ReAgentLog -Level WARN -Message (
+            "Leaving the catalog entry for '$($Server.name)' untouched: needs -Attended.")
+        return
+    }
+
+    try {
+        $ctx = Get-ServerProbeContext -Server $Server -Config $Config -Inventory $Inventory
+        $r = if ($ctx.Ok) {
+            Invoke-McpProbe -PythonPath $ctx.PythonPath -ProbeScript (Get-ProbeScriptPath) `
+                -ProbeArgs $ctx.ProbeArgs
+        } else {
+            [PSCustomObject]@{ ok = $false; error = $ctx.Reason }
+        }
+    } catch {
+        $r = [PSCustomObject]@{ ok = $false; error = $_.Exception.Message }
+    }
+    if (-not $r.ok) {
+        Write-ReAgentLog -Level WARN -Message (
+            "Leaving the catalog entry for '$($Server.name)' untouched: it did not answer " +
+            "($($r.error)).")
+        return
+    }
+
+    $Servers[$Server.name] = [PSCustomObject]@{
+        pin = $Server.source.pin; toolCount = $r.toolCount; tools = @($r.tools)
+    }
+}
+
+function Save-ToolCatalog {
+    <#
+    .SYNOPSIS
+        Refreshes data/tool-catalog.json by probing every reachable server.
+    .DESCRIPTION
+        Only ever runs behind the explicit -UpdateToolCatalog switch (S9): a
+        baseline that updates itself to match what it observes cannot fail.
+        The installer must never call this on its own. An unreachable
+        server's existing entry is left untouched with a WARN, never erased.
+    .PARAMETER Config
+        The parsed configuration object.
+    .PARAMETER Inventory
+        The host inventory, for a stdio server's launch command.
+    .PARAMETER CapturedBy
+        Recorded in the catalog for provenance.
+    .PARAMETER Attended
+        Whether the operator has GUI host apps open.
+    .PARAMETER Path
+        Catalog file. Defaults to data/tool-catalog.json beside the module.
+    .EXAMPLE
+        Save-ToolCatalog -Config $cfg -Inventory $inv -Attended
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)][object]$Config,
+        [AllowNull()][object]$Inventory = $null,
+        [string]$CapturedBy = $env:USERNAME,
+        [switch]$Attended,
+        [string]$Path = ''
+    )
+
+    if (-not $Path) { $Path = Join-Path (Join-Path $PSScriptRoot '..') 'data\tool-catalog.json' }
+    $existing = if (Test-Path -LiteralPath $Path) {
+        Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    } else { $null }
+    $servers = ConvertFrom-CatalogServerMap -Catalog $existing
+
+    foreach ($server in $Config.mcpServers) {
+        Update-CatalogServerEntry -Servers $servers -Server $server -Config $Config `
+            -Inventory $Inventory -Attended:$Attended
+    }
+
+    $ordered = [ordered]@{}
+    foreach ($k in ($servers.Keys | Sort-Object)) { $ordered[$k] = $servers[$k] }
+    $catalog = [ordered]@{
+        capturedAt = (Get-Date).ToString('o'); capturedBy = $CapturedBy; servers = $ordered
+    }
+
+    if ($PSCmdlet.ShouldProcess($Path, 'Refresh tool catalog')) {
+        Write-Utf8NoBomFile -Path $Path -Text ($catalog | ConvertTo-Json -Depth 8)
+    }
+    return [PSCustomObject]$catalog
+}
+
 function Invoke-Verification {
     <#
     .SYNOPSIS
@@ -655,8 +1277,12 @@ function Invoke-Verification {
         The parsed configuration object.
     .PARAMETER ServerResults
         Results from Install-AllMcpServer.
+    .PARAMETER SkillResults
+        Results from Install-AllSkill, or replayed from the manifest.
     .PARAMETER Inventory
         The host inventory.
+    .PARAMETER RepoRoot
+        Repository root holding vendor\skills, for the skill adaptation gate.
     .PARAMETER Attended
         Include tier-2 checks.
     .EXAMPLE
@@ -666,7 +1292,9 @@ function Invoke-Verification {
     param(
         [Parameter(Mandatory)][object]$Config,
         [Parameter(Mandatory)][AllowEmptyCollection()][array]$ServerResults,
+        [AllowEmptyCollection()][array]$SkillResults = @(),
         [object]$Inventory = $null,
+        [string]$RepoRoot = '',
         [switch]$Attended
     )
 
@@ -678,6 +1306,8 @@ function Invoke-Verification {
     $checks += Test-GeneratedConfig -Config $Config
 
     $checks += Get-ServerCheck -Config $Config -ServerResults $ServerResults -Attended:$Attended
+    $checks += Get-SkillCheck -Config $Config -SkillResults $SkillResults -RepoRoot $RepoRoot `
+        -Inventory $Inventory -Attended:$Attended
 
     $report = [ordered]@{
         tier2Requested = [bool]$Attended
@@ -705,4 +1335,8 @@ function Invoke-Verification {
 Export-ModuleMember -Function New-CheckResult, Invoke-McpProbe, Test-ClaudeCli, `
     Test-ClaudeMcpList, Test-GeneratedConfig, Test-ServerNotTestable, `
     Get-ProbeScriptPath, Test-PyghidraLive, Test-WindbgLive, Invoke-Verification, `
-    Test-HttpServerLive, Get-HostAppHint, Get-ProbeInterpreter, Get-ServerCheck
+    Test-HttpServerLive, Get-HostAppHint, Get-ProbeInterpreter, Get-ServerCheck, `
+    Get-ServerProbeContext, Get-SkillPackFile, Merge-CheckStatus, `
+    Test-SkillAdaptationCheck, Test-ToolCatalogPin, Test-ToolCatalogLive, `
+    Get-SkillDriftLiveCheck, Test-SkillDriftCheck, Get-InstalledPackCheck, Get-SkillCheck, `
+    ConvertFrom-CatalogServerMap, Update-CatalogServerEntry, Save-ToolCatalog
