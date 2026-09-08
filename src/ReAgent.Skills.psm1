@@ -965,6 +965,12 @@ function Test-SkillPackGate {
     <#
     .SYNOPSIS
         Runs the scanner and the adaptation gate over a vendored pack.
+    .DESCRIPTION
+        The red-flag scan covers every skill the pack declares, per design spec
+        section 1.3.2. Only an enabled skill can block the pack: a disabled one
+        is never written to disk, so a finding in it warns instead - see
+        Write-DisabledSkillScanWarning. The adaptation gate stays on the enabled
+        skills, which are the only ones an agent can load.
     .PARAMETER Pack
         The pack's config entry.
     .PARAMETER PackRoot
@@ -990,8 +996,13 @@ function Test-SkillPackGate {
     }
 
     $findings = @()
-    foreach ($skill in ($Pack.skills | Where-Object { $_.enabled })) {
+    foreach ($skill in $Pack.skills) {
         $dir = Join-Path $PackRoot $skill.name
+        if (-not $skill.enabled) {
+            Write-DisabledSkillScanWarning -Namespace $Pack.namespace -Skill $skill `
+                -Directory $dir -Rules $rules -Exceptions @($Pack.scanExceptions)
+            continue
+        }
         if (-not (Test-Path -LiteralPath (Join-Path $dir 'SKILL.md'))) {
             $findings += [PSCustomObject]@{ RuleId = 'missing-skill'; Severity = 'block'
                 File = $skill.name; Line = 0
@@ -1009,6 +1020,111 @@ function Test-SkillPackGate {
         (@($findings | ForEach-Object { $_.RuleId } | Select-Object -Unique) -join ', ')
     } else { '' }
     return @{ Findings = $findings; Summary = $summary }
+}
+
+function Get-SkillScanFinding {
+    <#
+    .SYNOPSIS
+        Runs the red-flag scan over every file in one vendored skill directory.
+    .DESCRIPTION
+        The scan half of the gate, separated from the adaptation half so it can
+        also run over a skill that ships disabled. Design spec section 1.3.2
+        requires every vendored file to pass the scan on every install run, and
+        a disabled skill is still a file a maintainer edits and a reviewer signs
+        off - Update-VendoredSkill.ps1 scans the whole tree, but at vendor time
+        over the pristine import, before the adaptation commit.
+
+        Findings come back at their declared severity. The caller decides what
+        blocks: an enabled skill fails its pack, a disabled one warns.
+    .PARAMETER Skill
+        One entry from $Pack.skills, carrying .upstream and .name.
+    .PARAMETER Directory
+        The skill's vendored directory.
+    .PARAMETER Rules
+        Rules from Get-SkillScanRule.
+    .PARAMETER Exceptions
+        The pack's scanExceptions entries.
+    .OUTPUTS
+        [array] Unwaived scanner findings, empty when the skill is clean.
+    .EXAMPLE
+        Get-SkillScanFinding -Skill $s -Directory $d -Rules $r -Exceptions @()
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Skill,
+        [Parameter(Mandatory)][string]$Directory,
+        [Parameter(Mandatory)][array]$Rules,
+        [Parameter(Mandatory)][AllowEmptyCollection()][array]$Exceptions
+    )
+
+    $findings = @()
+    foreach ($f in (Get-ChildItem -LiteralPath $Directory -Recurse -File)) {
+        $rel = Get-SkillRelativePath -Root $Directory -File $f
+        $raw = @(Test-SkillContent -Text (
+                Get-Content -LiteralPath $f.FullName -Raw -Encoding UTF8) `
+                -Rules $Rules -File "$($Skill.name)/$rel")
+        $findings += @(Select-UnwaivedFinding -Findings $raw -Exceptions $Exceptions `
+                -Skill $Skill.upstream)
+    }
+    return $findings
+}
+
+function Write-DisabledSkillScanWarning {
+    <#
+    .SYNOPSIS
+        Scans a skill that ships disabled and logs anything it finds as a warning.
+    .DESCRIPTION
+        A disabled skill is never written to .claude\skills, so a finding in one
+        must not fail its pack - that would take working skills off the host over
+        a file no agent can reach. But it must not be invisible either: the only
+        other scan of these files runs in Update-VendoredSkill.ps1, over the
+        pristine upstream import, before the adaptation commit. A red flag
+        introduced BY an adaptation edit into a disabled skill was caught by
+        nothing at all.
+
+        A declared skill with no vendored directory warns rather than throwing:
+        it cannot be scanned and cannot be installed, and the enabled path
+        already reports that case as a blocking missing-skill finding.
+    .PARAMETER Namespace
+        The pack's namespace, for the log line.
+    .PARAMETER Skill
+        One entry from $Pack.skills, carrying .upstream and .name.
+    .PARAMETER Directory
+        The skill's vendored directory.
+    .PARAMETER Rules
+        Rules from Get-SkillScanRule.
+    .PARAMETER Exceptions
+        The pack's scanExceptions entries.
+    .EXAMPLE
+        Write-DisabledSkillScanWarning -Namespace 'reva' -Skill $s -Directory $d `
+            -Rules $r -Exceptions @()
+    #>
+    [CmdletBinding()]
+    # Logs and returns nothing; it changes no state a ShouldProcess prompt could guard.
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+        'PSUseShouldProcessForStateChangingFunctions', '')]
+    param(
+        [Parameter(Mandatory)][string]$Namespace,
+        [Parameter(Mandatory)][object]$Skill,
+        [Parameter(Mandatory)][string]$Directory,
+        [Parameter(Mandatory)][array]$Rules,
+        [Parameter(Mandatory)][AllowEmptyCollection()][array]$Exceptions
+    )
+
+    if (-not (Test-Path -LiteralPath $Directory)) {
+        Write-ReAgentLog -Level WARN -Message (
+            "Disabled skill '$($Skill.name)' in pack '$Namespace' has no vendored " +
+            'directory, so nothing was scanned. Vendor it, or drop it from the config.')
+        return
+    }
+    $findings = @(Get-SkillScanFinding -Skill $Skill -Directory $Directory -Rules $Rules `
+            -Exceptions $Exceptions) | Where-Object { $_.Severity -eq 'block' }
+    foreach ($f in $findings) {
+        Write-ReAgentLog -Level WARN -Message (
+            "Scan rule '$($f.RuleId)' fired in disabled skill '$($f.File)' of pack " +
+            "'$Namespace', line $($f.Line). It is not installed, so the pack is not " +
+            'blocked - fix it before enabling the skill.')
+    }
 }
 
 function Get-SkillGateFinding {
@@ -1052,15 +1168,8 @@ function Get-SkillGateFinding {
         [Parameter(Mandatory)][hashtable]$ToolRenames
     )
 
-    $findings = @()
-    foreach ($f in (Get-ChildItem -LiteralPath $Directory -Recurse -File)) {
-        $rel = Get-SkillRelativePath -Root $Directory -File $f
-        $raw = @(Test-SkillContent -Text (
-                Get-Content -LiteralPath $f.FullName -Raw -Encoding UTF8) `
-                -Rules $Rules -File "$($Skill.name)/$rel")
-        $findings += @(Select-UnwaivedFinding -Findings $raw -Exceptions $Exceptions `
-                -Skill $Skill.upstream) | Where-Object { $_.Severity -eq 'block' }
-    }
+    $findings = @(Get-SkillScanFinding -Skill $Skill -Directory $Directory -Rules $Rules `
+            -Exceptions $Exceptions) | Where-Object { $_.Severity -eq 'block' }
 
     $md = Join-Path $Directory 'SKILL.md'
     $mdText = Get-Content -LiteralPath $md -Raw -Encoding UTF8
@@ -1126,6 +1235,7 @@ function Install-AllSkill {
 }
 
 Export-ModuleMember -Function New-SkillResult, Get-SkillEntry, Get-SkillScanRule, `
+    Get-SkillScanFinding, Write-DisabledSkillScanWarning, `
     Test-SkillContent, `
     Select-UnwaivedFinding, Get-ToolCatalog, Get-CatalogServerTool, `
     Compare-ToolCatalog, Find-FrontmatterEnd, ConvertFrom-FrontmatterLine, `
