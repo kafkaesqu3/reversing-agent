@@ -21,7 +21,8 @@
   tools: dump work via open_cdb_dump plus run_cdb_command, live attach via
   open_cdb_remote, and kernel sessions via open_kd_session plus run_kd_command.
   The live and kernel skills ship DISABLED by operator decision, not because the
-  tools are absent — see the manifest before assuming a capability is missing.
+  tools are absent — see disabledReason in
+  re-agent.config.json before assuming a capability is missing.
 - ghidramcp is installed-but-disabled. Do not expect it to answer.
 - If a server is unreachable, say so plainly and name the remedy. Do not infer
   a cause and do not work around it silently.
@@ -48,9 +49,9 @@
   conflict as a finding.
 - If a skill names an MCP tool that does not exist, STOP and report it.
   Never substitute a similar-sounding tool.
-- A skill you expect and cannot find was disabled deliberately, for a reason recorded in the
-  manifest. Do not reimplement it by hand and do not work around its absence silently: say
-  which capability is missing and why you stopped.
+- A skill you expect and cannot find was disabled deliberately, for a reason recorded as
+  disabledReason in re-agent.config.json. Do not reimplement it by hand and do not work
+  around its absence silently: say which capability is missing and why you stopped.
 - Ghidra provenance: pyghidra-mcp has no SourceType. Every name YOU propose is written with an
   `ai_` prefix. When harvesting evidence, EXCLUDE `ai_*` names — a second pass that reads its
   own output is self-corroboration, not confirmation.

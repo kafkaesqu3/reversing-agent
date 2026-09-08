@@ -220,6 +220,17 @@ Describe 'the shipped CLAUDE.md template' {
         $Script:Tpl | Should -BeLike '*Never substitute a similar-sounding tool*'
     }
 
+    It 'sends the agent to the config, not the manifest, for a disabled skill reason' {
+        # manifest.json's skills[] carries the ENABLED skill names and a pack-level
+        # reason only (Manifest.psm1). An agent told to read the manifest for a
+        # per-skill disabledReason finds the disabled skill absent altogether and
+        # concludes the capability is genuinely missing - the opposite of what these
+        # two lines exist to prevent. The reason lives in re-agent.config.json.
+        $Script:Tpl | Should -Not -BeLike '*see the manifest before assuming*'
+        $Script:Tpl | Should -Not -Match '(?s)a reason recorded in the\s+manifest'
+        $Script:Tpl | Should -BeLike '*disabledReason in re-agent.config.json*'
+    }
+
     It 'does not repeat the corrected two-tool claim about mcp-windbg' {
         # data/tool-catalog.json records the verified ten-tool surface; the contract text
         # claimed a dump-only server, which is the same Task-7 measurement error the
