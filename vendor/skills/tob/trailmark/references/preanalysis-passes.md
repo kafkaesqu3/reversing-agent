@@ -1,27 +1,5 @@
 # Pre-Analysis Passes
 
-## On this host (binary-graph adaptation)
-
-The four passes below are unchanged -- they operate on graph topology and the `entrypoints`
-dict, not on source text, so they work the same way over the binary graph `SKILL.md` builds via
-`engine.augment_binary()`. One real gap specific to that construction path:
-
-**Blast radius (pass 1) works out of the box** -- it is pure graph topology (descendant/ancestor
-counts), independent of `entrypoints`.
-
-**Entry point enumeration, privilege boundaries, and taint propagation (passes 2-4) return empty
-subgraphs unless you manually seed `graph.entrypoints` first.** `QueryEngine.from_directory()`
-calls Trailmark's entrypoint detector automatically; `QueryEngine.from_graph()` -- what this
-pack's binary-graph workflow uses -- does not, and that detector is a source-language pattern
-matcher that would not recognize binary nodes regardless. See `SKILL.md`'s `## Pre-Analysis on a
-binary-only graph` for the (unofficial, internals-reaching) workaround.
-
-The taint-propagation caution in section 4 below (*"verify data flow manually before claiming
-it"*) is the reason this pack was vendored, and on this host it compounds: the call edges feeding
-this graph are Ghidra's own inferred call resolution (`list_xrefs`/`gen_callgraph`), most of them
-marked `confidence: "inferred"` rather than `"certain"` -- see `SKILL.md`'s `## Reachability is
-not taint`.
-
 Four passes that enrich the code graph before downstream skills (genotoxic,
 diagramming-code) consume it. Run via `engine.preanalysis()`.
 
