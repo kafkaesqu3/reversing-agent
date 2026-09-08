@@ -6,6 +6,42 @@ Set-StrictMode -Version Latest
 
 $Script:ValidSkillStatus = @('installed', 'skipped', 'not-installed', 'failed')
 
+function Get-SkillEntry {
+    <#
+    .SYNOPSIS
+        Every skill a pack declares, enabled or not, with the reason it is off.
+    .DESCRIPTION
+        SkillNames carries only the skills a run actually installed, which is
+        what the orphan sweep needs and nothing else. Design spec section 1.3.5
+        asks the manifest to record every pack and skill "including which
+        shipped disabled and why", and a disabledReason otherwise lives only in
+        re-agent.config.json, where nothing reading the manifest can reach it.
+
+        Built from the pack's config entry rather than from the install result,
+        so it is recorded for a pack that refused at the human review gate and
+        installed nothing - which is every pack in the shipped state.
+    .PARAMETER Pack
+        The pack's config entry.
+    .OUTPUTS
+        [array] {Name; Enabled; DisabledReason} per declared skill.
+    .EXAMPLE
+        Get-SkillEntry -Pack $pack
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][object]$Pack)
+
+    if ($Pack.PSObject.Properties.Name -notcontains 'skills') { return @() }
+    return @($Pack.skills | ForEach-Object {
+            $reason = ''
+            if ($_.PSObject.Properties.Name -contains 'disabledReason') {
+                $reason = [string]$_.disabledReason
+            }
+            [PSCustomObject]@{ Name = $_.name; Enabled = [bool]$_.enabled
+                DisabledReason = $reason
+            }
+        })
+}
+
 function New-SkillResult {
     <#
     .SYNOPSIS
@@ -20,7 +56,8 @@ function New-SkillResult {
     .PARAMETER Status
         One of installed, skipped, not-installed, failed.
     .PARAMETER SkillNames
-        The skill directory names this pack installed.
+        The skill directory names this pack installed. SkillEntries, which
+        every result carries, lists what the pack declares - installed or not.
     .PARAMETER Reason
         Why, for any status that is not 'installed'.
     .PARAMETER Findings
@@ -50,6 +87,7 @@ function New-SkillResult {
         Status     = $Status
         Installed  = ($Status -eq 'installed' -or $Status -eq 'skipped')
         SkillNames = @($SkillNames)
+        SkillEntries = @(Get-SkillEntry -Pack $Pack)
         Repo       = $Pack.source.repo
         Commit     = $Pack.source.commit
         TreeSha256 = $Pack.source.treeSha256
@@ -1087,7 +1125,8 @@ function Install-AllSkill {
     return $results
 }
 
-Export-ModuleMember -Function New-SkillResult, Get-SkillScanRule, Test-SkillContent, `
+Export-ModuleMember -Function New-SkillResult, Get-SkillEntry, Get-SkillScanRule, `
+    Test-SkillContent, `
     Select-UnwaivedFinding, Get-ToolCatalog, Get-CatalogServerTool, `
     Compare-ToolCatalog, Find-FrontmatterEnd, ConvertFrom-FrontmatterLine, `
     Get-SkillFrontmatter, Get-SkillToolReference, Get-SkillRelativePath, `

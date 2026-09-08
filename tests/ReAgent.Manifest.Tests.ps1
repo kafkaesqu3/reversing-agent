@@ -186,12 +186,13 @@ Describe 'Write-Manifest skills key' {
             # Pure factory: builds and returns an in-memory PSCustomObject, writes nothing.
             [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
                 'PSUseShouldProcessForStateChangingFunctions', '')]
-            param($Reason = '', $Findings = @())
+            param($Reason = '', $Findings = @(), $SkillEntries = @())
             [PSCustomObject]@{
                 Namespace = 'x64dbg'; Status = 'installed'; Installed = $true
                 SkillNames = @('x64dbg-find-oep'); Repo = 'dariushoule/x64dbg-skills'
                 Commit = ('a' * 40); TreeSha256 = ('b' * 64)
                 ReviewedBy = 'david'; ReviewedAt = '2026-09-08'
+                SkillEntries = @($SkillEntries)
                 Reason = $Reason; Findings = $Findings
             }
         }
@@ -234,6 +235,43 @@ Describe 'Write-Manifest skills key' {
         $m.skills[0].findings.Count | Should -Be 20
         @($m.skills[0].findings[0].PSObject.Properties.Name) |
             Should -Be @('rule', 'file', 'line')
+    }
+
+    It 'records every declared skill, including the disabled ones and why' {
+        # Design spec 1.3.5: the manifest records every pack and skill 'including
+        # which shipped disabled and why'. The skills field carries only what
+        # installed, so six skills shipping disabled reached nothing a reader of the
+        # manifest could see - and in the shipped state, where every pack refuses at
+        # the review gate, it names zero skills for any pack.
+        $entries = @(
+            [PSCustomObject]@{ Name = 'x64dbg-find-oep'; Enabled = $true
+                DisabledReason = '' },
+            [PSCustomObject]@{ Name = 'x64dbg-trace'; Enabled = $false
+                DisabledReason = 'drives angr, which is not installed on this host' })
+        $cfg = New-MCfg -StateRoot (Join-Path $TestDrive 'wm-entries')
+        $ctx = @{ Config = $cfg; Inventory = $null; ServerResults = @()
+            VerifyResults = @(); SkillResults = @(New-MSkillResult -SkillEntries $entries) }
+        $m = Get-WrittenManifest -Context $ctx
+        $m.skills[0].skillEntries.Count | Should -Be 2
+        $off = $m.skills[0].skillEntries | Where-Object { -not $_.enabled }
+        $off.name | Should -Be 'x64dbg-trace'
+        $off.disabledReason | Should -BeLike '*angr*'
+    }
+
+    It 'records a refused pack every declared skill even though it installed none' {
+        # Every pack ships held at the human review gate, so SkillNames is empty for
+        # all of them. skillEntries must still say what the pack declares.
+        $entries = @([PSCustomObject]@{ Name = 'x64dbg-find-oep'; Enabled = $true
+                DisabledReason = '' })
+        $r = New-MSkillResult -SkillEntries $entries
+        $r.Status = 'not-installed'
+        $r.SkillNames = @()
+        $cfg = New-MCfg -StateRoot (Join-Path $TestDrive 'wm-refused')
+        $ctx = @{ Config = $cfg; Inventory = $null; ServerResults = @()
+            VerifyResults = @(); SkillResults = @($r) }
+        $m = Get-WrittenManifest -Context $ctx
+        $m.skills[0].skills.Count | Should -Be 0
+        $m.skills[0].skillEntries.Count | Should -Be 1
     }
 
     It 'writes an empty skills array without a SkillResults key in the context' {

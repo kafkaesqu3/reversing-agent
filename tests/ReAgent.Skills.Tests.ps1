@@ -34,6 +34,43 @@ Describe 'New-SkillResult' {
         $r.Commit | Should -Be ('a' * 40)
         $r.ReviewedBy | Should -Be 'david'
     }
+
+    It 'carries every declared skill, not only the ones a run installed' {
+        # A refused pack installs nothing, so SkillNames is empty - which is the whole
+        # shipped state. The manifest still has to say what the pack declares.
+        $pack = Get-TestPack
+        $pack.skills = @([PSCustomObject]@{ upstream = 'kernel'
+                name = 'windbg-kernel-debug'; enabled = $false
+                disabledReason = 'kernel debugging needs a second machine' })
+        $r = New-SkillResult -Pack $pack -Status 'not-installed'
+        $r.SkillNames.Count | Should -Be 0
+        $r.SkillEntries.Count | Should -Be 1
+        $r.SkillEntries[0].DisabledReason | Should -BeLike '*second machine*'
+    }
+}
+
+Describe 'Get-SkillEntry' {
+    # Design spec 1.3.5 asks the manifest to record every pack and skill 'including
+    # which shipped disabled and why'. A disabledReason otherwise lives only in
+    # re-agent.config.json, which nothing reading the manifest can reach.
+    It 'lists disabled skills beside enabled ones, carrying the reason verbatim' {
+        $pack = Get-TestPack
+        $pack.skills = @(
+            [PSCustomObject]@{ upstream = 'crash'; name = 'windbg-crash'; enabled = $true },
+            [PSCustomObject]@{ upstream = 'kernel'; name = 'windbg-kernel-debug'
+                enabled = $false
+                disabledReason = 'kernel debugging needs a second machine' })
+        $e = @(Get-SkillEntry -Pack $pack)
+        $e.Count | Should -Be 2
+        ($e | Where-Object { -not $_.Enabled }).DisabledReason |
+            Should -BeLike '*second machine*'
+        ($e | Where-Object { $_.Enabled }).DisabledReason | Should -Be ''
+    }
+
+    It 'returns nothing for a pack entry that declares no skills key at all' {
+        @(Get-SkillEntry -Pack ([PSCustomObject]@{ namespace = 'x' })).Count |
+            Should -Be 0
+    }
 }
 
 Describe 'Get-SkillScanRule' {

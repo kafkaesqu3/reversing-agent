@@ -115,6 +115,73 @@ function Get-ManualStep {
     return $steps
 }
 
+function ConvertTo-ManifestSkillRecord {
+    <#
+    .SYNOPSIS
+        One skill pack's manifest record, from its install or replayed result.
+    .DESCRIPTION
+        Split out of Write-Manifest so that function stays a readable shape
+        rather than four nested projections.
+
+        skillEntries records every skill the pack declares and, for a disabled
+        one, why - design spec section 1.3.5. It sits beside the existing
+        skills field rather than replacing it: skills is what installed, which
+        is what the orphan sweep and Get-RecordedSkillResult read.
+
+        A result built before skillEntries existed, or by a narrower test, is
+        recorded with an empty list rather than throwing under Set-StrictMode.
+    .PARAMETER Result
+        One skill pack result from Install-AllSkill or Get-RecordedSkillResult.
+    .OUTPUTS
+        [ordered] The manifest's skills[] entry for that pack.
+    .EXAMPLE
+        ConvertTo-ManifestSkillRecord -Result $skillResult
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][object]$Result)
+
+    $entries = @()
+    if ($Result.PSObject.Properties.Name -contains 'SkillEntries') {
+        $entries = @($Result.SkillEntries)
+    }
+    return [ordered]@{
+        namespace = $Result.Namespace; status = $Result.Status; repo = $Result.Repo
+        commit = $Result.Commit; treeSha256 = $Result.TreeSha256
+        reviewedBy = $Result.ReviewedBy; reviewedAt = $Result.ReviewedAt
+        skills = @($Result.SkillNames)
+        skillEntries = @($entries | ForEach-Object {
+                [ordered]@{ name = $_.Name; enabled = $_.Enabled
+                    disabledReason = $_.DisabledReason
+                } })
+        reason = $Result.Reason
+        findings = @($Result.Findings | Select-Object -First 20 | ForEach-Object {
+                [ordered]@{ rule = $_.RuleId; file = $_.File; line = $_.Line } })
+    }
+}
+
+function Get-ManifestSkillEntry {
+    <#
+    .SYNOPSIS
+        The per-skill entries recorded against one pack in manifest.json.
+    .DESCRIPTION
+        skillEntries is newer than the manifest format, so a manifest written
+        by an earlier run does not carry it. Reading straight through would
+        throw under Set-StrictMode and take verification down on exactly the
+        hosts whose recorded state is oldest.
+    .PARAMETER Entry
+        One skills[] entry read back out of manifest.json.
+    .OUTPUTS
+        [array] The recorded entries, or empty for a manifest that predates them.
+    .EXAMPLE
+        Get-ManifestSkillEntry -Entry $recordedPack
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][object]$Entry)
+
+    if ($Entry.PSObject.Properties.Name -notcontains 'skillEntries') { return @() }
+    return @($Entry.skillEntries)
+}
+
 function Write-Manifest {
     <#
     .SYNOPSIS
@@ -127,7 +194,8 @@ function Write-Manifest {
         The top-level keys are fixed: generatedAt, configVersion, inventory,
         phases, servers, skills, verification, authExemptions, manualSteps.
         skills sits beside servers - the manifest is the one place both an
-        MCP server's and a skill pack's last-known state are recorded together.
+        MCP server's and a skill pack's last-known state are recorded together,
+        including every skill a pack declares and why a disabled one is off.
     .PARAMETER Context
         The shared phase context.
     .PARAMETER PhaseResults
@@ -169,14 +237,7 @@ function Write-Manifest {
                 }
             })
         skills        = @($skillResults | Sort-Object Namespace | ForEach-Object {
-                [ordered]@{
-                    namespace = $_.Namespace; status = $_.Status; repo = $_.Repo
-                    commit = $_.Commit; treeSha256 = $_.TreeSha256
-                    reviewedBy = $_.ReviewedBy; reviewedAt = $_.ReviewedAt
-                    skills = @($_.SkillNames); reason = $_.Reason
-                    findings = @($_.Findings | Select-Object -First 20 | ForEach-Object {
-                            [ordered]@{ rule = $_.RuleId; file = $_.File; line = $_.Line } })
-                } })
+                ConvertTo-ManifestSkillRecord -Result $_ })
         verification  = @($Context.VerifyResults | ForEach-Object {
                 [ordered]@{ name = $_.Name; status = $_.Status }
             })
@@ -308,6 +369,7 @@ function Get-RecordedSkillResult {
             Status     = $entry.status
             Installed  = @('installed', 'skipped') -contains $entry.status
             SkillNames = @($entry.skills)
+            SkillEntries = @(Get-ManifestSkillEntry -Entry $entry)
             Repo       = $entry.repo
             Commit     = $entry.commit
             TreeSha256 = $entry.treeSha256
@@ -321,4 +383,5 @@ function Get-RecordedSkillResult {
 }
 
 Export-ModuleMember -Function Get-ManualStep, Write-Manifest, Get-RecordedServerResult, `
-    Get-SkillPackProp, Test-SkillPackReviewGap, Get-RecordedSkillResult
+    Get-SkillPackProp, Test-SkillPackReviewGap, Get-RecordedSkillResult, `
+    ConvertTo-ManifestSkillRecord, Get-ManifestSkillEntry
