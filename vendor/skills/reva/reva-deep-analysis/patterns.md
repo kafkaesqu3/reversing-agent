@@ -660,8 +660,10 @@ re-encrypt_code(new_seed);
 1. **Observe structure** - What loops, branches, data structures appear?
 2. **Compare to patterns** - Does this match known algorithmic patterns?
 3. **Verify with evidence** - Check for characteristic constants, operations, structure
-4. **Document pattern** - Tag with `set_comment` naming the pattern (there is no bookmark tool on this surface, see the SKILL.md Limitations)
-5. **Improve code** - Rename variables/functions to reflect pattern (e.g., `aes_encrypt`, `rc4_keystream`)
+4. **Document pattern** - Tag with `set_comment` naming the pattern (no bookmark tool exists
+   on this surface; see the SKILL.md Limitations)
+5. **Improve code** - Rename variables/functions to reflect pattern (with the `ai_` prefix,
+   e.g., `ai_aes_encrypt`, `ai_rc4_keystream`)
 
 ### Example Investigation
 

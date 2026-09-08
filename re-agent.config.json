@@ -278,7 +278,7 @@
         { "upstream": "ctf-crypto", "name": "reva-ctf-crypto", "enabled": false,
           "disabledReason": "same ReVa-tool-surface mismatch as reva-ctf-rev; out of scope for this task's triage/deep-analysis mandate and would need its own full adaptation pass" },
         { "upstream": "ctf-pwn", "name": "reva-ctf-pwn", "enabled": false,
-          "disabledReason": "same ReVa-tool-surface mismatch as reva-ctf-rev; also assumes external exploitation tooling (pwntools, a debugger) this install does not provide" },
+          "disabledReason": "same ReVa-tool-surface mismatch as reva-ctf-rev; also assumes external exploitation tooling (pwntools) this install does not provide" },
         { "upstream": "pyghidra-scripting", "name": "reva-pyghidra-scripting", "enabled": false,
           "disabledReason": "drives ReVa's run-script/list-scripts/read-script/write-script/edit-script raw PyGhidra scripting console; pyghidra-mcp exposes no equivalent scripting tool, the same gap already documented in the ghidra pack's SKILL.md for raw PyGhidra scripting" }
       ]

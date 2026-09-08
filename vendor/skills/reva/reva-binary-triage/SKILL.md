@@ -26,7 +26,8 @@ deep analysis -- for that, hand off to `reva-deep-analysis`. Our goal is to:
 
 ## Binary triage with pyghidra-mcp
 
-**This install exposes only the 20 `pyghidra-mcp` MCP tools listed above in `allowed-tools`.**
+**This install's `pyghidra-mcp` server exposes 20 tools; the ones this skill uses are listed
+above in `allowed-tools`.**
 Upstream ReVa (`cyberkaida/reverse-engineering-assistant`) is a different Ghidra extension with
 its own, richer tool surface -- this skill has been retargeted onto `pyghidra-mcp`'s 20 tools,
 and two of upstream's eight survey steps have no equivalent here at all. Read `## Limitations`
@@ -123,12 +124,11 @@ tool. `pyghidra-mcp` has none. The closest available signal:
   - Specific (include addresses, function names, strings)
   - Actionable (what needs to be investigated)
   - Prioritized (most suspicious first)
-- **This replaces upstream's bookmark-based tracking** (`set-bookmark type="TODO"`).
+- Upstream's own Step 8 used `TodoWrite` here too -- no capability was lost in adaptation.
   `pyghidra-mcp` has no bookmark tool at all -- see `## Limitations`. `TodoWrite` is the
-  session's task list; it does not persist in the Ghidra database the way a bookmark would, so a
-  fresh session will not see it. Hand findings that must survive the session to
-  `reva-deep-analysis`, which records them as database comments instead (see that skill's
-  Tracking Phase).
+  session's task list; it does not persist in the Ghidra database, so a fresh session will not
+  see it. Hand findings that must survive the session to `reva-deep-analysis`, which records
+  them as database comments instead (see that skill's Tracking Phase).
 
 ## Output Format
 
@@ -197,5 +197,7 @@ its own ReVa Ghidra extension, not `pyghidra-mcp`). Capabilities that do not por
 - **No dedicated string- or symbol-count tool** (`get-strings-count`, `get-symbols-count`). Counts
   in this skill's output are counts of returned results, not verified totals, unless stated
   otherwise.
-- **No bookmark tool** (`set-bookmark`, `search-bookmarks`). Step 8 uses `TodoWrite` for
-  within-session tracking only; nothing here persists findings into the Ghidra database itself.
+- **No bookmark tool** (`set-bookmark`, `search-bookmarks`) -- true of upstream's triage too, so
+  nothing was lost here. Step 8 uses `TodoWrite` for within-session tracking, as upstream's
+  triage also did; nothing persists findings into the Ghidra database itself. Cross-session
+  persistence is attempted in `reva-deep-analysis`'s Tracking Phase via tagged `set_comment`.

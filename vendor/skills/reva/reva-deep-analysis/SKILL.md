@@ -35,7 +35,8 @@ Unlike `reva-binary-triage` (breadth-first survey), you perform **depth-first in
 - Document all assumptions with evidence
 - Return findings with new investigation threads
 
-**This install exposes only the 20 `pyghidra-mcp` tools listed in `allowed-tools`.** Upstream ReVa
+**This install's `pyghidra-mcp` server exposes 20 tools; the ones this skill uses are listed
+in `allowed-tools`.** Upstream ReVa
 (`cyberkaida/reverse-engineering-assistant`) is a different Ghidra extension with a larger,
 purpose-built tool surface; several of its steps below have been retargeted onto the nearest
 `pyghidra-mcp` tool, and a few have no equivalent at all. Read `## Limitations` before treating any
@@ -623,9 +624,9 @@ that do not port to this host's 20-tool surface:
   `ghidra` pack's `ghidra-iterative-re` skill, which documents the same gap on this same server.
 
 `patterns.md` is algorithm- and behavior-recognition reference material, largely tool-agnostic;
-the handful of tool-name mentions in it were adapted along with this file. Upstream also shipped a `examples.md` walkthrough script
-written entirely against ReVa's own tool surface, including bookmark and structure-parsing calls
-that have no equivalent here; it was not carried forward during adaptation rather than left in
-place citing tools this host does not have. The pristine upstream copy is retrievable from this
+the handful of tool-name mentions in it were adapted along with this file. Upstream also shipped
+an `examples.md` walkthrough script whose every worked example calls tools this host lacks
+(`set-bookmark`, `parse-c-structure`); it was dropped during adaptation rather than carried
+forward citing tools that do not exist here. The pristine upstream copy is retrievable from this
 pack's first (pre-adaptation) commit if a full rewrite is wanted later. See `## Example
 Investigation Flow` above for this skill's own worked example instead.
