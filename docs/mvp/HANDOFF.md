@@ -424,6 +424,19 @@ in `docs/mvp/MVP.md`.
 Until step 5 is done, `Install-SkillPack` refuses the pack with "human review gate: no sign-off
 recorded" and `Get-ManualStep` says so in the manifest. That is not a bug to route around.
 
+### `reviewedBy`/`reviewedAt` schema rule — not implemented, deliberately
+
+Spec §7.1 states a schema rule: `reviewedBy` and `reviewedAt` must be non-empty when
+`treeSha256` is set. `Test-ReAgentConfigSchema` does not enforce it. This is not an
+oversight: the shipped `re-agent.config.json` carries real tree hashes but deliberately
+blank sign-offs pending the user's own review, so enforcing the rule as written would
+make the shipped config **fail to load at all**. Do not "fix" this without first
+landing real sign-offs — it would break config loading for everyone.
+
+The effective behaviour is still safe: `Test-SkillPackReviewed` is unconditionally
+stricter at install time and refuses any pack with no recorded sign-off, regardless of
+what the schema check does or does not enforce. See "Adding a pack" above.
+
 ### A local marketplace manifest — measured, not built
 
 Plan Task 22's `New-MarketplaceManifest` is **not implemented, deliberately** — not merely
@@ -453,6 +466,18 @@ original requirements.
 
 ### What is not done
 
-Plan tasks 18 (packs 6–8), 19 (x64dbg — deferred by decision), 20 (Binary Ninja) and 22 (local
-marketplace manifest — measured, not built; see above) are outstanding. No pack has a recorded
-human sign-off yet, so no pack installs yet.
+**Task 18 is done.** Eight packs ship in total; three landed on this pass, each vendored,
+adapted, reviewed and fixed: `reva` (`cyberkaida/reverse-engineering-assistant`, 2 of 6
+skills enabled), `tob` (`trailofbits/skills`, narrowed to the single `trailmark` skill),
+and `arch` (`NickCrew/Claude-Cortex`, 1 skill).
+
+**Task 19** (x64dbg) remains deferred by decision — unchanged, see above.
+
+**Task 20** (Binary Ninja) is still outstanding. Its blocker is specific: Step 1 needs an
+attended `.\Install-REAgent.ps1 -Attended -UpdateToolCatalog` capture with Binary Ninja
+running, and `data/tool-catalog.json` has no `binaryninja` entry yet, so G1 has nothing to
+check `bn_*` names against.
+
+**Task 22** (local marketplace manifest) is measured, not built — see above.
+
+**No pack has a recorded human sign-off yet, so no pack installs yet.**
