@@ -1,5 +1,5 @@
 ---
-name: graph-evolution
+name: tob-graph-evolution
 description: >
   Compares Trailmark code graphs at two source code snapshots (git commits,
   tags, or directories) to surface security-relevant structural changes.

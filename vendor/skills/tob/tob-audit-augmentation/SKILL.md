@@ -1,5 +1,5 @@
 ---
-name: audit-augmentation
+name: tob-audit-augmentation
 description: >
   Augments Trailmark code graphs with external audit findings from SARIF static
   analysis results, weAudit annotation files, and version-gated Trailmark 0.4.x

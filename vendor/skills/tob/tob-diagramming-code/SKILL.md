@@ -1,5 +1,5 @@
 ---
-name: diagramming-code
+name: tob-diagramming-code
 description: >
   Generates Mermaid diagrams from Trailmark code graphs. Produces call graphs,
   class hierarchies, module dependency maps, containment diagrams, complexity

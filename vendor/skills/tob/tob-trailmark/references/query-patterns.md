@@ -1,5 +1,34 @@
 # Trailmark Query Patterns for Security Analysis
 
+## On this host (binary-graph adaptation)
+
+This file is upstream, describing Trailmark's query API against a **source** graph built with
+`QueryEngine.from_directory()`. See `SKILL.md`'s "Building a binary graph on this host" for how
+this pack actually builds the graph (`QueryEngine.from_graph(CodeGraph())` +
+`engine.augment_binary()`), and adjust the patterns below accordingly:
+
+- **Patterns 3, 4, 6, 9, 12** (call-path analysis, caller analysis, transitive slices, graph
+  export, annotation workflow) work unchanged -- they operate on node IDs and call edges, which a
+  binary graph has regardless of node origin. Only swap `engine = QueryEngine.from_directory(...)`
+  for the binary-graph construction in `SKILL.md`.
+- **Pattern 1 (attack surface) and Pattern 5 (entrypoint reachability)** return nothing until you
+  manually seed `graph.entrypoints` -- see `SKILL.md`'s `## Pre-Analysis on a binary-only graph`.
+  `from_graph()` does not run entrypoint detection the way `from_directory()` does.
+- **Pattern 2 (complexity hotspots) does not apply.** `cyclomatic_complexity` is computed by
+  Trailmark's source parsers and is `None` on every binary-origin node (`_binary_unit()` never
+  sets it) -- binary nodes will not appear in `complexity_hotspots()` results no matter the
+  threshold. There is no substitute in this workflow; complexity ranking on this host, if wanted,
+  is a separate exercise over Ghidra's own decompiled output, not a Trailmark query.
+- **Pattern 7 (subgraph connections)** depends on `preanalysis()` subgraphs that in turn depend on
+  entrypoints -- same caveat as Pattern 1/5.
+- **Patterns 8, 10, 10a (type/generic queries, multi-language analysis, `.trailmark/links.toml`
+  cross-boundary links) do not apply.** All three depend on source-language parser metadata a
+  binary-only graph never has.
+- **Pattern 11 (CLI patterns) does not apply to this workflow.** Every listed CLI command
+  (`analyze`, `entrypoints`, `diff`, `diagram`) takes a source directory; there is no
+  `trailmark`-CLI equivalent of `augment_binary()`. This pack's binary-graph workflow is
+  Python-API-only (see `SKILL.md`).
+
 Common patterns for using Trailmark in security reviews.
 
 ## Version-Gated Queries
