@@ -199,6 +199,7 @@ from trailmark.models.annotations import EntrypointKind, EntrypointTag, TrustLev
 # through the same public lookup those query methods use, rather than guessing
 # or reconstructing the id format by hand:
 node_id = engine._store.find_node_id("<entry-function-symbol>")
+assert node_id is not None, "entry function not found in the graph -- check the symbol"
 engine._store._graph.entrypoints[node_id] = EntrypointTag(
     kind=EntrypointKind.USER_INPUT, trust_level=TrustLevel.UNTRUSTED_EXTERNAL)
 ```
@@ -253,9 +254,10 @@ it documents the same `QueryEngine` methods this skill calls above) and
 
 ## Limitations
 
-Adapted from `trailofbits/skills`' `trailmark` skill (upstream plugin: `trailmark`, part of a
-14-skill plugin; only this one core skill is vendored-and-adapted here -- see
-`re-agent.config.json`'s `tob` pack for the other 13, vendored but disabled).
+Adapted from `trailofbits/skills`' `trailmark` skill. Upstream's `trailmark` plugin ships 14
+skills; only this one core skill was vendored here at all -- the other 13 were never copied
+into `vendor/skills/tob/` and have no entry of any kind in `re-agent.config.json`'s `tob` pack
+(one `skills[]` entry, `tob-trailmark`, and nothing else). See the next bullet.
 
 - **Partial graph, not a whole-binary call graph.** This skill's graph contains only the
   functions you explicitly fed it through steps 1-3. Blast radius, reachability, and taint numbers
@@ -275,6 +277,12 @@ Adapted from `trailofbits/skills`' `trailmark` skill (upstream plugin: `trailmar
   `.trailmark/links.toml` cross-language links, SQL schema parsing, type/generic queries, and
   `diff_against()` (two source snapshots) all assume source nodes this workflow never creates.
   Do not invoke them against a binary-only graph.
-- **The 13 sibling skills in this plugin are vendored but disabled**, not retargeted -- see their
-  `disabledReason` entries in `re-agent.config.json`. None of their prose was adapted; treat any
-  cross-reference to them elsewhere in this pack's vendored (but disabled) files as inert.
+- **Upstream's other 13 `trailmark`-plugin skills were deliberately not vendored at all** --
+  not vendored-and-disabled, simply absent. They covered source-tree workflows this host
+  cannot run anyway (mutation testing, SARIF/CodeQL/Semgrep integration, git-diff review
+  gates, formal-verification spec generation), so narrowing to this one skill lost no
+  capability this host could have used. A cross-reference to one of them elsewhere in this
+  pack's remaining upstream text names a skill that is not installed here -- for example,
+  `references/preanalysis-passes.md`'s pristine "before downstream skills (genotoxic,
+  diagramming-code) consume it" refers to two skills that do not exist on this host; treat
+  any such mention as inert, not as a pointer to something you can invoke.
