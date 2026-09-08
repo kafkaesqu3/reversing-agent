@@ -71,10 +71,32 @@ install and do not exist here. Route to a real tool or skill on this host instea
 
 - **Windows crash dump, hang, or live-process triage** -> the `windbg` skills
   (`windbg-crash-analysis`, `windbg-doctor`), which drive `mcp-windbg`.
-- **Static disassembly, decompilation, or iterative rename/retype of a standalone binary** ->
-  the `ghidra-iterative-re` skill, which drives `pyghidra-mcp`. Binary Ninja (`binaryninja` MCP
-  server) is also available for GUI-driven static analysis; there is no dedicated skill for it
-  yet, so drive its `bn_*` tools directly.
+- **A dump from a .NET/CLR or mixed-mode process** -> the `dotnet-debugging` skill, not
+  `windbg-crash-analysis`. It drives the same `mcp-windbg` server but works the dump through
+  SOS (`!clrstack`, `!dumpheap`, `!gcroot`, `!syncblk`), which is what a managed stack needs;
+  a native-only triage of a managed dump reports frames nobody can act on.
+- **A binary you do not understand yet** -> the `reva-binary-triage` skill: a breadth-first
+  survey over `pyghidra-mcp` (strings, imports/exports, symbols, entry-point decompile) that
+  flags suspicious areas and ends with a task list of what to investigate next.
+- **A specific question about a binary** ("what does this function do", "is this crypto",
+  "what is the C2 address", "fix the types here") -> the `reva-deep-analysis` skill:
+  depth-first investigation over `pyghidra-mcp`, one thread followed to the end, each answer
+  returned with its evidence. Run it after `reva-binary-triage`, or straight away when the
+  question is already sharp.
+- **A sustained rename/retype campaign on one binary** - iterative decompile, apply, re-read,
+  under the `ai_`-prefix trust model and invariant bracketing -> the `ghidra-iterative-re`
+  skill, which also drives `pyghidra-mcp`. Binary Ninja (`binaryninja` MCP server) is also
+  available for GUI-driven static analysis; there is no dedicated skill for it yet, so drive
+  its `bn_*` tools directly.
+- **The deliverable is diagrams** - "diagram this binary", "map what it talks to", control
+  flow, data flow, failure modes, or imported/exported-API integration points, written up
+  with address citations -> the `arch-architectural-analysis` skill. Its own description
+  draws the boundary: not for a one-off prose explanation (`reva-deep-analysis`) and not for
+  a first-pass survey of an unfamiliar binary (`reva-binary-triage`).
+- **You already have a function set and need graph-level structure over it** - blast radius,
+  taint propagation, privilege boundaries, entry-point reachability -> the `tob-trailmark`
+  skill, which assembles a Trailmark binary graph from `pyghidra-mcp` output. It comes after
+  triage or deep analysis has chosen the functions, not before.
 - **Live x86/x64 dynamic debugging** (breakpoints, stepping, memory/register inspection) ->
   the `x64dbg-x64` / `x64dbg-x32` MCP servers directly. Both are attended (`requiresHostApp`):
   x64dbg must already be running with its plugin loaded. There is no dedicated skill for x64dbg
