@@ -82,9 +82,11 @@ Write-Host '  1. Read every SKILL.md in full. The scanner is a backstop, not the
 Write-Host '  2. Confirm the repo is the intended upstream, not a near-identical fork.'
 Write-Host '  3. Adapt tool names, frontmatter name, and description in a SECOND commit.'
 Write-Host '  4. Check each allowed-tools list against what the skill actually does.'
-Write-Host '     It is a real permission grant, not documentation: Bash, Write, Edit and'
-Write-Host '     Task are far broader than most skills need, and a tool the body drives'
-Write-Host '     but does not declare makes G1 pass vacuously.'
+Write-Host '     Measured on 2.1.263: it does NOT restrict the skill at runtime, so'
+Write-Host '     narrowing a list buys no containment. Read it as a statement of'
+Write-Host '     intent - Bash, Write, Edit or Task far broader than the body needs'
+Write-Host '     means the body deserves a harder read - and note that a tool the body'
+Write-Host '     drives but does not declare makes G1 pass vacuously.'
 Write-Host '  5. Decide every disabled skill deliberately, and say WHY in disabledReason.'
 Write-Host "  6. Record treeSha256, reviewedBy, reviewedAt and reviewedCommit under"
 Write-Host "     skills[$Namespace] in re-agent.config.json."

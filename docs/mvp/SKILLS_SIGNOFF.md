@@ -18,10 +18,14 @@ The scanner is the backstop that catches what a tired reader misses.*
 2. **Confirm the upstream is the one you meant** — not a near-identical fork. Check
    `source.repo` and `source.commit` against the real repository. `dariushoule/x64dbg-skills`
    has at least four near-identical forks; assume every popular pack does.
-3. **Check `allowed-tools` against what the skill actually does.** It is a real permission
-   grant, not documentation. `Bash`, `Write`, `Edit` and `Task` are far broader than most
-   skills need. A tool the body drives but does not declare gets no grant at runtime *and*
-   makes G1 pass vacuously.
+3. **Check `allowed-tools` against what the skill actually does.** Measured on Claude Code
+   2.1.263, this key does **not** restrict a skill at runtime: a project skill declaring only
+   `Read` still drove `Bash`, and one declaring `Bash` was still denied it when the session
+   denied it. It neither grants nor restricts, so narrowing a list buys you no containment.
+   Read it as a statement of intent - `Bash`, `Write`, `Edit` or `Task` far broader than the
+   body needs means the body deserves a harder read - and note that a tool the body drives but
+   does not declare still makes G1 pass vacuously. The runtime fence is session permissions
+   plus your own read of the body.
 4. **Check every disabled skill's `disabledReason`** still states a true reason you agree with.
 5. Then record, under `skills[<ns>].review` in `re-agent.config.json`:
    `reviewedBy`, `reviewedAt`, and `notes` saying what you actually read.
@@ -50,10 +54,11 @@ that belongs to the operator, not to the agent that vendored the pack.
 
 ### `ghidra` — GeReV/ghidra-iterative-re
 
-- **`allowed-tools` grants blanket `Bash`** for the whole skill, needed by
-  `scripts/msvc_demangle`. Claude Code's tool-grant model has no finer granularity here.
-  Worth checking that pyghidra's Python library is not shell-reachable in a way that steps
-  around pyghidra-mcp's own tool boundary.
+- **`allowed-tools` declares blanket `Bash`** for the whole skill, needed by
+  `scripts/msvc_demangle`. Because the key does not fence anything at runtime, narrowing it
+  changes nothing: the real question is whether you accept a skill whose body reaches for a
+  shell at all, and whether pyghidra's Python library is shell-reachable in a way that steps
+  around pyghidra-mcp's own tool boundary. Use session permissions if you want a real fence.
 - Upstream diverged much further than the spec anticipated: one 459-line skill plus roughly
   9,300 lines of PyGhidra-*scripting* reference material that this tool surface cannot
   execute. The adaptation covers `SKILL.md`; **rewriting the reference corpus was explicitly
@@ -77,9 +82,10 @@ that belongs to the operator, not to the agent that vendored the pack.
   instead. Every link in that chain was independently verified against live GitHub
   (3,191 stars, actively maintained, pinned commit was HEAD at vendor time). **It was not
   auto-approved.** Confirm the substitution before signing off, or reject it and drop the pack.
-- **`allowed-tools` grants `Write`, `Edit` and `Task`** to a skill whose own description says
+- **`allowed-tools` declares `Write`, `Edit` and `Task`** on a skill whose own description says
   it "decides which server or skill to reach for, then hands off". `Task` spawns subagents,
-  which spec §1.2 puts out of scope for this slice. Narrow the list or accept it deliberately.
+  which spec §1.2 puts out of scope for this slice. Narrowing the list does not fence it, so
+  decide on the body: accept that reach deliberately, or cut the instructions that use it.
 
 ### `dotnet` — fenzel999/dotnet-artisan (`dotnet-debugging`)
 

@@ -368,9 +368,14 @@ not installed. Only G3 is gated on install state and on `-Attended`. G2 covers t
 vendored skill directory, not just `SKILL.md` — a pack can ship six renames and fifteen
 reference files, and the half-adaptation hides in the reference files.
 
-`allowed-tools` is not an invented field. It is Claude Code's real permission mechanism, so the
-declaration both feeds G1 **and** restricts the skill at runtime. A skill that drives a tool it
-does not declare gets no grant *and* passes G1 vacuously.
+`allowed-tools` is a real Claude Code frontmatter key and is accepted without warning, but
+measured on 2.1.263 it has **no runtime effect**: a project skill declaring only `Read` still
+drove `Bash`, and one declaring `Bash` was still denied it when the session denied it. It
+neither grants nor restricts. Treat it as a declaration of intent that G1 checks against the
+pinned catalog - a skill driving a tool it does not declare still passes G1 vacuously, which is
+the reason to keep the lists honest. Runtime containment comes from session permissions and
+from reading the body, not from this key. Method and evidence: the 2026-09-07 allowed-tools row
+in `docs/mvp/MVP.md`.
 
 ### Adding a pack
 

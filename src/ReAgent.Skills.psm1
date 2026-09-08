@@ -365,10 +365,15 @@ function Get-SkillToolReference {
     .SYNOPSIS
         Extracts MCP tool references from parsed frontmatter.
     .DESCRIPTION
-        Reads allowed-tools, which is Claude Code's real permission mechanism -
-        so the declaration both feeds this gate and restricts the skill at
-        runtime. A declaration that also grants access cannot drift from what
-        the skill can actually do.
+        Reads allowed-tools. Measured on Claude Code 2.1.263 (see MVP.md, the
+        2026-09-07 allowed-tools row): the key is accepted without warning but
+        has NO runtime effect. A project skill declaring only Read still drove
+        Bash; one declaring Bash was still denied it when the session denied it.
+        It neither grants nor restricts, so what it feeds this gate is a
+        DECLARATION OF INTENT, not a permission grant. That is still worth
+        checking - a tool the body drives but does not declare passes G1
+        vacuously - but the runtime fence is session permissions plus the human
+        read of the body.
 
         Server names contain hyphens (mcp-windbg, x64dbg-x64), so the split is
         on the literal '__' separator, not on a character class.

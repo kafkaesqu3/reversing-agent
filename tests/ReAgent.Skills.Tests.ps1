@@ -601,3 +601,24 @@ Describe 'The vendored ghidra pack keeps its SourceType adaptation' {
         $text | Should -Match 'naming convention'
     }
 }
+
+Describe 'The review checklist does not overstate what allowed-tools does' {
+    # Measured on Claude Code 2.1.263: allowed-tools neither grants nor restricts at
+    # runtime (MVP.md, the 2026-09-07 allowed-tools row). The checklist is the security
+    # control an operator works through before signing a pack off, so it must not tell
+    # them narrowing a list buys containment - they would tighten ghidra's blanket Bash
+    # and believe the shell was closed. This claim was wrong once already.
+    It 'stops the printed checklist calling it a permission grant' {
+        $tool = Join-Path $PSScriptRoot '../tools/Update-VendoredSkill.ps1'
+        $text = Get-Content -LiteralPath $tool -Raw
+        $text | Should -Not -BeLike '*real permission grant*'
+        $text | Should -BeLike '*does NOT restrict the skill at runtime*'
+    }
+
+    It 'stops the sign-off document calling it a permission grant' {
+        $doc = Join-Path $PSScriptRoot '../docs/mvp/SKILLS_SIGNOFF.md'
+        $text = Get-Content -LiteralPath $doc -Raw
+        $text | Should -Not -BeLike '*a real permission*'
+        $text | Should -BeLike '*narrowing a list buys you no containment*'
+    }
+}
