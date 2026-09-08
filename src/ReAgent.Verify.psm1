@@ -747,7 +747,7 @@ function Get-SkillPackFile {
     if (-not (Test-Path -LiteralPath $path)) {
         throw "Vendored skill file '$path' is missing."
     }
-    return (Get-Content -LiteralPath $path -Raw)
+    return (Get-Content -LiteralPath $path -Raw -Encoding UTF8)
 }
 
 function Merge-CheckStatus {

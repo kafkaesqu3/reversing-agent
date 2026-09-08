@@ -50,7 +50,8 @@ $rules = Get-SkillScanRule
 $findings = @()
 foreach ($d in $dirs) {
     foreach ($f in (Get-ChildItem -LiteralPath $d.FullName -Recurse -File)) {
-        $findings += @(Test-SkillContent -Text (Get-Content -LiteralPath $f.FullName -Raw) `
+        $findings += @(Test-SkillContent -Text (
+                Get-Content -LiteralPath $f.FullName -Raw -Encoding UTF8) `
                 -Rules $rules -File "$($d.Name)/$($f.Name)")
     }
 }

@@ -622,3 +622,67 @@ Describe 'The review checklist does not overstate what allowed-tools does' {
         $text | Should -BeLike '*narrowing a list buys you no containment*'
     }
 }
+
+Describe 'Write-SkillPackFile installs the exact bytes it was given' {
+    # Regression: the source read had no -Encoding UTF8, so on PowerShell 5.1 Get-Content
+    # -Raw decoded a BOM-less UTF-8 vendored file as the system ANSI code page and
+    # Write-Utf8NoBomFile re-encoded the mojibake. Every em dash and arrow in the adapted
+    # mapping tables ("upstream's X -> this host's Y") reached .claude\skills corrupted,
+    # so the bytes a human signed the pack off over were not the bytes the agent read.
+    BeforeAll {
+        $Script:Em = [string][char]0x2014      # em dash
+        $Script:Arrow = [string][char]0x2192   # rightwards arrow
+        function Write-Utf8Fixture {
+            # Test fixture: writes only under $TestDrive, never touches real system state.
+            [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+                'PSUseShouldProcessForStateChangingFunctions', '')]
+            param($Path, $Text)
+            $null = New-Item -ItemType Directory -Path (Split-Path -Parent $Path) -Force
+            [System.IO.File]::WriteAllText($Path, $Text,
+                (New-Object System.Text.UTF8Encoding($false)))
+        }
+        function Get-FileBase64 {
+            param($Path)
+            [System.Convert]::ToBase64String([System.IO.File]::ReadAllBytes($Path))
+        }
+    }
+
+    It 'copies a SKILL.md carrying an em dash and an arrow through byte for byte' {
+        $repo = Join-Path $TestDrive 'wspf-utf8'
+        $packRoot = Join-Path $repo 'vendor\skills\windbg'
+        $srcFile = Join-Path $packRoot 'windbg-crash\SKILL.md'
+        Write-Utf8Fixture -Path $srcFile -Text (
+            "---`nname: windbg-crash`ndescription: Test skill.`n---`n" +
+            "Upstream's run_windbg_cmd $Script:Arrow this host's run_cdb_command $Script:Em " +
+            "the rename is the point.`n")
+
+        $skillRoot = Join-Path $repo 'agent\.claude\skills'
+        $null = Write-SkillPackFile -PackRoot $packRoot -SkillRoot $skillRoot `
+            -Namespace 'windbg' -Skill ([PSCustomObject]@{ upstream = 'crash'
+                name = 'windbg-crash' })
+
+        $out = Join-Path $skillRoot 'windbg-crash\SKILL.md'
+        Get-FileBase64 -Path $out | Should -Be (Get-FileBase64 -Path $srcFile)
+    }
+
+    It 'copies a reference file carrying an arrow through byte for byte' {
+        # The mapping tables the adaptation reviews spent five rounds on live under
+        # references/, not in SKILL.md, so the recursive copy needs its own assertion.
+        $repo = Join-Path $TestDrive 'wspf-utf8-ref'
+        $packRoot = Join-Path $repo 'vendor\skills\windbg'
+        Write-Utf8Fixture -Path (Join-Path $packRoot 'windbg-crash\SKILL.md') -Text (
+            "---`nname: windbg-crash`ndescription: Test skill.`n---`nBody.`n")
+        $refFile = Join-Path $packRoot 'windbg-crash\references\mapping.md'
+        Write-Utf8Fixture -Path $refFile -Text (
+            "| upstream | here |`n| --- | --- |`n" +
+            "| run_windbg_cmd $Script:Arrow | run_cdb_command |`n")
+
+        $skillRoot = Join-Path $repo 'agent\.claude\skills'
+        $null = Write-SkillPackFile -PackRoot $packRoot -SkillRoot $skillRoot `
+            -Namespace 'windbg' -Skill ([PSCustomObject]@{ upstream = 'crash'
+                name = 'windbg-crash' })
+
+        $out = Join-Path $skillRoot 'windbg-crash\references\mapping.md'
+        Get-FileBase64 -Path $out | Should -Be (Get-FileBase64 -Path $refFile)
+    }
+}

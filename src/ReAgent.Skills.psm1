@@ -594,7 +594,7 @@ function Test-SkillTreeRename {
     if ($ToolRenames.Count -eq 0) { return $findings }
     foreach ($f in (Get-ChildItem -LiteralPath $Directory -Recurse -File)) {
         if ($f.Name -eq 'SKILL.md') { continue }
-        $text = Get-Content -LiteralPath $f.FullName -Raw
+        $text = Get-Content -LiteralPath $f.FullName -Raw -Encoding UTF8
         if (-not $text) { continue }
         $rel = Get-SkillRelativePath -Root $Directory -File $f
         foreach ($a in (Test-SkillRenameCompletenessCheck -Text $text `
@@ -801,7 +801,8 @@ function Write-SkillPackFile {
     foreach ($f in (Get-ChildItem -LiteralPath $src -Recurse -File)) {
         $rel = $f.FullName.Substring($src.Length).TrimStart('\')
         $out = Join-Path $dst $rel
-        if (Write-FileIfChanged -Path $out -Text (Get-Content -LiteralPath $f.FullName -Raw)) {
+        $text = Get-Content -LiteralPath $f.FullName -Raw -Encoding UTF8
+        if (Write-FileIfChanged -Path $out -Text $text) {
             $wrote = $true
         }
     }
@@ -1016,14 +1017,16 @@ function Get-SkillGateFinding {
     $findings = @()
     foreach ($f in (Get-ChildItem -LiteralPath $Directory -Recurse -File)) {
         $rel = Get-SkillRelativePath -Root $Directory -File $f
-        $raw = @(Test-SkillContent -Text (Get-Content -LiteralPath $f.FullName -Raw) `
+        $raw = @(Test-SkillContent -Text (
+                Get-Content -LiteralPath $f.FullName -Raw -Encoding UTF8) `
                 -Rules $Rules -File "$($Skill.name)/$rel")
         $findings += @(Select-UnwaivedFinding -Findings $raw -Exceptions $Exceptions `
                 -Skill $Skill.upstream) | Where-Object { $_.Severity -eq 'block' }
     }
 
     $md = Join-Path $Directory 'SKILL.md'
-    foreach ($a in @(Test-SkillAdaptation -Text (Get-Content -LiteralPath $md -Raw) `
+    $mdText = Get-Content -LiteralPath $md -Raw -Encoding UTF8
+    foreach ($a in @(Test-SkillAdaptation -Text $mdText `
                 -DirectoryName $Skill.name -Catalog $Catalog `
                 -TargetServers $TargetServers -ToolRenames $ToolRenames)) {
         $findings += [PSCustomObject]@{ RuleId = $a.Check; Severity = 'block'
