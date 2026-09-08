@@ -334,6 +334,35 @@ not by a second hash — spec §4.1 describes per-file hashes verified on every 
 **that half is not implemented**. Do not "fix" the drift check to compare the installed tree
 against `treeSha256`: it would fail permanently while looking correct.
 
+### `treeSha256`'s covered scope varies by pack layout
+
+`tools/Update-VendoredSkill.ps1:42` computes `$staging = $dirs[0].Parent.FullName` and
+`Get-TreeHash` digests *that* — the containing directory of the first selected skill, not
+the set of skills `subPath` actually selected. Demonstrated concretely: narrowing the `tob`
+pack from 14 vendored skill directories to 1 (`subPath` from `plugins/trailmark/skills` to
+`plugins/trailmark/skills/trailmark`) left `treeSha256` byte-identical
+(`b69e656f971f3ac36de4a35f86038003df31f86d0b758b196beed75d2651abac`), because both
+`subPath` values resolve to the same parent `skills/` folder and both hash all 14 upstream
+directories. For `ghidra` the covered scope is the whole upstream repository.
+
+Two consequences: the pin cannot distinguish what a pack shipped from what it did not, and
+a change to a sibling directory a pack deliberately does not vendor will trip the drift
+check with no attack behind it — the false-positive failure mode `Get-TreeHash`'s own
+docstring warns destroys the control ("a control that fails for non-attack reasons teaches
+the operator to re-pin on mismatch, which destroys it").
+
+Not fixed here: it is pre-existing rather than introduced on this branch, it lives in the
+maintainer script rather than in vendored content, and correcting it changes every pack's
+recorded hash, forcing a re-pin of all eight packs. The fix, when someone takes it, is to
+hash the union of the selected directories rather than `$dirs[0].Parent`.
+
+What actually guarantees integrity today: both task reviews on this branch verified
+vendored content against GitHub by git blob SHA at the pinned commit — the same algorithm
+both sides use, byte-for-byte rather than a spot check — and it came back 113/113 files
+matching for `tob` and `arch`, 7/7 for `reva`. The guarantee is real; it is manual and
+one-time, not automated and standing. `Get-TreeHash` itself is correct and well-designed —
+the defect is in what the maintainer script hands it, not in the digest.
+
 ### The catalog is never refreshed by accident
 
 `data/tool-catalog.json` is the *expected* tool surface per server, checked into the repo
@@ -395,8 +424,35 @@ in `docs/mvp/MVP.md`.
 Until step 5 is done, `Install-SkillPack` refuses the pack with "human review gate: no sign-off
 recorded" and `Get-ManualStep` says so in the manifest. That is not a bug to route around.
 
+### A local marketplace manifest — measured, not built
+
+Plan Task 22's `New-MarketplaceManifest` is **not implemented, deliberately** — not merely
+missing. It was measured against Anthropic's own plugin documentation before any code was
+written, and three findings each independently defeat it as specified:
+
+1. A local marketplace is not auto-discovered — it needs a manual `/plugin marketplace add
+   ./path` or an `extraKnownMarketplaces` entry in `.claude/settings.json`, which is exactly
+   the live-marketplace-shaped mechanism locked decision S5 rejects.
+2. "One plugin entry per enabled pack" cannot be expressed over the locked flat layout: a
+   plugin's `source` must be a bare `SKILL.md` or contain a `skills/` subdirectory, and our
+   packs share one flat `.claude\skills\` root, so only one-plugin-per-**skill** is
+   expressible, never one-per-pack.
+3. The toggle would not toggle anything off. Claude Code keeps both `/skill-name` (flat) and
+   `/plugin-name:skill-name` (plugin) live at once — **this is the one to remember** — so
+   pointing a plugin at the flat dirs would show every skill twice, and disabling the plugin
+   would leave the flat copy installed and runnable.
+
+Packs **do** enable and disable today, through `re-agent.config.json` plus an installer
+re-run — the mechanism spec §7 and §10 actually specify and test. What is missing is only the
+per-session `/plugin` toggle. Fixing that needs a spec amendment to S5 and a move to a
+plugin-only install layout (per-pack directory, no flat copies) — not a bolt-on. Full ruling,
+including the two rejected alternatives, is in
+`.superpowers/sdd/2026-09-06-skills-vendoring/progress.md` under "Task 22 — NOT BUILT (ruling,
+2026-09-08)"; the plan's Task 22 section carries the same findings alongside the preserved
+original requirements.
+
 ### What is not done
 
 Plan tasks 18 (packs 6–8), 19 (x64dbg — deferred by decision), 20 (Binary Ninja) and 22 (local
-marketplace manifest) are outstanding. No pack has a recorded human sign-off yet, so no pack
-installs yet.
+marketplace manifest — measured, not built; see above) are outstanding. No pack has a recorded
+human sign-off yet, so no pack installs yet.

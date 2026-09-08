@@ -3057,7 +3057,54 @@ git commit -m "Give the agent the skill trust boundary and Ghidra provenance rul
 
 ---
 
-## Task 22: Local marketplace manifest
+## Task 22: Local marketplace manifest — DEFERRED-WITH-EVIDENCE, not part of this execution
+
+**Not built, by ruling on 2026-09-08 — measured, not skipped.** Before any code was
+written, `New-MarketplaceManifest` was checked against Anthropic's own plugin
+documentation (`plugin-marketplaces.md`, `plugins-reference.md`, `plugins.md`), and
+three findings each independently defeat the task as this section specifies it:
+
+1. A local marketplace is not auto-discovered — it requires a manual `/plugin
+   marketplace add ./path` or an `extraKnownMarketplaces` entry in
+   `.claude/settings.json`. That manual step is exactly what locked decision S5
+   rejects: "A plugin needs a marketplace and a `claude plugin` install step — a
+   live-marketplace-shaped mechanism the supply-chain rules push directly against."
+   Building it reintroduces the mechanism S5 exists to avoid.
+2. "One plugin entry per enabled pack" is not expressible over the locked flat
+   layout. A plugin's `source` directory must be either a bare `SKILL.md` at its
+   root or contain a `skills/` subdirectory. Our packs install as several sibling
+   flat directories under one shared `<agentRoot>\.claude\skills\` root, so a
+   per-pack `source` path would either not exist on disk or would sweep in every
+   other pack's skills. Only one-plugin-per-**skill** is expressible — contradicting
+   both this task's own wording and its `@($m.plugins).Count | Should -Be 2` test
+   below, which counts packs, not skills.
+3. The toggle would not toggle anything off. Plugin skills and flat project skills
+   coexist by design — both `/skill-name` and `/plugin-name:skill-name` remain
+   available rather than one overriding the other. Pointing plugins at the flat
+   dirs would show every skill **twice**, and disabling a plugin would leave the
+   flat copy live. Step 4's own acceptance check below ("disabling one removes its
+   skills from `/` without a re-run") cannot hold while flat discovery works — which
+   this task's opening paragraph also requires stay working.
+
+Authority: spec §1.3's Definition of Done does not list the manifest, and locked
+decision S5 calls it "a planned follow-up (Task 22), not a rejected idea" — a
+follow-up whose value is measured unreachable over the layout the spec locks is not
+one worth shipping inert.
+
+**Skipping this task means:** the agent VM has no per-session `/plugin` toggle for
+enabling or disabling a pack. Packs still enable and disable today through
+`re-agent.config.json` plus an installer re-run — the mechanism spec §7 and §10
+actually specify and test. Reversible at any time by amending S5 and adopting a
+plugin-only install layout (per-pack directory with its own `skills/`
+subdirectory, no flat copies) — a spec amendment, not a bolt-on. The full ruling,
+including the two rejected alternatives and the cost-if-wrong, is recorded in
+`.superpowers/sdd/2026-09-06-skills-vendoring/progress.md` under "Task 22 — NOT
+BUILT (ruling, 2026-09-08)".
+
+**The steps below are preserved as the original requirements, unmodified**, for
+whoever takes this up if S5 is ever amended. Step 1's own test asserts the
+per-pack-count assumption that finding 2 above disproves — it would need rewriting
+around one-plugin-per-skill, not just an implementation, before it could pass.
 
 **Files:**
 - Modify: `src/ReAgent.Skills.psm1`, `Install-REAgent.ps1`
