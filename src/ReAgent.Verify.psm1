@@ -1059,6 +1059,12 @@ function Get-PackAdaptationCheck {
         the human review gate, or a host where phase 5 has never run at all.
         Design spec section 10.2 requires this to hold under -VerifyOnly.
 
+        A pack switched off in re-agent.config.json is the one exception: it is
+        out of service by operator decision, Install-SkillPack already removes
+        its files and reports not-installed, so the gate has nothing to say
+        about it. Reporting 'fail' every run for a deliberately parked pack is
+        the same wrong answer as calling a disabled server broken.
+
         Wrapped in its own try/catch so one pack with an unreadable vendored
         tree cannot take the rest of the suite down.
     .PARAMETER Pack
@@ -1078,6 +1084,11 @@ function Get-PackAdaptationCheck {
         [Parameter(Mandatory)][object]$Catalog,
         [Parameter(Mandatory)][AllowEmptyString()][string]$RepoRoot
     )
+
+    if (-not $Pack.enabled) {
+        return New-CheckResult -Name "$($Pack.namespace) skill adaptation" `
+            -Status 'not-testable' -Detail 'disabled in re-agent.config.json'
+    }
 
     try {
         return Test-SkillAdaptationCheck -Pack $Pack -Catalog $Catalog -RepoRoot $RepoRoot

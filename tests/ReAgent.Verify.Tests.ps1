@@ -13,10 +13,10 @@ BeforeAll {
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
             'PSUseShouldProcessForStateChangingFunctions', '')]
         param($Namespace = 'ghidra', $TargetServers = @('pyghidra-mcp'),
-              $SkillName = 'ghidra-test')
+              $SkillName = 'ghidra-test', $Enabled = $true)
         [PSCustomObject]@{
             namespace      = $Namespace
-            enabled        = $true
+            enabled        = $Enabled
             targetServers  = $TargetServers
             adaptation     = [PSCustomObject]@{ toolRenames = [PSCustomObject]@{} }
             scanExceptions = @()
@@ -707,6 +707,27 @@ Describe 'Get-SkillCheck' {
         $checks = @(Get-SkillCheck -Config $cfg -SkillResults @() -RepoRoot $repo)
         $c = $checks | Where-Object { $_.Name -eq 'ghidra skill adaptation' }
         $c.Status | Should -Be 'fail'
+    }
+
+    It 'reports a disabled pack as adaptation-not-testable, not as a failure' {
+        # A pack switched off in re-agent.config.json is out of service by operator
+        # decision, so the gate has nothing to say about it: Install-SkillPack already
+        # returns not-installed and removes its files. Reporting 'fail' forever - with
+        # an ERROR line every run - for a deliberately parked pack is the same category
+        # of answer as calling a disabled server broken.
+        $repo = Join-Path $TestDrive 'gsc-disabled-pack'
+        New-VendoredSkillFile -Root $repo -Namespace 'ghidra' -SkillName 'ghidra-test' `
+            -Tools @('mcp__pyghidra-mcp__not_a_real_tool')
+        $cfg = [PSCustomObject]@{
+            mcpServers = @([PSCustomObject]@{ name = 'pyghidra-mcp' })
+            skills     = @(New-SkillPackFixture -Enabled $false)
+        }
+        $results = @([PSCustomObject]@{ Namespace = 'ghidra'; Installed = $false
+                Reason = 'disabled in re-agent.config.json' })
+        $checks = @(Get-SkillCheck -Config $cfg -SkillResults $results -RepoRoot $repo)
+        $c = $checks | Where-Object { $_.Name -eq 'ghidra skill adaptation' }
+        $c.Status | Should -Be 'not-testable'
+        $c.Detail | Should -BeLike '*disabled in re-agent.config.json*'
     }
 
     It 'returns nothing when the config declares no skills key at all' {
