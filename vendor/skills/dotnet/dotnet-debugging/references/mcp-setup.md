@@ -17,9 +17,10 @@ manager bootstrap was removed rather than adapted.
 ## If mcp-windbg tools are failing
 
 Run the `windbg` pack's `windbg-doctor` skill first. It checks platform, `cdb.exe` presence (in
-all the places this host's server actually looks, including the WinDbg Store package path), `uv`,
-the server entry point, and the effective symbol path -- the full diagnostic this file used to
-duplicate with install instructions instead of checks.
+all the places this host's server actually looks, including the WinDbg Store package path), the
+managed venv interpreter and its `python -m mcp_windbg` entry point, this host's `.mcp.json`
+registration, and the effective symbol path -- the full diagnostic this file used to duplicate
+with install instructions instead of checks.
 
 ## Validate availability
 

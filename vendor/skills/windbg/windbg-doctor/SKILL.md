@@ -1,6 +1,6 @@
 ---
 name: windbg-doctor
-description: Check that this host can actually run the mcp-windbg MCP server - CDB present, uv available, symbols configured - and explain how to fix whatever is missing. Use when mcp-windbg tools fail, when a session will not open, or before a first debugging session.
+description: Check that this host can actually run the mcp-windbg MCP server - CDB present, the managed server venv working, symbols configured - and explain how to fix whatever is missing. Use when mcp-windbg tools fail, when a session will not open, or before a first debugging session.
 allowed-tools:
   - mcp__mcp-windbg__list_dumps
 ---
@@ -35,13 +35,33 @@ Missing means WinDbg is not installed. Point at
 Debugging Tools for Windows. If it is installed somewhere unusual, the server
 takes `--cdb-path` / `--kd-path`.
 
-**3. uv.** `uv --version`. The plugin launches the server with `uvx`, so a
-missing uv means the MCP server never starts and every tool fails at once.
-`winget install astral-sh.uv`.
+**3. The server venv.** Upstream's plugin launched the server with `uvx`. This
+host does not: `Install-REAgent.ps1` builds a managed virtual environment and the
+MCP entry runs its interpreter directly, so what has to exist is
 
-**4. The server itself.** `uvx mcp-windbg --help`. This proves the whole chain -
-uv resolves the package from PyPI and the entry point runs. A failure here with
-uv present usually means no network, or a proxy blocking PyPI.
+```
+C:\re\mcp\venvs\mcp-windbg\Scripts\python.exe
+```
+
+Missing means the venv was never built or has been removed. Re-run the
+installer - do not build it, or install anything into it, from inside a session.
+`uv` is what the installer uses to create that venv, so `uv --version` is worth
+reporting when the venv is absent, but it is an install-time dependency only: a
+missing `uv` cannot stop an already-built server from starting, and is never the
+cause when the venv is there.
+
+**4. The server itself.** Run that interpreter's module entry point:
+`C:\re\mcp\venvs\mcp-windbg\Scripts\python.exe -m mcp_windbg --help`. This
+proves the chain the host actually uses - the venv resolves and the pinned
+`mcp-windbg` is importable. Do not substitute `uvx mcp-windbg --help`: that
+resolves an unpinned latest from PyPI, needs network egress, and tests a package
+this host never runs.
+
+**4b. The registration.** `C:\re\agent\.mcp.json` must carry an `mcp-windbg`
+entry whose `command` is that interpreter and whose `args` begin `-m mcp_windbg`,
+with `--cdb-path` pointing at the `cdb.exe` check 2 found and `--symbols-path`
+set. A working venv with no entry here, or an entry naming a stale `cdb.exe`
+path, fails every tool at once and looks exactly like a missing server.
 
 **5. Symbols.** Check `_NT_SYMBOL_PATH`. The plugin defaults it to the Microsoft
 symbol server, so an empty value in the *shell* is not a problem by itself -
