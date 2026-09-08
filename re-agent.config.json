@@ -252,6 +252,38 @@
       ]
     },
     {
+      "namespace": "reva",
+      "enabled": true,
+      "source": {
+        "type": "github-archive",
+        "repo": "cyberkaida/reverse-engineering-assistant",
+        "commit": "deb6c4e931a2222e3c7fa1dac10d4031a9bb5c04",
+        "treeSha256": "610dd7e29b9747834c621c1fe5719cd0ad66e94a9f21aed5241044d3f86272c0",
+        "subPath": "ReVa/skills"
+      },
+      "review": {
+        "reviewedBy": "",
+        "reviewedAt": "",
+        "reviewedCommit": "deb6c4e931a2222e3c7fa1dac10d4031a9bb5c04",
+        "notes": ""
+      },
+      "targetServers": ["pyghidra-mcp"],
+      "adaptation": { "toolRenames": {} },
+      "scanExceptions": [],
+      "skills": [
+        { "upstream": "binary-triage", "name": "reva-binary-triage", "enabled": true },
+        { "upstream": "deep-analysis", "name": "reva-deep-analysis", "enabled": true },
+        { "upstream": "ctf-rev", "name": "reva-ctf-rev", "enabled": false,
+          "disabledReason": "targets the same CTF-rev ground already covered by the route pack, and its body is written entirely against ReVa's own kebab-case tool surface (get-decompilation, find-cross-references, rename-variables, set-bookmark, ...), none of which exist on pyghidra-mcp; out of scope for this task's triage/deep-analysis mandate and would need its own full adaptation pass" },
+        { "upstream": "ctf-crypto", "name": "reva-ctf-crypto", "enabled": false,
+          "disabledReason": "same ReVa-tool-surface mismatch as reva-ctf-rev; out of scope for this task's triage/deep-analysis mandate and would need its own full adaptation pass" },
+        { "upstream": "ctf-pwn", "name": "reva-ctf-pwn", "enabled": false,
+          "disabledReason": "same ReVa-tool-surface mismatch as reva-ctf-rev; also assumes external exploitation tooling (pwntools, a debugger) this install does not provide" },
+        { "upstream": "pyghidra-scripting", "name": "reva-pyghidra-scripting", "enabled": false,
+          "disabledReason": "drives ReVa's run-script/list-scripts/read-script/write-script/edit-script raw PyGhidra scripting console; pyghidra-mcp exposes no equivalent scripting tool, the same gap already documented in the ghidra pack's SKILL.md for raw PyGhidra scripting" }
+      ]
+    },
+    {
       "namespace": "dotnet",
       "enabled": true,
       "source": {
