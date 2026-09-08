@@ -110,6 +110,27 @@ install and do not exist here. Route to a real tool or skill on this host instea
   problem, disk/network forensics, OSINT, or an ML-model attack** -> outside this install's
   scope. Say so plainly rather than reaching for a CTF-category skill that was never vendored.
 
+## On this host -- the sections below are literature, not a procedure
+
+Everything from here to `## Common Encryption Patterns` is vendored as upstream wrote it, for a
+Linux/macOS CTF box. **None of these command lines runs on this install**: `ltrace`, `strace`,
+`gdb`, `rabin2`, `checksec`, Frida, angr and Qiling are not provided here (see `## Tool
+availability on this install` above), and the Linux ones cannot run on this Windows host at all.
+Read the reasoning rather than the command - how a custom VM dispatches, how a comparison leaks
+through timing, how a decoy check differs from the real one - and map the intent onto a real
+server through `## Routing` above. Do not install anything to make a line below runnable.
+
+**And do not run the sample to see what it does.** The `re` pack's `re-unpacker` states the rule
+this install works under - *"No blind execution: never instruct running unknown samples on a host
+system"* - and this machine is the analyst's own workstation, not a detonation sandbox. The
+`ltrace ./binary`, `strace -f -s 500 ./binary`, `./binary AAAA` and `echo "test" | ./binary` lines
+below all execute the target. They are upstream's CTF habit, where the binary is a known-benign
+puzzle supplied by the organisers; that is not what arrives here.
+
+The numbered list immediately below is upstream's ordering of techniques, not a checklist to work
+through on this host. `## Limitations` at the end gives the full scope of what was and was not
+adapted.
+
 ## Problem-Solving Workflow
 
 1. **Start with strings extraction** - many easy challenges have plaintext flags
@@ -122,6 +143,9 @@ install and do not exist here. Route to a real tool or skill on this host instea
 8. **Validate assumptions** by comparing decompiler outputs (dogbolt.org for side-by-side)
 
 ## Quick Wins (Try First!)
+
+> **Not a procedure on this host** - see the banner above `## Problem-Solving Workflow`. These are
+> upstream's Linux CTF one-liners, and four of them run the target, which this install does not do.
 
 ```bash
 # Plaintext flag extraction
@@ -199,8 +223,8 @@ Use [field-notes.md](field-notes.md) after the first round of triage when you kn
 ## Limitations
 
 This is a bounded adaptation, not a line-by-line rewrite of the whole pack. The frontmatter,
-`## Tool availability on this install`, `## Routing`, and `## Quick Tool Reference` sections above
-are adapted for this install's real servers. The remaining sections (`Problem-Solving Workflow`
+`## Tool availability on this install`, `## Routing`, `## On this host` and `## Quick Tool Reference`
+above are adapted for this install's real servers. The remaining sections (`Problem-Solving Workflow`
 through `Common Encryption Patterns`) and every file under `## Additional Resources` (`tools.md`,
 `tools-dynamic.md`, `tools-emulation.md`, `tools-advanced.md`, `tools-advanced-2.md`,
 `anti-analysis.md`, `anti-analysis-ctf.md`, `patterns*.md`, `languages*.md`, `platforms*.md`,
