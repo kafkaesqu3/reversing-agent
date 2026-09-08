@@ -312,6 +312,81 @@
       "skills": [
         { "upstream": "dotnet-debugging", "name": "dotnet-debugging", "enabled": true }
       ]
+    },
+    {
+      "namespace": "tob",
+      "enabled": true,
+      "source": {
+        "type": "github-archive",
+        "repo": "trailofbits/skills",
+        "commit": "d3323cefbcf645678b8dc481de204b02ad3d02dc",
+        "treeSha256": "b69e656f971f3ac36de4a35f86038003df31f86d0b758b196beed75d2651abac",
+        "subPath": "plugins/trailmark/skills"
+      },
+      "review": {
+        "reviewedBy": "",
+        "reviewedAt": "",
+        "reviewedCommit": "d3323cefbcf645678b8dc481de204b02ad3d02dc",
+        "notes": ""
+      },
+      "targetServers": ["pyghidra-mcp"],
+      "adaptation": { "toolRenames": {} },
+      "scanExceptions": [
+        { "skill": "crypto-protocol-diagram", "ruleId": "remote-fetch",
+          "justification": "disabled on this host (see disabledReason) but still present on disk under vendor/skills/tob/; both hits are upstream (not vendored) SKILL.md text documenting WebFetch as this skill's own optional feature for pulling a protocol spec from a user-provided URL, not an instruction to fetch and pipe remote content into a shell -- benign, matches the tool-contract sentence and the input-resolution rule it already declares in allowed-tools" }
+      ],
+      "skills": [
+        { "upstream": "trailmark", "name": "tob-trailmark", "enabled": true },
+        { "upstream": "audit-augmentation", "name": "tob-audit-augmentation", "enabled": false,
+          "disabledReason": "projects SARIF/weAudit/binary-analysis findings onto a trailmark source-code graph; this host has no SARIF-producing scanner and no weAudit-annotated source tree to project onto -- vendored but disabled, prose not retargeted" },
+        { "upstream": "crypto-protocol-diagram", "name": "tob-crypto-protocol-diagram", "enabled": false,
+          "disabledReason": "extracts protocol message flow from source code or a written spec (RFC/ProVerif/Tamarin) into a sequence diagram; assumes a source-level protocol implementation, not a stripped binary -- out of scope for this task's binary-graph mandate, prose not retargeted" },
+        { "upstream": "diagramming-code", "name": "tob-diagramming-code", "enabled": false,
+          "disabledReason": "generates Mermaid diagrams (call graphs, class hierarchies, complexity heatmaps) from a full multi-file trailmark source-code graph; the adapted tob-trailmark skill builds only a partial function-set-scoped binary graph via augment_binary(), which this skill's diagram generation was not rewritten to consume -- vendored but disabled, prose not retargeted" },
+        { "upstream": "genotoxic", "name": "tob-genotoxic", "enabled": false,
+          "disabledReason": "triages mutation-testing survivors using graph analysis; requires a mutation-testing framework (mewt/muton) and a source test suite, neither present on this host -- vendored but disabled, prose not retargeted" },
+        { "upstream": "graph-evolution", "name": "tob-graph-evolution", "enabled": false,
+          "disabledReason": "diffs two source-tree graph snapshots (git refs) to surface structural changes; assumes two revisions of a git-tracked source tree, not a single stripped binary -- vendored but disabled, prose not retargeted" },
+        { "upstream": "mermaid-to-proverif", "name": "tob-mermaid-to-proverif", "enabled": false,
+          "disabledReason": "converts Mermaid sequence diagrams into ProVerif formal verification models; downstream of crypto-protocol-diagram and shares its source/spec-level scope mismatch -- vendored but disabled, prose not retargeted" },
+        { "upstream": "slicing-code-context", "name": "tob-slicing-code-context", "enabled": false,
+          "disabledReason": "builds bounded source-code packets and delegates focused work to constrained sub-agents; assumes a readable multi-file source tree to slice, which a stripped binary is not -- vendored but disabled, prose not retargeted" },
+        { "upstream": "trailmark-finding-triage", "name": "tob-trailmark-finding-triage", "enabled": false,
+          "disabledReason": "triages one finding with reachability/taint/privilege-boundary evidence drawn from a full trailmark source-code graph; the adapted tob-trailmark skill builds only a partial binary graph (see its Limitations), which this skill's triage workflow was not rewritten to consume -- vendored but disabled, prose not retargeted; reva-deep-analysis already covers single-finding evidence-gathering on this host's pyghidra-mcp surface" },
+        { "upstream": "trailmark-review-gate", "name": "tob-trailmark-review-gate", "enabled": false,
+          "disabledReason": "applies PASS/WARN/FAIL/UNKNOWN structural gate rules to a branch/PR/fix diff; assumes a git branch workflow comparing two source revisions, not a single stripped binary -- vendored but disabled, prose not retargeted" },
+        { "upstream": "trailmark-structural", "name": "tob-trailmark-structural", "enabled": false,
+          "disabledReason": "full structural analysis (blast radius, taint, privilege boundaries, complexity) over a complete multi-language source-code graph; a superset of the adapted tob-trailmark skill's scope whose complexity/language-detection logic assumes readable source files this host's targets don't have -- vendored but disabled, prose not retargeted" },
+        { "upstream": "trailmark-summary", "name": "tob-trailmark-summary", "enabled": false,
+          "disabledReason": "quick structural overview (auto-detected languages, entry points, dependencies) over a source-code graph; shares trailmark-structural's source-tree dependency -- vendored but disabled, prose not retargeted" },
+        { "upstream": "trailmark-variant-neighborhood", "name": "tob-trailmark-variant-neighborhood", "enabled": false,
+          "disabledReason": "expands one seed issue into graph-derived variant candidates for Semgrep/CodeQL/manual review across a source tree; this host has neither Semgrep nor CodeQL configured and no source tree to search -- vendored but disabled, prose not retargeted" },
+        { "upstream": "vector-forge", "name": "tob-vector-forge", "enabled": false,
+          "disabledReason": "generates Wycheproof-style mutation-driven test vectors from source-level mutation-testing coverage gaps; requires the same mutation-testing framework and source test suite genotoxic does -- vendored but disabled, prose not retargeted" }
+      ]
+    },
+    {
+      "namespace": "arch",
+      "enabled": true,
+      "source": {
+        "type": "github-archive",
+        "repo": "NickCrew/Claude-Cortex",
+        "commit": "bb47af79ad3befe01ae01940fcf5f16e30a1b6df",
+        "treeSha256": "PIN-ME",
+        "subPath": "skills/architectural-analysis"
+      },
+      "review": {
+        "reviewedBy": "",
+        "reviewedAt": "",
+        "reviewedCommit": "bb47af79ad3befe01ae01940fcf5f16e30a1b6df",
+        "notes": ""
+      },
+      "targetServers": ["pyghidra-mcp"],
+      "adaptation": { "toolRenames": {} },
+      "scanExceptions": [],
+      "skills": [
+        { "upstream": "architectural-analysis", "name": "arch-architectural-analysis", "enabled": true }
+      ]
     }
   ]
 }
