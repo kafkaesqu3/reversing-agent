@@ -1,6 +1,6 @@
 # Skill pack sign-off — the human review gate
 
-Five packs are vendored and adapted. **None is signed off, so none installs.**
+Eight packs are vendored and adapted. **None is signed off, so none installs.**
 `Install-SkillPack` refuses each with *"human review gate: no sign-off recorded"* and
 `Get-ManualStep` repeats it in the manifest. That state is deliberate: an agent must not
 record an attestation a person never made.
@@ -32,6 +32,26 @@ The scanner is the backstop that catches what a tired reader misses.*
    `reviewedCommit` is already set and must keep matching `source.commit`.
 
 Verify after: `Invoke-Pester -Path tests/` then `.\Install-REAgent.ps1 -VerifyOnly`.
+
+---
+
+## What the gate cannot check
+
+The review rounds that added `reva`, `tob` and `arch` to this file found five defects, and the
+automated gate caught none of them. Every one was a true-or-false statement about this host or
+about upstream: a `disabledReason` denying a debugger this install actually ships (it ships
+three, all enabled); a sentence telling the agent this install exposes only the ten or sixteen
+tools one skill happens to declare in `allowed-tools`, when the server behind it exposes twenty;
+a `## Limitations` bullet claiming a triage step lost its upstream bookmark tracking, when
+upstream's own triage skill never used bookmarks either; a third-party API's documented default
+value for an edge-confidence field stated backwards, inverting the one rule the pack exists to
+enforce; and, introduced by a later fix round itself, thirteen sibling skills still described in
+`## Limitations` as "vendored but disabled" after they had been deleted from the tree entirely.
+G0-G4 check names, structure, and tool-name membership. The scanner checks for hostile patterns.
+**Neither checks whether a sentence is true.** Finding these took reading upstream's source,
+comparing GitHub blob hashes, and reading this repo's own config line by line — that is what
+spec §4.5 means by the real cost being the human review, and it is the specific failure mode to
+watch for while reading everything below.
 
 ---
 
@@ -96,6 +116,67 @@ that belongs to the operator, not to the agent that vendored the pack.
   That is correct and should stay; it is also why a blanket "declares what it names" sweep is
   the wrong shape of test.
 
+### `reva` — cyberkaida/reverse-engineering-assistant
+
+- Ships **2 of 6** skills enabled: `reva-binary-triage` and `reva-deep-analysis`. Four ship
+  disabled: `reva-ctf-rev`, `reva-ctf-crypto`, `reva-ctf-pwn`, `reva-pyghidra-scripting`.
+- **The four disabled skills are held by the `enabled` boolean and nothing else.**
+  `Install-SkillPack` and `Test-SkillPackGate` both iterate enabled skills only, so flipping one
+  to `true` ships an un-adapted upstream body past **all four gate checks**: G0 passes
+  (directories were renamed), CATALOG passes, G1 passes vacuously (those skills have no
+  `allowed-tools` block at all), G2 passes vacuously (`toolRenames` is empty).
+  `reva-pyghidra-scripting`'s description still names five ReVa scripting tools
+  (`run-script`, `list-scripts`, `read-script`, `write-script`, `edit-script`) and would go live
+  instructing the agent to call tools that do not exist here. Disabled is safe; enabling is a
+  cliff with no guardrail. **This is the single most important item for the reader to
+  understand.**
+- **5,696 measured lines** of un-adapted companion content ship across the four disabled skill
+  directories (12 files) in the vendored tree that no installer run ever scans — the red-flag
+  scanner runs per *enabled* skill directory only. It was scanned once by hand and was clean;
+  that is a one-time result, not a standing control.
+- Upstream ReVa expects capabilities `pyghidra-mcp` does not have (no bookmark tool, no function
+  enumeration or count, no structure definition, no memory-block listing, no function-similarity
+  search). These are written into each skill's `## Limitations` rather than papered over — the
+  adapted skills are genuinely thinner than upstream's.
+
+### `tob` — trailofbits/skills, the `trailmark` skill
+
+- Ships **one** skill, `tob-trailmark`. The pack was originally vendored with all 14 of
+  upstream's `trailmark`-plugin skills and was narrowed on review to just this one; the other 13
+  were never adapted and are not present in the repo or the config in any form. They covered
+  source-tree workflows (mutation testing, SARIF/CodeQL/Semgrep integration, git-diff review
+  gates, formal-verification spec generation) that this host cannot run against a stripped
+  binary.
+- Its `confidence` discipline is the reason this pack was chosen — *"reachability is not taint;
+  verify data flow by hand before claiming it"* survives verbatim from upstream. Review found
+  and fixed a defect that **inverted** it: the skill stated that omitting Trailmark's
+  `confidence` field defaults an edge to `"inferred"` when the importer actually defaults it to
+  `"certain"`, which would have marked every Ghidra-inferred call edge as certain. Worth
+  re-reading that section specifically, since it is the pack's whole value.
+- Its `pyghidra-mcp`-output-to-Trailmark-JSON field mapping is **this adaptation's own
+  construction**. The target schema was verified against Trailmark's real source, but the
+  mapping was never smoke-tested against a live `pyghidra-mcp` response. The skill says so
+  plainly and tells the reader to treat a mismatch as a reason to change the mapping, not the
+  schema — confirm you accept that.
+
+### `arch` — NickCrew/Claude-Cortex, `architectural-analysis`
+
+- Ships one skill, but it is large: **4,743 measured lines across 27 files**. Only 5 files were
+  fully rewritten; the other 10 reference files carry an "on this host" banner note rather than
+  a full rewrite, and 4 of the 8 analysis modes are marked NOT SUPPORTED (information
+  architecture, data model, UI surfaces, interaction patterns — none exist below source level in
+  a stripped binary). Review confirmed `SKILL.md` never routes the agent into a NOT-SUPPORTED
+  file.
+- **Declares `Agent`, `Bash` and `Write`.** Each is genuinely used — `Agent` for its phase-3
+  subagent dispatch, `Bash` for bundled scripts, `Write` for reports. Flagged rather than
+  silently narrowed, because narrowing the list fences nothing. Note that spec §1.2 puts
+  subagent definitions out of scope for this slice, so `Agent` deserves a deliberate decision.
+- **Its rendering phases do not work on this host.** `render.sh` needs `mmdc` (mermaid-cli) and
+  `compile-html.sh` needs `pandoc`; neither is installed. The skill documents this and the
+  scripts fail loudly rather than silently, and `.mmd`/`.md` artifacts are still produced.
+  Installing those two packages is optional and would enable diagram rendering — an install
+  decision, not a content one.
+
 ---
 
 ## After sign-off
@@ -115,3 +196,8 @@ The four negative tests in spec §11.3 are worth running by hand once, each reve
 a tool the catalog lacks (**G1**), an upstream name left in the prose (**G2**), a
 permission-skipping flag in a vendored file (**scan blocks, installed copy removed**), and a
 server pin bumped without refreshing the catalog (**G4**).
+
+Two controls here are weaker than they look; see `docs/mvp/HANDOFF.md` for the full detail
+before you rely on either: `treeSha256`'s covered scope varies by pack layout (*"`treeSha256`'s
+covered scope varies by pack layout"*), and the `reviewedBy`/`reviewedAt` schema rule is not
+enforced (*"`reviewedBy`/`reviewedAt` schema rule — not implemented, deliberately"*).
