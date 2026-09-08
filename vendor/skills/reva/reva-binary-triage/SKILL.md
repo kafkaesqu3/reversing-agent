@@ -197,7 +197,8 @@ its own ReVa Ghidra extension, not `pyghidra-mcp`). Capabilities that do not por
 - **No dedicated string- or symbol-count tool** (`get-strings-count`, `get-symbols-count`). Counts
   in this skill's output are counts of returned results, not verified totals, unless stated
   otherwise.
-- **No bookmark tool** (`set-bookmark`, `search-bookmarks`) -- true of upstream's triage too, so
-  nothing was lost here. Step 8 uses `TodoWrite` for within-session tracking, as upstream's
-  triage also did; nothing persists findings into the Ghidra database itself. Cross-session
-  persistence is attempted in `reva-deep-analysis`'s Tracking Phase via tagged `set_comment`.
+- **No bookmark tool** (`set-bookmark`, `search-bookmarks`) -- upstream's triage did not use
+  bookmarks either, so nothing was lost here. Step 8 uses `TodoWrite` for within-session
+  tracking, as upstream's triage also did; nothing persists findings into the Ghidra database
+  itself. Cross-session persistence is attempted in `reva-deep-analysis`'s Tracking Phase via
+  tagged `set_comment`.
