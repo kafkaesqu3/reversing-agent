@@ -740,6 +740,112 @@ Describe 'The review checklist does not overstate what allowed-tools does' {
         $text | Should -Not -BeLike '*a real permission*'
         $text | Should -BeLike '*narrowing a list buys you no containment*'
     }
+
+    It 'stops the claim reaching the agent through vendored skill content' {
+        # Commit 3ffa8ac swept the operator-facing docs and locked them down, but never
+        # swept vendor/skills - which is where the claim actually reaches the agent, and
+        # what the human signs an attestation over. The correct frame is reva's: "this
+        # install's <server> exposes N tools; the ones this skill uses are listed above
+        # in allowed-tools" - the server exposes, the list only describes.
+        $frames = @(
+            @{ Pattern = '(?i)expose[sd]?\s+only\b'
+                Why = 'attributes tool exposure to the allowed-tools list' },
+            @{ Pattern = '(?i)a real permission'
+                Why = 'calls allowed-tools a permission grant' },
+            @{ Pattern = '(?i)allowed-tools[^\r\n]{0,80}\b(restricts|limits|confines)\b'
+                Why = 'says allowed-tools restricts the skill' },
+            @{ Pattern = '(?i)\b(restricts|limits|confines)\b[^\r\n]{0,80}allowed-tools'
+                Why = 'says something is restricted by allowed-tools' })
+
+        $root = (Resolve-Path (Join-Path $PSScriptRoot '../vendor/skills')).Path
+        $offenders = @()
+        foreach ($f in (Get-ChildItem -LiteralPath $root -Recurse -File)) {
+            $lines = @(Get-Content -LiteralPath $f.FullName -Encoding UTF8)
+            for ($i = 0; $i -lt $lines.Count; $i++) {
+                foreach ($frame in $frames) {
+                    if ($lines[$i] -match $frame.Pattern) {
+                        $rel = $f.FullName.Substring($root.Length).TrimStart('\')
+                        $text = $lines[$i].Trim()
+                        if ($text.Length -gt 110) { $text = $text.Substring(0, 110) + '...' }
+                        $offenders += "$rel line $($i + 1) - $($frame.Why): $text"
+                    }
+                }
+            }
+        }
+        ($offenders -join "`n") | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'No disabledReason denies a capability this install actually ships' {
+    # Task 18 sign-off item 3, promoted by the whole-branch review as the one mechanical
+    # control anyone has proposed against the defect class that produced six of this
+    # branch's findings. The reva review's Critical was a disabledReason asserting this
+    # install has no debugger while it ships three enabled ones. A reason is the
+    # operator's only record of why a skill is off, and one that is false about the host
+    # is worse than none.
+    BeforeAll {
+        $Script:RealCfg = Get-Content -LiteralPath (
+            Join-Path $PSScriptRoot '../re-agent.config.json') -Raw -Encoding UTF8 |
+            ConvertFrom-Json
+
+        # Capability words this install's enabled servers provide. A reason may
+        # truthfully deny a TOOL inside a server ('pyghidra-mcp exposes no equivalent
+        # scripting tool'); what it must not deny is the capability being here at all.
+        $Script:CapabilityServer = @{
+            'debugger' = @('mcp-windbg', 'x64dbg-x64', 'x64dbg-x32')
+            'disassembler' = @('pyghidra-mcp', 'binaryninja')
+            'decompiler' = @('pyghidra-mcp', 'binaryninja')
+        }
+        # 'no' or 'not' followed, within the same clause, by a word asserting absence
+        # from this host. Forward-only and clause-bounded on purpose: windbg's real
+        # reason - 'exists in this mcp-windbg build but has not been reviewed' - denies
+        # a review, not a server, and must not fire.
+        $Script:DenialPattern = '(?i)\b(no|not)\b[^.;]{0,70}?\b(installed|available|' +
+            'present|configured|provided|provide|ships?|shipped|' +
+            'on this (host|install|machine))\b[^.;]{0,70}'
+
+        function Get-DeniedServer {
+            param($Text, $Enabled)
+            $hit = @()
+            foreach ($n in $Enabled) { if ($Text -match [regex]::Escape($n)) { $hit += $n } }
+            foreach ($word in $Script:CapabilityServer.Keys) {
+                if ($Text -notmatch "(?i)\b$word") { continue }
+                $hit += @($Script:CapabilityServer[$word] |
+                        Where-Object { $Enabled -contains $_ })
+            }
+            return @($hit | Select-Object -Unique)
+        }
+    }
+
+    It 'never denies a server or capability that is enabled: true in the same config' {
+        $enabled = @($Script:RealCfg.mcpServers | Where-Object { $_.enabled } |
+                ForEach-Object { $_.name })
+        $offenders = @()
+        foreach ($pack in $Script:RealCfg.skills) {
+            foreach ($skill in $pack.skills) {
+                if ($skill.PSObject.Properties.Name -notcontains 'disabledReason') { continue }
+                foreach ($m in [regex]::Matches($skill.disabledReason, $Script:DenialPattern)) {
+                    foreach ($n in (Get-DeniedServer -Text $m.Value -Enabled $enabled)) {
+                        $offenders += ("$($pack.namespace)/$($skill.name) denies '$n', " +
+                            "which ships enabled: ...$($m.Value.Trim())...")
+                    }
+                }
+            }
+        }
+        ($offenders -join "`n") | Should -BeNullOrEmpty
+    }
+
+    It 'fires on a reason denying a debugger while three debuggers ship enabled' {
+        # The reva Critical, reproduced: without this arm the check above could pass by
+        # matching nothing at all.
+        $enabled = @($Script:RealCfg.mcpServers | Where-Object { $_.enabled } |
+                ForEach-Object { $_.name })
+        $reason = 'drives a live debugger, and no debugger is installed on this host'
+        $m = @([regex]::Matches($reason, $Script:DenialPattern))
+        $m.Count | Should -BeGreaterThan 0
+        @(Get-DeniedServer -Text $m[0].Value -Enabled $enabled) |
+            Should -Contain 'mcp-windbg'
+    }
 }
 
 Describe 'Write-SkillPackFile installs the exact bytes it was given' {
