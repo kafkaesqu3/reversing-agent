@@ -1,0 +1,9 @@
+# Every blob in this repo is stored with LF. Check it out that way too.
+#
+# Without this, a clone under core.autocrlf=true gets a CRLF working tree, and
+# two things break that pass in the LF checkout the vendoring tool writes:
+#   - skill-content checks that anchor on section headings ((?m)^## Limitations$)
+#     stop matching, because the line is "## Limitations\r"
+#   - per-file content hashes of the adapted vendor tree differ per clone,
+#     since CRLF conversion changes the bytes being hashed
+* text=auto eol=lf
