@@ -623,7 +623,8 @@ Describe 'Get-SkillCheck' {
         New-VendoredSkillFile -Root $repo -Namespace 'ghidra' -SkillName 'ghidra-test' `
             -Tools @('mcp__pyghidra-mcp__not_a_real_tool')
         $cfg = [PSCustomObject]@{
-            mcpServers = @([PSCustomObject]@{ name = 'pyghidra-mcp' })
+            mcpServers = @([PSCustomObject]@{ name = 'pyghidra-mcp'
+                    source = [PSCustomObject]@{ pin = '0.2.5' } })
             skills     = @(New-SkillPackFixture)
         }
         $results = @([PSCustomObject]@{ Namespace = 'ghidra'; Installed = $true; Reason = '' })
@@ -637,7 +638,8 @@ Describe 'Get-SkillCheck' {
         $repo = Join-Path $TestDrive 'gsc-notools'
         New-VendoredSkillFile -Root $repo -Namespace 'ghidra' -SkillName 'ghidra-test'
         $cfg = [PSCustomObject]@{
-            mcpServers = @([PSCustomObject]@{ name = 'pyghidra-mcp' })
+            mcpServers = @([PSCustomObject]@{ name = 'pyghidra-mcp'
+                    source = [PSCustomObject]@{ pin = '0.2.5' } })
             skills     = @(New-SkillPackFixture)
         }
         $results = @([PSCustomObject]@{ Namespace = 'ghidra'; Installed = $true; Reason = '' })
@@ -651,7 +653,8 @@ Describe 'Get-SkillCheck' {
         $repo = Join-Path $TestDrive 'gsc-unknown'
         New-VendoredSkillFile -Root $repo -Namespace 'ghidra' -SkillName 'ghidra-test'
         $cfg = [PSCustomObject]@{
-            mcpServers = @([PSCustomObject]@{ name = 'pyghidra-mcp' })
+            mcpServers = @([PSCustomObject]@{ name = 'pyghidra-mcp'
+                    source = [PSCustomObject]@{ pin = '0.2.5' } })
             skills     = @(New-SkillPackFixture)
         }
         $checks = @(Get-SkillCheck -Config $cfg -SkillResults @() -RepoRoot $repo)
@@ -664,7 +667,8 @@ Describe 'Get-SkillCheck' {
         $repo = Join-Path $TestDrive 'gsc-notinstalled'
         New-VendoredSkillFile -Root $repo -Namespace 'ghidra' -SkillName 'ghidra-test'
         $cfg = [PSCustomObject]@{
-            mcpServers = @([PSCustomObject]@{ name = 'pyghidra-mcp' })
+            mcpServers = @([PSCustomObject]@{ name = 'pyghidra-mcp'
+                    source = [PSCustomObject]@{ pin = '0.2.5' } })
             skills     = @(New-SkillPackFixture)
         }
         $results = @([PSCustomObject]@{ Namespace = 'ghidra'; Installed = $false
@@ -685,7 +689,8 @@ Describe 'Get-SkillCheck' {
         New-VendoredSkillFile -Root $repo -Namespace 'ghidra' -SkillName 'ghidra-test' `
             -Tools @('mcp__pyghidra-mcp__not_a_real_tool')
         $cfg = [PSCustomObject]@{
-            mcpServers = @([PSCustomObject]@{ name = 'pyghidra-mcp' })
+            mcpServers = @([PSCustomObject]@{ name = 'pyghidra-mcp'
+                    source = [PSCustomObject]@{ pin = '0.2.5' } })
             skills     = @(New-SkillPackFixture)
         }
         $results = @([PSCustomObject]@{ Namespace = 'ghidra'; Installed = $false
@@ -701,7 +706,8 @@ Describe 'Get-SkillCheck' {
         New-VendoredSkillFile -Root $repo -Namespace 'ghidra' -SkillName 'ghidra-test' `
             -Tools @('mcp__pyghidra-mcp__not_a_real_tool')
         $cfg = [PSCustomObject]@{
-            mcpServers = @([PSCustomObject]@{ name = 'pyghidra-mcp' })
+            mcpServers = @([PSCustomObject]@{ name = 'pyghidra-mcp'
+                    source = [PSCustomObject]@{ pin = '0.2.5' } })
             skills     = @(New-SkillPackFixture)
         }
         $checks = @(Get-SkillCheck -Config $cfg -SkillResults @() -RepoRoot $repo)
@@ -719,7 +725,8 @@ Describe 'Get-SkillCheck' {
         New-VendoredSkillFile -Root $repo -Namespace 'ghidra' -SkillName 'ghidra-test' `
             -Tools @('mcp__pyghidra-mcp__not_a_real_tool')
         $cfg = [PSCustomObject]@{
-            mcpServers = @([PSCustomObject]@{ name = 'pyghidra-mcp' })
+            mcpServers = @([PSCustomObject]@{ name = 'pyghidra-mcp'
+                    source = [PSCustomObject]@{ pin = '0.2.5' } })
             skills     = @(New-SkillPackFixture -Enabled $false)
         }
         $results = @([PSCustomObject]@{ Namespace = 'ghidra'; Installed = $false
@@ -752,7 +759,9 @@ Describe 'Test-SkillAdaptationCheck' {
             -SkillName 'dotnet-test'
         $pack.adaptation = [PSCustomObject]@{
             toolRenames = [PSCustomObject]@{ 'run_windbg_cmd' = 'run_cdb_command' } }
-        $c = Test-SkillAdaptationCheck -Pack $pack -Catalog (Get-ToolCatalog) -RepoRoot $repo
+        $cfg = [PSCustomObject]@{ mcpServers = @() }
+        $c = Test-SkillAdaptationCheck -Pack $pack -Config $cfg `
+            -Catalog (Get-ToolCatalog) -RepoRoot $repo
         $c.Status | Should -Be 'fail'
         $c.Detail | Should -BeLike '*symbols.md*'
     }
@@ -832,22 +841,51 @@ Describe 'Test-ToolCatalogLive' {
     }
 }
 
-Describe 'Test-SkillDriftCheck' {
-    It 'fails when the config pin has moved on from the catalog, with no server needed' {
-        $cat = Get-ToolCatalog
+Describe 'Get-PackPinCheck' {
+    # G4 used to hang off the drift check, which returns not-testable whenever a pack
+    # has no manifest entry or is not installed - the entire shipped state, where every
+    # pack is held at the human review gate. Design spec section 11.3's negative test 4
+    # therefore could not fail anywhere, while the spec, HANDOFF.md and Get-SkillCheck's
+    # own docstring all said G4 always runs.
+    It 'fails a pack whose config pin has moved on from the catalog, with nothing installed' {
+        $repo = Join-Path $TestDrive 'gppc-stalepin'
+        New-VendoredSkillFile -Root $repo -Namespace 'ghidra' -SkillName 'ghidra-test' `
+            -Tools @('mcp__pyghidra-mcp__decompile_function')
         $cfg = [PSCustomObject]@{
-            mcpServers = @([PSCustomObject]@{ name = 'pyghidra-mcp'; verifyTier = 'unattended'
-                    transport = 'http'; bind = '127.0.0.1'; port = 8762; path = '/mcp'
-                    source = [PSCustomObject]@{ pin = '0.2.6' }
-                })
+            mcpServers = @([PSCustomObject]@{ name = 'pyghidra-mcp'
+                    source = [PSCustomObject]@{ pin = '0.2.6' } })
+            skills     = @(New-SkillPackFixture -TargetServers @('pyghidra-mcp'))
         }
-        $pack = New-SkillPackFixture -Namespace 'ghidra' -TargetServers @('pyghidra-mcp')
-        $c = Test-SkillDriftCheck -Pack $pack -Config $cfg -Catalog $cat
-        $c.Name | Should -Be 'ghidra skill drift'
+        $checks = @(Get-SkillCheck -Config $cfg -SkillResults @() -RepoRoot $repo)
+        $c = $checks | Where-Object { $_.Name -eq 'ghidra skill adaptation' }
         $c.Status | Should -Be 'fail'
         $c.Detail | Should -BeLike '*0.2.6*'
     }
 
+    It 'is not-testable when the target server declares no pin of its own' {
+        # binaryninja is a host application this installer never fetches, so its
+        # source is null. Reading through that under Set-StrictMode threw, and the
+        # throw was caught upstream as not-testable - hiding any G0-G2 failure with it.
+        $pack = New-SkillPackFixture -TargetServers @('binaryninja')
+        $cfg = [PSCustomObject]@{
+            mcpServers = @([PSCustomObject]@{ name = 'binaryninja'; source = $null }) }
+        $c = @(Get-PackPinCheck -Pack $pack -Config $cfg -Catalog (Get-ToolCatalog))
+        $c.Count | Should -Be 1
+        $c[0].Status | Should -Be 'not-testable'
+        $c[0].Detail | Should -BeLike '*no source.pin*'
+    }
+
+    It 'is not-testable, never a silent pass, for a target server config does not declare' {
+        $pack = New-SkillPackFixture -TargetServers @('pyghidra-mcp')
+        $c = @(Get-PackPinCheck -Pack $pack -Config ([PSCustomObject]@{ mcpServers = @() }) `
+                -Catalog (Get-ToolCatalog))
+        $c.Count | Should -Be 1
+        $c[0].Status | Should -Be 'not-testable'
+        $c[0].Detail | Should -BeLike '*not a declared mcpServers entry*'
+    }
+}
+
+Describe 'Test-SkillDriftCheck' {
     It 'is not-testable when an attended target server has no -Attended run behind it' {
         $cat = Get-ToolCatalog
         $cfg = [PSCustomObject]@{

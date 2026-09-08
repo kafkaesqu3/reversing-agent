@@ -755,16 +755,17 @@ function Merge-CheckStatus {
     .SYNOPSIS
         Reduces several check results into one status: fail beats not-testable beats pass.
     .DESCRIPTION
-        Used to combine G3 and G4 sub-results, one pair per target server, into
-        the single "<ns> skill drift" check Get-SkillCheck reports. A fail
-        anywhere is real drift; a not-testable anywhere means at least one
-        target told us nothing, and that must not be reported as a clean pass.
+        Used to fold a pack's sub-results into the single check Get-SkillCheck
+        reports: G0-G2 plus one G4 per target server for "<ns> skill
+        adaptation", one G3 per target server for "<ns> skill drift". A fail
+        anywhere is a real defect; a not-testable anywhere means at least one
+        sub-check told us nothing, and that must not be reported as a clean pass.
     .PARAMETER Results
         New-CheckResult-shaped objects to combine.
     .OUTPUTS
         [string] 'fail', 'not-testable', or 'pass'.
     .EXAMPLE
-        Merge-CheckStatus -Results @($pinCheck, $liveCheck)
+        Merge-CheckStatus -Results @($adaptationCheck, $pinCheck)
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][AllowEmptyCollection()][array]$Results)
@@ -776,15 +777,102 @@ function Merge-CheckStatus {
     return 'pass'
 }
 
+function Get-ServerSourcePin {
+    <#
+    .SYNOPSIS
+        One server's configured source.pin, or an empty string when it has none.
+    .DESCRIPTION
+        Not every declared server is pinned: binaryninja is a host application
+        this installer does not fetch, so its source is null. Reading through
+        that under Set-StrictMode throws, and a throw inside the adaptation
+        check is caught upstream and reported not-testable - which would let a
+        G0-G2 failure hide behind an unrelated missing key.
+    .PARAMETER Server
+        A mcpServers entry, or $null.
+    .OUTPUTS
+        [string] The pin, or '' when the server declares none.
+    .EXAMPLE
+        Get-ServerSourcePin -Server $server
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][AllowNull()][object]$Server)
+
+    if (-not $Server -or $Server.PSObject.Properties.Name -notcontains 'source' -or
+        -not $Server.source) { return '' }
+    if ($Server.source.PSObject.Properties.Name -notcontains 'pin') { return '' }
+    return [string]$Server.source.pin
+}
+
+function Get-PackPinCheck {
+    <#
+    .SYNOPSIS
+        Runs check G4 for every target server one skill pack declares.
+    .DESCRIPTION
+        G4 compares the catalog's recorded pin against the pin config carries
+        right now. It reads the config and the checked-in catalog and nothing
+        else, so it belongs beside the adaptation checks rather than behind the
+        drift check's install-state guard. Behind that guard it was unreachable
+        in the shipped state - every pack held at the human review gate, nothing
+        installed, no manifest - which is exactly the state design spec section
+        11.3's negative test 4 has to fail in.
+
+        A target server the config does not declare, or declares with no pin of
+        its own, is not-testable naming the server: there is nothing to compare
+        the catalog against, and that is not a clean pass.
+    .PARAMETER Pack
+        The pack's config entry.
+    .PARAMETER Config
+        The parsed configuration object.
+    .PARAMETER Catalog
+        From Get-ToolCatalog.
+    .OUTPUTS
+        [array] One "<server> tool catalog pin" check per declared target server.
+    .EXAMPLE
+        Get-PackPinCheck -Pack $p -Config $cfg -Catalog $c
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Pack,
+        [Parameter(Mandatory)][object]$Config,
+        [Parameter(Mandatory)][object]$Catalog
+    )
+
+    $checks = @()
+    foreach ($serverName in @($Pack.targetServers)) {
+        $server = $Config.mcpServers | Where-Object { $_.name -eq $serverName } |
+            Select-Object -First 1
+        $name = "$serverName tool catalog pin"
+        $pin = Get-ServerSourcePin -Server $server
+        if (-not $server) {
+            $checks += New-CheckResult -Name $name -Status 'not-testable' `
+                -Detail "'$serverName' is not a declared mcpServers entry."
+        } elseif (-not $pin) {
+            $checks += New-CheckResult -Name $name -Status 'not-testable' -Detail (
+                "Config records no source.pin for '$serverName', so there is " +
+                'nothing to compare the catalog against.')
+        } else {
+            $checks += Test-ToolCatalogPin -Catalog $Catalog -Server $serverName `
+                -CurrentPin $pin
+        }
+    }
+    return $checks
+}
+
 function Test-SkillAdaptationCheck {
     <#
     .SYNOPSIS
-        Runs checks G0, CATALOG, G1 and G2 over every enabled skill in one pack.
+        Runs checks G0, CATALOG, G1, G2 and G4 over one pack, installed or not.
     .DESCRIPTION
         Reads each skill's vendored SKILL.md directly via Get-SkillPackFile and
         delegates the actual checks to Test-SkillAdaptation (Skills.psm1) - this
-        function's job is only to loop the pack's skills and turn the combined
-        findings into one "<ns> skill adaptation" check.
+        function's job is only to loop the pack's skills, add G4 for the pack's
+        target servers, and turn the combined findings into one "<ns> skill
+        adaptation" check.
+
+        G4 sits here rather than with the drift checks because it needs no
+        running server: it compares the catalog's recorded pin against config's
+        current one, which is what an operator actually hits. Behind the drift
+        check's install-state guard it never ran in the shipped state at all.
 
         A pack whose skills declare no MCP tools at all passes with "nothing to
         check": it is correctly adapted by definition, and not-testable here
@@ -796,16 +884,19 @@ function Test-SkillAdaptationCheck {
         failure G2 exists to catch.
     .PARAMETER Pack
         The pack's config entry.
+    .PARAMETER Config
+        The parsed configuration object, for G4's current pins.
     .PARAMETER Catalog
         From Get-ToolCatalog.
     .PARAMETER RepoRoot
         Repository root holding vendor\skills.
     .EXAMPLE
-        Test-SkillAdaptationCheck -Pack $p -Catalog $c -RepoRoot $root
+        Test-SkillAdaptationCheck -Pack $p -Config $cfg -Catalog $c -RepoRoot $root
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][object]$Pack,
+        [Parameter(Mandatory)][object]$Config,
         [Parameter(Mandatory)][object]$Catalog,
         [Parameter(Mandatory)][string]$RepoRoot
     )
@@ -831,16 +922,21 @@ function Test-SkillAdaptationCheck {
                 -SkillName $skill.name)
     }
 
+    $subChecks = @()
     if ($findings.Count -gt 0) {
-        $detail = ($findings | ForEach-Object { $_.Message }) -join ' | '
-        return New-CheckResult -Name $name -Status 'fail' -Detail $detail
-    }
-    if ($toolCount -eq 0) {
-        return New-CheckResult -Name $name -Status 'pass' `
+        $subChecks += New-CheckResult -Name $name -Status 'fail' `
+            -Detail (($findings | ForEach-Object { $_.Message }) -join ' | ')
+    } elseif ($toolCount -eq 0) {
+        $subChecks += New-CheckResult -Name $name -Status 'pass' `
             -Detail 'Declares no MCP tools; nothing to check.'
+    } else {
+        $subChecks += New-CheckResult -Name $name -Status 'pass' `
+            -Detail "$toolCount declared tool(s) all correctly adapted."
     }
-    return New-CheckResult -Name $name -Status 'pass' `
-        -Detail "$toolCount declared tool(s) all correctly adapted."
+    $subChecks += Get-PackPinCheck -Pack $Pack -Config $Config -Catalog $Catalog
+
+    return New-CheckResult -Name $name -Status (Merge-CheckStatus -Results $subChecks) `
+        -Detail (($subChecks | ForEach-Object { $_.Detail }) -join ' | ')
 }
 
 function Test-ToolCatalogPin {
@@ -996,13 +1092,16 @@ function Get-SkillDriftLiveCheck {
 function Test-SkillDriftCheck {
     <#
     .SYNOPSIS
-        Runs checks G3 and G4 over one pack's declared target servers.
+        Runs check G3 over one pack's declared target servers.
     .DESCRIPTION
-        G4 (catalog vs pin) needs no server and always runs. G3 (catalog vs
-        live) is gated per server by Get-SkillDriftLiveCheck. The two
-        sub-results per server are combined into the single "<ns> skill
-        drift" check via Merge-CheckStatus: a fail anywhere is real drift, a
-        not-testable anywhere means at least one target told us nothing.
+        G3 (catalog vs live) is the only check here that is genuinely about
+        install state, because it needs the server running. G4 moved to
+        Test-SkillAdaptationCheck: it reads only config and the catalog, so
+        gating it on install state switched it off in the one state that
+        matters. The per-server sub-results are combined into the single
+        "<ns> skill drift" check via Merge-CheckStatus: a fail anywhere is
+        real drift, a not-testable anywhere means at least one target told us
+        nothing.
     .PARAMETER Pack
         The pack's config entry.
     .PARAMETER Config
@@ -1031,13 +1130,11 @@ function Test-SkillDriftCheck {
         $server = $Config.mcpServers | Where-Object { $_.name -eq $serverName } |
             Select-Object -First 1
         if (-not $server) {
-            $subChecks += New-CheckResult -Name "$serverName tool catalog pin" `
+            $subChecks += New-CheckResult -Name "$serverName tool catalog" `
                 -Status 'not-testable' `
                 -Detail "'$serverName' is not a declared mcpServers entry."
             continue
         }
-        $subChecks += Test-ToolCatalogPin -Catalog $Catalog -Server $serverName `
-            -CurrentPin $server.source.pin
         $subChecks += Get-SkillDriftLiveCheck -Server $server -Config $Config -Catalog $Catalog `
             -Inventory $Inventory -Attended:$Attended
     }
@@ -1052,11 +1149,12 @@ function Get-PackAdaptationCheck {
     .SYNOPSIS
         Runs one pack's adaptation check, whether or not the pack is installed.
     .DESCRIPTION
-        G0, CATALOG, G1 and G2 read the repo's vendored files and the checked-in
-        catalog and nothing else, so install state has no bearing on whether
-        they can run - and gating them behind it would switch the centrepiece
-        control off in exactly the states where it matters most: a pack held at
-        the human review gate, or a host where phase 5 has never run at all.
+        G0, CATALOG, G1, G2 and G4 read the repo's vendored files, the config
+        and the checked-in catalog and nothing else, so install state has no
+        bearing on whether they can run - and gating them behind it would
+        switch the centrepiece control off in exactly the states where it
+        matters most: a pack held at the human review gate, or a host where
+        phase 5 has never run at all.
         Design spec section 10.2 requires this to hold under -VerifyOnly.
 
         A pack switched off in re-agent.config.json is the one exception: it is
@@ -1069,6 +1167,8 @@ function Get-PackAdaptationCheck {
         tree cannot take the rest of the suite down.
     .PARAMETER Pack
         The pack's config entry.
+    .PARAMETER Config
+        The parsed configuration object, for G4's current pins.
     .PARAMETER Catalog
         From Get-ToolCatalog.
     .PARAMETER RepoRoot
@@ -1076,11 +1176,12 @@ function Get-PackAdaptationCheck {
     .OUTPUTS
         The pack's "<ns> skill adaptation" check.
     .EXAMPLE
-        Get-PackAdaptationCheck -Pack $p -Catalog $c -RepoRoot $root
+        Get-PackAdaptationCheck -Pack $p -Config $cfg -Catalog $c -RepoRoot $root
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][object]$Pack,
+        [Parameter(Mandatory)][object]$Config,
         [Parameter(Mandatory)][object]$Catalog,
         [Parameter(Mandatory)][AllowEmptyString()][string]$RepoRoot
     )
@@ -1091,7 +1192,8 @@ function Get-PackAdaptationCheck {
     }
 
     try {
-        return Test-SkillAdaptationCheck -Pack $Pack -Catalog $Catalog -RepoRoot $RepoRoot
+        return Test-SkillAdaptationCheck -Pack $Pack -Config $Config -Catalog $Catalog `
+            -RepoRoot $RepoRoot
     } catch {
         return New-CheckResult -Name "$($Pack.namespace) skill adaptation" `
             -Status 'not-testable' -Detail "The check could not run: $($_.Exception.Message)"
@@ -1162,12 +1264,13 @@ function Get-SkillCheck {
     .DESCRIPTION
         Each pack yields two checks with deliberately different gating. The
         adaptation check always runs: G0-G2 and G4 read the repo's vendored
-        files and the checked-in catalog and need no server, so a bad adaptation
-        fails verification even under -VerifyOnly on a host where phase 5 has
-        never run. The drift check keeps Get-ServerCheck's guard cascade,
-        because drift is a claim about what is installed here: a pack with no
-        manifest record is unknown, not uninstalled. G3's live half is gated per
-        target server inside Test-SkillDriftCheck.
+        files, the config and the checked-in catalog and need no server, so a
+        bad adaptation or a stale catalog pin fails verification even under
+        -VerifyOnly on a host where phase 5 has never run. The drift check keeps
+        Get-ServerCheck's guard cascade, because G3 is a claim about what is
+        installed and running here: a pack with no manifest record is unknown,
+        not uninstalled. G3 is additionally gated per target server inside
+        Test-SkillDriftCheck.
     .PARAMETER Config
         The parsed configuration object.
     .PARAMETER SkillResults
@@ -1201,7 +1304,8 @@ function Get-SkillCheck {
 
     $checks = @()
     foreach ($pack in $Config.skills) {
-        $checks += Get-PackAdaptationCheck -Pack $pack -Catalog $catalog -RepoRoot $RepoRoot
+        $checks += Get-PackAdaptationCheck -Pack $pack -Config $Config -Catalog $catalog `
+            -RepoRoot $RepoRoot
         $checks += Get-PackDriftCheck -Pack $pack -Config $Config -Catalog $catalog `
             -SkillResults $SkillResults -Inventory $Inventory -Attended:$Attended
     }
@@ -1422,6 +1526,7 @@ Export-ModuleMember -Function New-CheckResult, Invoke-McpProbe, Test-ClaudeCli, 
     Test-HttpServerLive, Get-HostAppHint, Get-ProbeInterpreter, Get-ServerCheck, `
     Get-ServerProbeContext, Get-SkillPackDirectory, Get-SkillPackFile, Merge-CheckStatus, `
     Test-SkillAdaptationCheck, Test-ToolCatalogPin, Test-ToolCatalogLive, `
-    Get-SkillDriftLiveCheck, Test-SkillDriftCheck, Get-PackAdaptationCheck, `
-    Get-PackDriftCheck, Get-SkillCheck, `
+    Get-SkillDriftLiveCheck, Test-SkillDriftCheck, Get-ServerSourcePin, `
+    Get-PackPinCheck, `
+    Get-PackAdaptationCheck, Get-PackDriftCheck, Get-SkillCheck, `
     ConvertFrom-CatalogServerMap, Update-CatalogServerEntry, Save-ToolCatalog
