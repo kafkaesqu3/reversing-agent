@@ -128,7 +128,7 @@ cannot produce trustworthy diagrams. Tell the user:
 
 > Architectural analysis with strict citations requires a live `pyghidra-mcp` connection to this
 > binary. Verification cannot run without it. Confirm the server is running and the binary is
-> imported (`list_project_binaries`), or pause this analysis.
+> already imported into the project, or pause this analysis.
 
 Do not produce a diagram with un-verified citations. That's the failure mode this skill exists to
 prevent -- unchanged from upstream.

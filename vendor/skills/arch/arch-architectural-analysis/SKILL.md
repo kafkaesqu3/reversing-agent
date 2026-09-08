@@ -141,11 +141,15 @@ Read `references/verification-protocol.md`, retargeted in full. In place of coda
   verbatim -- same substring-match discipline upstream's Pass 1 describes, just against tool
   output instead of a file read.
 
-### 5. Render diagrams
+### 5. Render diagrams (rendering unavailable on this host -- see below)
 
-Unchanged. Author `<mode>/<diagram>.mmd` per `references/mermaid-conventions.md` (upstream,
-format/syntax content -- format conventions do not depend on what a citation looks like). Run
-`bash scripts/render.sh <report-dir>/ --style corporate`.
+Author `<mode>/<diagram>.mmd` per `references/mermaid-conventions.md` (upstream, format/syntax
+content -- format conventions do not depend on what a citation looks like). That `.mmd` file,
+plus the mode's `report.md`, is the deliverable on this host. `bash scripts/render.sh
+<report-dir>/ --style corporate` renders it to `.svg`/`.png`, but `render.sh` requires `mmdc`
+(mermaid-cli), which is not installed here -- confirm with `command -v mmdc` before relying on
+it. The script fails loudly with an install hint rather than silently; it does not lose the
+`.mmd` you already authored. See `## Limitations`.
 
 ### 6. Author mode reports
 
@@ -158,10 +162,14 @@ instead of an in-tree doc). Citations throughout are `function@address`.
 Per `references/synthesis-readme.md` (upstream shape). Explicitly list the four unsupported
 modes and why, per `## Mode support on this host` above, in the Scope section.
 
-### 8. Compile HTML (automatic)
+### 8. Compile HTML (not automatic on this host -- see below)
 
-Unchanged: `bash scripts/render.sh ... && bash scripts/compile-html.sh ...`. Neither script reads
-or depends on citation format.
+`bash scripts/render.sh ... && bash scripts/compile-html.sh ...` combines the rendered diagrams
+and reports into one styled HTML file. Neither script reads or depends on citation format, but
+both require tooling this host does not have (`mmdc` for the first, `pandoc` for the second --
+confirm with `command -v pandoc`). Treat this phase as optional and currently unavailable, not
+automatic: the per-mode `report.md` files and the synthesis README are the deliverable without
+it. See `## Limitations`.
 
 ### Optional hand-off
 
@@ -172,9 +180,11 @@ instead of naming a skill that does not exist here. Do not auto-invoke anything.
 
 ### Shareable artifacts
 
-Unchanged from upstream -- `render.sh`/`compile-html.sh`/`compile-pdf.sh` operate on `.mmd`/`.md`
-files generically and do not depend on citation format. See upstream's own flag reference below
-(unmodified, still accurate):
+`render.sh`/`compile-html.sh`/`compile-pdf.sh` are upstream, unmodified, and operate on `.mmd`/
+`.md` files generically with no citation-format dependency -- but see Phases 5 and 8 above and
+`## Limitations`: `mmdc` and `pandoc`, which these scripts require, are not installed on this
+host, so none of the three currently produce output here. See upstream's own flag reference
+below (unmodified, still accurate) for when they are available:
 
 - `--style {corporate|blueprint}` -- visual style.
 - `--theme {light|dark}` -- initial theme.
@@ -203,11 +213,15 @@ optional prior-artifact note rather than a required Phase-2 output.
   mode's *diagram shape*, not the listed source-language signals.
 - `scripts/render.sh`, `scripts/compile-html.sh`, `scripts/compile-pdf.sh` -- upstream, unmodified,
   generic mermaid/pandoc rendering with no citation-format dependency.
-- `scripts/verify-citations.sh` -- **does not apply on this host** (see its own header comment and
-  `## Limitations` below) -- it greps a report for `path:line` patterns and checks them against
-  files on disk; an address-based citation has no file to check against. Verification here is the
-  orchestrator's Phase 4 (mechanical, against `pyghidra-mcp`), not this script.
-- `assets/template.html`, `assets/report.css`, `assets/mermaid-config.json` -- upstream, unmodified.
+- `scripts/verify-citations.sh` -- **does not apply on this host** (see `## Limitations` below,
+  since the script itself carries no such note -- it is byte-identical to upstream and its own
+  header recommends using it) -- it greps a report for `path:line` patterns and checks them
+  against files on disk; an address-based citation has no file to check against. Verification
+  here is the orchestrator's Phase 4 (mechanical, against `pyghidra-mcp`), not this script.
+- `assets/template.html`, `assets/styles/{blueprint,corporate}/{style.css,mermaid-dark.json,
+  mermaid-light.json}` -- upstream, unmodified (upstream's own Resources list names
+  `assets/report.css`/`assets/mermaid-config.json`, which do not exist in the tree; corrected
+  here to the paths that actually exist).
 
 ## Limitations
 
@@ -228,6 +242,14 @@ that repo's much larger multi-skill collection; only this directory was vendored
 - **`scripts/verify-citations.sh` does not run against this pack's output.** It is a `path:line`
   file-existence checker; address citations have nothing on disk for it to check. Phase 4's
   mechanical verification against `pyghidra-mcp` is the only citation check that applies here.
+- **Diagram/HTML rendering is currently unavailable on this host.** `scripts/render.sh` needs
+  `mmdc` (mermaid-cli); `scripts/compile-html.sh` and `scripts/compile-pdf.sh` need `pandoc`.
+  Neither is installed (`command -v mmdc`/`pandoc` both fail as of this adaptation). The `.mmd`
+  diagram sources and the markdown reports are still fully authored and are the deliverable on
+  this host -- only the rendered `.svg`/`.png`/`.html`/`.pdf` artifacts are blocked, and the
+  scripts fail loudly with an install hint rather than losing anything silently. Installing
+  `mmdc`/`pandoc` is a server-install decision, not something this content task changes -- flag
+  it for the user's sign-off if rendered output is wanted.
 - **No prior-artifact query mechanism.** `pyghidra-mcp` has no comment-search tool, so Phase 2's
   "spine" is whatever prior-session context is already available, not something this skill can
   fetch on demand. See Phase 2.
