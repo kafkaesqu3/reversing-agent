@@ -3,6 +3,7 @@ name: windbg-doctor
 description: Check that this host can actually run the mcp-windbg MCP server - CDB present, the managed server venv working, symbols configured - and explain how to fix whatever is missing. Use when mcp-windbg tools fail, when a session will not open, or before a first debugging session.
 allowed-tools:
   - mcp__mcp-windbg__list_dumps
+  - Bash
 ---
 
 # Check the debugging setup
