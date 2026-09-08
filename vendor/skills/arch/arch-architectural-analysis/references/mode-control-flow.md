@@ -1,5 +1,20 @@
 # Mode: Control Flow
 
+## On this host -- conceptually applicable, signal catalog not rewritten
+
+The *shape* of this mode (state machines, sequence diagrams for execution flow) maps to real
+structure in decompiled/disassembled code: branches, loops, thread-creation calls
+(`CreateThread`/`pthread_create`, visible via `list_imports` + a traced call site), and
+synchronization primitives (mutex/critical-section APIs). This is a natural extension of
+`gen_callgraph`'s topology plus `decompile_function`'s per-function detail.
+
+**The signal catalog below (`async`/`await`, `asyncio.gather`, Textual's `on_mount`, React's
+`useEffect`) is upstream's source/framework-specific list and was not rewritten** -- none of it
+exists in compiled native code. Ground every state/transition in `decompile_function`,
+`list_xrefs`, and `gen_callgraph` output instead, citing `symbol@address` per
+`citation-protocol.md`. The diagram guidance (`stateDiagram-v2`, sequence-diagram secondaries) and
+cross-mode boundary table below still apply as general shape guidance.
+
 ## What this mode answers
 
 How does work get scheduled, threaded, and sequenced? Who decides what runs when? Control flow captures the *dynamics* of execution — async tasks, workers, schedulers, lifecycle transitions, state machines, event loops.

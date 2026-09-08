@@ -1,5 +1,15 @@
 # Mode: Data Model
 
+## On this host -- NOT SUPPORTED
+
+Do not run this mode. Data model (ERD) assumes a persisted schema (SQL/ORM) or typed source
+declarations (dataclasses, Pydantic models). A stripped binary has neither -- what this host *can*
+infer is per-variable struct layout via `set_variable_type`/decompilation, which the `ghidra` and
+`reva` packs already document as a distinct, narrower artifact (a single function's inferred
+local layout, not an entity-relationship diagram of a schema). The signal catalog, entity/
+relationship guidance, and ERD example below are upstream-pristine and describe a source/ORM
+workflow this host cannot run.
+
 ## What this mode answers
 
 What is the *shape* of the data this system handles? Entities, relationships, persistence schemas, in-memory structures. Data model is a *noun* — the structure of information, not its movement.

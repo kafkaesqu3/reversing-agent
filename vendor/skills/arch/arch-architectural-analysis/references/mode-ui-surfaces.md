@@ -1,5 +1,14 @@
 # Mode: UI Surfaces
 
+## On this host -- NOT SUPPORTED
+
+Do not run this mode. UI surfaces assumes a DOM/route tree, a TUI framework's screen/view
+registrations, or a CLI's subcommand decorators -- all source-level, framework-specific
+constructs. Ghidra's decompilation of a native binary has no equivalent structure to enumerate,
+even for a binary that happens to have a GUI (Ghidra does not recover a DOM/component tree from
+compiled UI code). The signal catalog and examples below are upstream-pristine and describe a
+web/CLI/TUI source workflow this host cannot run.
+
 ## What this mode answers
 
 What does the user see and interact with? Every user-facing entry point: routes, screens, components, key bindings, slash commands, CLI subcommands. UI surfaces map the system's *exposed surface area*, not its internals.

@@ -1,5 +1,15 @@
 # Doc Map (Phase 2 Output)
 
+## On this host
+
+This file documents upstream's Phase-2 `doc-map.md` output, built from **in-tree docs**
+(README/CHANGELOG/CLAUDE.md) that do not exist for a stripped binary. `SKILL.md`'s Phase 2
+replaces the doc spine with whatever prior `reva-binary-triage`/`reva-deep-analysis`/
+`ghidra-iterative-re` output is already in the conversation -- there is no query mechanism to
+fetch more of it, and no `docs-inventory.txt`/`doc-map.md` artifact to author. If prior-session
+context fed a report, note that directly in the synthesis README's Scope section instead of
+following the template below.
+
 The doc map is the spine of the report. Phase 2 produces it by reading every in-tree doc and deciding which subsystem each one is authoritative on.
 
 ## Authoring rules

@@ -1,5 +1,21 @@
 # Mode: Data Flow
 
+## On this host -- conceptually applicable, signal catalog not rewritten
+
+The *shape* of this mode (source -> transform -> sink, edges as data movement) maps to tracing
+data through decompiled functions: entry via a network/file API (see the adapted
+`mode-integrations.md`), transformation via functions you decompile with `decompile_function`,
+persistence via `list_xrefs`-traced writes, exit via another external-API call. This is the same
+investigation shape `reva-deep-analysis` already uses for "what does this do with the data it
+reads?"-style questions.
+
+**The signal catalog below (argparse, HTTP framework handlers, ORM writes, MCP tool returns) is
+upstream's source/web-framework list and was not rewritten.** Do not search for these literal
+patterns. Ground every node/edge in `decompile_function`/`list_xrefs` output and the citation
+format in `citation-protocol.md` (`symbol@address`, not `path:line`) instead. The diagram
+guidance (`flowchart LR`, sequence-diagram secondaries) and cross-mode boundary table below still
+apply as general shape guidance.
+
 ## What this mode answers
 
 How does data move through the system? Where does it enter, what transforms apply, where does it land? Data flow is a *verb* — the movement of data, not its shape.

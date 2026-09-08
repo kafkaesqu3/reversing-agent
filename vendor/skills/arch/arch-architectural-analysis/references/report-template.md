@@ -1,5 +1,18 @@
 # Mode Report Template (doc-led, gap-first)
 
+## On this host
+
+The six-section shape below (Summary, Doc reference, Drift, Gaps, Receipts, Open questions) is
+unchanged, with two swaps throughout:
+
+- **"Doc reference" becomes "Prior-artifact reference"** -- the collapsed section cites a
+  `reva-*`/`ghidra-*` finding instead of an in-tree doc excerpt. If no prior artifact exists for
+  the mode, say so exactly as upstream's greenfield case: "No prior analysis spine for this mode;
+  this report is the documentation."
+- **Every `path:line` citation in the examples below is `symbol@address`** -- see
+  `citation-protocol.md`. The `spine_docs:` frontmatter field becomes `prior_artifacts:` (a list
+  of prior finding references, or empty).
+
 The skeleton for each per-mode `report.md`. The new shape treats in-tree docs as the spine: confirms collapse into a "Doc reference" details block, drift sits prominently, gaps drive the narrative.
 
 ## Structure

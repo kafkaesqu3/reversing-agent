@@ -1,5 +1,22 @@
 # Mode: Failure Modes
 
+## On this host -- conceptually applicable, signal catalog not rewritten
+
+The *shape* of this mode (error paths, retries, fallbacks, propagation, flowchart with error
+edges) maps to real structure in decompiled code: checked return codes, `GetLastError`/`errno`
+inspection, SEH/vectored-exception frames Ghidra recovers, and retry loops visible as repeated
+call patterns in decompiled output.
+
+**The signal catalog below (`try`/`except` syntax, `@retry` decorators, `tenacity`) is upstream's
+source-language list and was not rewritten** -- there is no `try`/`except` syntax in compiled
+code to scan for. Ground every error-path node in `decompile_function`/`disassemble` output
+instead (look for compare-and-branch patterns after a call that return an error sentinel, SEH
+frame setup, or an explicit `GetLastError`/`errno` check), citing `symbol@address` per
+`citation-protocol.md`. The absence-claim discipline below ("grep for retry patterns first")
+becomes "check `search_strings`/`search_symbols_by_name` for a retry-related API or string
+first" -- there is no source tree to grep. The diagram guidance (`flowchart TD` with dotted error
+edges) and cross-mode boundary table below still apply as general shape guidance.
+
 ## What this mode answers
 
 How does the system break? What error paths exist, where do they originate, what catches them, what gets retried, what gets fallbacked, what gets propagated to the user? Failure modes is the inverse of the happy-path diagram.

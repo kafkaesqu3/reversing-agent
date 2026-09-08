@@ -1,5 +1,17 @@
 # Synthesis README (gap-first)
 
+## On this host
+
+The gap-first shape below is unchanged. Swaps throughout:
+
+- **"Doc spine" becomes "Prior artifacts"** -- the opening section names which `reva-*`/
+  `ghidra-*` output (if any) fed this run, instead of in-tree docs. "Greenfield doc surface"
+  becomes "No prior analysis spine for this binary -- every finding here is new."
+- **Every `path:line` citation in the examples below is `symbol@address`.**
+- **Explicitly list the four unsupported modes and why** (information architecture, data model,
+  UI surfaces, interaction patterns -- see `SKILL.md`'s mode table) in the Scope section, so a
+  reader does not mistake a four-mode report for an eight-mode one.
+
 The top-level `docs/architecture/<date>/README.md`. Authored last, after every mode's `report.md` is finalized.
 
 The report's job is to surface what the team doesn't know it doesn't know. Documentation is the spine; this README is the gap inventory.

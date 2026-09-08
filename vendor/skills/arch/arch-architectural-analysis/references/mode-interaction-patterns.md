@@ -1,5 +1,12 @@
 # Mode: Interaction Patterns
 
+## On this host -- NOT SUPPORTED
+
+Do not run this mode. Interaction patterns assumes ARIA roles, JSX/component composition shape,
+CSS class conventions, and Storybook naming -- signals that exist only in rendered UI source code.
+None of this exists below the level of a compiled binary. The pattern catalog and examples below
+are upstream-pristine and describe a web-UI source workflow this host cannot run.
+
 ## What this mode answers
 
 How is content within UI surfaces *organized*? Bands or tabs? Wizard or accordion? Sticky inspector or modal-driven? Progressive disclosure procedural (click-to-reveal-next) or non-procedural (always-visible-but-collapsed)? Two layouts can have identical component imports and produce radically different user mental models — this mode reads composition shape, ARIA roles, state shape, and pattern conventions to surface the difference that static structural analysis misses.

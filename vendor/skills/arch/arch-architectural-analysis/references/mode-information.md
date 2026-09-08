@@ -1,5 +1,14 @@
 # Mode: Information Architecture
 
+## On this host -- NOT SUPPORTED
+
+Do not run this mode. Information architecture assumes a package/module **source** layout
+(`__init__.py` re-exports, directory naming conventions, import-direction analysis). A single
+compiled binary has no such structure, and `pyghidra-mcp` has no section/memory-block listing
+tool to substitute one (the same gap `reva-binary-triage`'s SKILL.md documents for this server).
+The signal catalog, node/edge guidance, and example below are upstream-pristine and describe a
+source-tree workflow this host cannot run.
+
 ## What this mode answers
 
 What is the conceptual layout of the codebase? Which top-level domains exist, what does each own, how do they nest? IA is the *map of the territory* — not every file, but the meaningful structural units.

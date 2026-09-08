@@ -1,5 +1,19 @@
 # Mermaid Conventions
 
+## On this host
+
+Format and syntax conventions below are upstream and apply as-is -- mermaid diagram types,
+classDef rules, and callout-prefix mechanics do not depend on what a citation looks like. Two
+adjustments:
+
+- **Node labels cite `symbol@address`, not `path/to/file.ext`.** Where an example below shows
+  `I1["[I-1] core/agents.py"]`, read the label as a function/symbol name instead:
+  `X1["[X-1] ai_send_beacon@0x00401800"]`. See `citation-protocol.md`.
+- **Only four callout prefixes are in use on this host**: `X-` (integrations), `D-` (data flow),
+  `C-` (control flow), `F-` (failure modes). `I-`, `U-`, `P-`, `M-` (information architecture, UI
+  surfaces, interaction patterns, data model) do not appear in output here -- those modes are NOT
+  SUPPORTED (see `SKILL.md`'s mode table).
+
 How diagrams are authored across all seven modes. Pinning these conventions early is what makes the cross-mode callout index work — the same `[I-7]` resolves identically whether referenced from the IA report or the data-flow report.
 
 ## Diagram type per mode
