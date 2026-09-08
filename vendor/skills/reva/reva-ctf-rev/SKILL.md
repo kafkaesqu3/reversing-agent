@@ -1,5 +1,5 @@
 ---
-name: ctf-rev
+name: reva-ctf-rev
 description: Solve CTF reverse engineering challenges using systematic analysis to find flags, keys, or passwords. Use for crackmes, binary bombs, key validators, obfuscated code, algorithm recovery, or any challenge requiring program comprehension to extract hidden information.
 ---
 

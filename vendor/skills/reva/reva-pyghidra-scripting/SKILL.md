@@ -1,5 +1,5 @@
 ---
-name: pyghidra-scripting
+name: reva-pyghidra-scripting
 description: Write and run Python (PyGhidra) code inside the Ghidra session that ReVa's MCP server is already attached to, using the five ReVa scripting tools — `run-script`, `list-scripts`, `read-script`, `write-script`, `edit-script`. Use this whenever the user asks to execute Python against the current program, reach for the Ghidra Flat API directly, write a custom analysis pass, automate something the other ReVa tools don't expose, or persist a `.py` script in Ghidra's scripts directory. Also use when an existing ReVa MCP tool can't do what's needed and the right answer is "drop into PyGhidra for one call." Do NOT use this skill for plain ReVa tool calls that already have a dedicated MCP tool (use that tool instead); do NOT use it to build standalone Python programs that run pyghidra in their own process (the run-script tool runs *inside* the ReVa-hosted Ghidra).
 ---
 

@@ -38,10 +38,10 @@ State updates:
 - Byte-level array indexing: `array[data[i]]`
 
 **Investigation strategy:**
-1. `read-memory` at constant arrays - compare to known S-boxes
+1. `read_bytes` at constant arrays - compare to known S-boxes
 2. Count loop iterations - indicates cipher type/key size
-3. `get-strings` with `regexPattern` for algorithm names
-4. Check cross-references to constants - find cipher initialization
+3. `search_strings` with a regex pattern for algorithm names
+4. `list_xrefs` on constants - find cipher initialization
 
 ### Stream Cipher Recognition
 
@@ -660,7 +660,7 @@ re-encrypt_code(new_seed);
 1. **Observe structure** - What loops, branches, data structures appear?
 2. **Compare to patterns** - Does this match known algorithmic patterns?
 3. **Verify with evidence** - Check for characteristic constants, operations, structure
-4. **Document pattern** - Bookmark with pattern name for reference
+4. **Document pattern** - Tag with `set_comment` naming the pattern (there is no bookmark tool on this surface, see the SKILL.md Limitations)
 5. **Improve code** - Rename variables/functions to reflect pattern (e.g., `aes_encrypt`, `rc4_keystream`)
 
 ### Example Investigation
@@ -681,9 +681,9 @@ Find: 256-byte array starting 63 7c 77 7b...
 Conclusion: AES-256 (14 rounds, standard S-box)
 
 Improve:
-  rename-variables: state→aes_state, table→aes_sbox
-  set-function-prototype: void aes_encrypt(uint8_t* data, uint8_t* key)
-  set-comment: "AES-256 encryption using standard S-box"
+  rename_variable: state->ai_aes_state, table->ai_aes_sbox
+  set_function_prototype: void ai_aes_encrypt(uint8_t* data, uint8_t* key)
+  set_comment: "AES-256 encryption using standard S-box"
 ```
 
 ### Pattern Combination

@@ -1,5 +1,5 @@
 ---
-name: ctf-crypto
+name: reva-ctf-crypto
 description: Solve CTF cryptography challenges by identifying, analyzing, and exploiting weak crypto implementations in binaries to extract keys or decrypt data. Use for custom ciphers, weak crypto, key extraction, or algorithm identification.
 ---
 
