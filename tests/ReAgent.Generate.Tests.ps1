@@ -265,6 +265,14 @@ Describe 'the shipped CLAUDE.md template' {
         $Script:Tpl | Should -Not -Match '(?s)has no\s+live-process tool'
         $Script:Tpl | Should -BeLike '*open_cdb_remote*'
     }
+
+    It 'tells the reader dynamic-analyst is currently disabled' {
+        # dynamic-analyst ships enabled: false in re-agent.config.json (x64dbg's tool
+        # surface is not captured), so nothing is generated for it. Without this note
+        # the routing contract sends the reader to an agent that does not exist.
+        $Script:Tpl | Should -Match (
+            '(?s)dynamic-analyst.*?Currently disabled.*?disabledReason.*?re-agent\.config\.json')
+    }
 }
 
 Describe 'Write-AgentDefinition' {

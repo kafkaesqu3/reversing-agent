@@ -64,6 +64,8 @@
   them holds `Task`, so fan-out is yours to drive from this session.
 - `static-analyst` — decompilation and structure, may rename and comment.
 - `dynamic-analyst` — dumps and debugger sessions. TTD replay does not work on this host.
+  **Currently disabled**: x64dbg's tool surface is not captured; see `disabledReason` in
+  `re-agent.config.json`.
 - `verifier` — read-only by construction. Run it **last and independently**, after a finding
   exists. It excludes every `ai_*` symbol when harvesting evidence, because confirming a name a
   model proposed is self-corroboration, not confirmation. That exclusion is the only reason its
