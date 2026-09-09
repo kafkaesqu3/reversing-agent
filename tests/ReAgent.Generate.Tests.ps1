@@ -339,4 +339,31 @@ Describe 'Write-AgentDefinition' {
         Test-Path (Join-Path $script:Dir 'verifier.md') | Should -BeFalse
     }
 }
+Describe 'CLAUDE.md agents section' {
+    BeforeAll {
+        $script:Tpl = Get-Content -LiteralPath (
+            Join-Path $PSScriptRoot '../templates/CLAUDE.md.template') -Raw
+    }
+
+    It 'has an Agents section' {
+        $script:Tpl | Should -Match '(?m)^## Agents$'
+    }
+
+    It 'states that the main session routes and no agent spawns another' {
+        $script:Tpl | Should -BeLike '*no agent spawns another*'
+    }
+
+    It 'states that the verifier runs last and independently' {
+        $script:Tpl | Should -BeLike '*last*'
+        $script:Tpl | Should -BeLike '*ai_*'
+    }
+
+    It 'tells the reader a missing tool is a grant, not a broken server' {
+        $script:Tpl | Should -BeLike '*not a broken server*'
+    }
+
+    It 'keeps CLAUDE.md winning over any agent that contradicts it' {
+        $script:Tpl | Should -BeLike '*CLAUDE.md wins*'
+    }
+}
 

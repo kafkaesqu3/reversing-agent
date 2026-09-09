@@ -57,3 +57,19 @@
   own output is self-corroboration, not confirmation.
 - Ghidra mutations can silently damage unrelated functions. Bracket every mutation batch with a
   whole-program invariant (callgraph edge count) and stop on any unaccounted change.
+
+## Agents
+
+- Three specialists live under .claude/agents/. **You route; no agent spawns another.** None of
+  them holds `Task`, so fan-out is yours to drive from this session.
+- `static-analyst` — decompilation and structure, may rename and comment.
+- `dynamic-analyst` — dumps and debugger sessions. TTD replay does not work on this host.
+- `verifier` — read-only by construction. Run it **last and independently**, after a finding
+  exists. It excludes every `ai_*` symbol when harvesting evidence, because confirming a name a
+  model proposed is self-corroboration, not confirmation. That exclusion is the only reason its
+  confirmation counts for anything.
+- An agent reporting a tool it cannot see has hit its grant, **not a broken server**. The remedy
+  is a config change plus an installer re-run — never a workaround.
+- Findings carry the name of the agent that produced them, and the tool calls behind them.
+- Where a skill or an agent conflicts with this file, **CLAUDE.md wins** and the conflict is
+  reported as a finding.
