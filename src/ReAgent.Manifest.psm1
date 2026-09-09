@@ -275,10 +275,11 @@ function Get-RecordedServerResult {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][object]$Config,
-        [Parameter(Mandatory)][AllowNull()][object]$Inventory
+        [Parameter(Mandatory)][AllowNull()][object]$Inventory,
+        [string]$ManifestName = 'manifest.json'
     )
 
-    $path = Join-Path $Config.paths.stateRoot 'manifest.json'
+    $path = Join-Path $Config.paths.stateRoot $ManifestName
     if (-not (Test-Path -LiteralPath $path)) {
         Write-ReAgentLog -Level WARN -Message (
             "No manifest at '$path', so nothing is known about what is installed. " +

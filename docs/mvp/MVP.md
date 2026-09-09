@@ -1,5 +1,9 @@
 # MVP — Agent-Wired FLARE VM
 
+**Codex extension:** `install-codex.ps1` now reuses these MCP services for Codex.
+See [CODEX.md](CODEX.md) for installation, configuration, and verification commands.
+The Claude MVP history below remains the baseline.
+
 **Goal:** one script, run on an existing FLARE VM, that leaves you with Claude Code able to drive **x64dbg, Ghidra, Binary Ninja, and WinDbg** through MCP.
 
 Nothing else. `../../BLUEPRINT.md`, `../../DEPLOYMENT_PLAN.md`, and `../../GAP_ANALYSIS.md` describe the full system; this file tracks only the first shippable slice of it and what still blocks that slice.

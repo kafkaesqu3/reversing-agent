@@ -487,7 +487,9 @@ function Test-Preflight {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][object]$Inventory,
-        [switch]$VerifyOnly
+        [switch]$VerifyOnly,
+        [ValidateSet('Claude', 'Codex')][string]$Agent = 'Claude',
+        [string]$CodexPath = ''
     )
 
     $blockers = @()
@@ -500,7 +502,10 @@ function Test-Preflight {
         $blockers += ('This does not look like a virtual machine. RE tooling must not be ' +
             'installed on a host OS. Run this inside the FLARE VM.')
     }
-    if (-not $Inventory.ClaudeCode) {
+    if ($Agent -eq 'Codex' -and -not $CodexPath) {
+        $blockers += 'Codex CLI was not found. Install Codex as the analyst user and confirm "codex --version" works.'
+    }
+    if ($Agent -eq 'Claude' -and -not $Inventory.ClaudeCode) {
         $blockers += ('Claude Code was not found for the current user. It is a prerequisite, ' +
             'not installed by this script. Install it, confirm "claude --version" works ' +
             'as the analyst user, then re-run.')
@@ -561,13 +566,15 @@ function Assert-Preflight {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][object]$Inventory,
-        [switch]$VerifyOnly
+        [switch]$VerifyOnly,
+        [ValidateSet('Claude', 'Codex')][string]$Agent = 'Claude',
+        [string]$CodexPath = ''
     )
 
     # @() is load-bearing: PowerShell unrolls an empty array on return, so a
     # healthy host yields $null here and $null.Count throws under StrictMode.
     # Without the wrap, Assert-Preflight fails on exactly the boxes that pass.
-    $blockers = @(Test-Preflight -Inventory $Inventory -VerifyOnly:$VerifyOnly)
+    $blockers = @(Test-Preflight -Inventory $Inventory -VerifyOnly:$VerifyOnly -Agent $Agent -CodexPath $CodexPath)
     if ($blockers.Count -gt 0) {
         throw ("Preflight failed:`n  - " + ($blockers -join "`n  - "))
     }
