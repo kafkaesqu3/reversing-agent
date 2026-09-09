@@ -176,6 +176,9 @@ function Write-AgentConfiguration {
         Results from Install-AllMcpServer.
     .PARAMETER TemplateRoot
         Directory holding CLAUDE.md.template.
+    .OUTPUTS
+        [array] One record per declared agent, from Write-AgentDefinition. Empty
+        when the config declares no agents.
     .EXAMPLE
         Write-AgentConfiguration -Config $c.Config -ServerResults $c.ServerResults
     #>
@@ -217,7 +220,7 @@ function Write-AgentConfiguration {
     foreach ($w in $written) {
         Write-ReAgentLog -Level INFO -Message "Generated '$w'."
     }
-    return $written
+    return $agentResults
 }
 
 function Write-AgentDefinition {

@@ -971,3 +971,29 @@ Describe 'Save-ToolCatalog' {
             Should -BeTrue
     }
 }
+
+Describe 'agent gate inside verification' {
+    It 'runs the gate with nothing installed, reading only repo files' {
+        # Spec 8: all five checks read only the repo and generated files, so
+        # -VerifyOnly works on a host where phase 4 has never run.
+        $cfg = [PSCustomObject]@{
+            mcpServers = @([PSCustomObject]@{ name = 'pyghidra-mcp' })
+            agents = @([PSCustomObject]@{ name = 'verifier'; enabled = $true
+                    level = 'read'; targetServers = @('pyghidra-mcp')
+                    builtinTools = @('Read'); disabledReason = '' }) }
+        $r = Invoke-AgentVerification -Config $cfg -Catalog (Get-ToolCatalog) `
+            -AgentDir (Join-Path ([IO.Path]::GetTempPath()) 'does-not-exist')
+        $r.Status | Should -Be 'pass'
+    }
+
+    It 'fails verification when an agent is over-granted' {
+        $cfg = [PSCustomObject]@{
+            mcpServers = @([PSCustomObject]@{ name = 'pyghidra-mcp' })
+            agents = @([PSCustomObject]@{ name = 'verifier'; enabled = $true
+                    level = 'read'; targetServers = @('nonexistent-server')
+                    builtinTools = @('Read'); disabledReason = '' }) }
+        $r = Invoke-AgentVerification -Config $cfg -Catalog (Get-ToolCatalog) `
+            -AgentDir (Join-Path ([IO.Path]::GetTempPath()) 'does-not-exist')
+        $r.Status | Should -Be 'failed'
+    }
+}

@@ -1,5 +1,7 @@
 Set-StrictMode -Version Latest
 
+Import-Module (Join-Path $PSScriptRoot 'ReAgent.Agents.psm1') -Force
+
 # Depends on functions exported by sibling modules, which Install-REAgent.ps1
 # imports into the session before this one: Write-ReAgentLog, Write-Utf8NoBomFile
 # (Common), Invoke-CommandLine (Discovery), Get-VenvPython / Get-ServerVenvPath /
@@ -1452,6 +1454,105 @@ function Save-ToolCatalog {
     return [PSCustomObject]$catalog
 }
 
+function Invoke-AgentVerification {
+    <#
+    .SYNOPSIS
+        Runs the A0-A4 gate over every enabled agent.
+    .DESCRIPTION
+        Reads only the repo and the generated files, so all five checks run on
+        every verification including -VerifyOnly on a host where the generation
+        phase has never run (spec 8). A missing agent file is not itself a
+        failure here - the gate judges the grant the config and catalog imply,
+        which is what would be generated.
+    .PARAMETER Config
+        The parsed configuration object.
+    .PARAMETER Catalog
+        From Get-ToolCatalog.
+    .PARAMETER AgentDir
+        Where generated agent files live. May not exist.
+    .OUTPUTS
+        [PSCustomObject] Name, Status, Findings.
+    .EXAMPLE
+        Invoke-AgentVerification -Config $cfg -Catalog $cat -AgentDir $d
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Config,
+        [Parameter(Mandatory)][object]$Catalog,
+        [Parameter(Mandatory)][string]$AgentDir
+    )
+
+    # Indexer form: '.Properties.Name -notcontains' throws PropertyNotFoundStrict
+    # of its own when Properties is completely empty.
+    if ($null -eq $Config.PSObject.Properties['agents']) {
+        return [PSCustomObject]@{ Name = 'agents'; Status = 'not-testable'
+            Findings = @(); Reason = 'This config declares no agents.' }
+    }
+
+    $findings = @()
+    foreach ($agent in @($Config.agents | Where-Object { $_.enabled })) {
+        $path = Join-Path $AgentDir "$($agent.name).md"
+        # No file yet means nothing has been generated; judge the grant the
+        # config implies, using the name the generator would write.
+        $fm = @{ name = "$($agent.name)" }
+        if (Test-Path -LiteralPath $path) {
+            $fm = Get-SkillFrontmatter -Text (Get-Content -LiteralPath $path -Raw)
+        }
+        $findings += Invoke-AgentGate -Agent $agent -Catalog $Catalog `
+            -Frontmatter $fm -FileBaseName "$($agent.name)"
+    }
+
+    return [PSCustomObject]@{
+        Name     = 'agents'
+        Status   = $(if ($findings.Count) { 'failed' } else { 'pass' })
+        Findings = $findings
+    }
+}
+
+function Get-AgentCheck {
+    <#
+    .SYNOPSIS
+        Runs the A0-A4 gate over every configured agent and reports it as one check.
+    .DESCRIPTION
+        Delegates to Invoke-AgentVerification, which reads only the repo and any
+        generated agent files (spec 8), so this runs under -VerifyOnly on a host
+        where phase 4 has never generated anything. AgentResults does not gate
+        the outcome - the same over-grant is a defect whether or not this run
+        regenerated the files - it only sizes the passing detail message.
+    .PARAMETER Config
+        The parsed configuration object.
+    .PARAMETER AgentResults
+        Results from Write-AgentConfiguration, or replayed from the manifest.
+    .OUTPUTS
+        [array] Empty when the config declares no agents, else one 'agents' check.
+    .EXAMPLE
+        Get-AgentCheck -Config $cfg -AgentResults $r
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Config,
+        [Parameter(Mandatory)][AllowEmptyCollection()][array]$AgentResults
+    )
+
+    if ($null -eq $Config.PSObject.Properties['agents']) { return @() }
+
+    try {
+        $catalog = Get-ToolCatalog
+    } catch {
+        return @(New-CheckResult -Name 'agents' -Status 'not-testable' `
+                -Detail $_.Exception.Message)
+    }
+
+    $agentDir = Join-Path $Config.paths.agentRoot '.claude\agents'
+    $result = Invoke-AgentVerification -Config $Config -Catalog $catalog -AgentDir $agentDir
+    if ($result.Findings.Count -gt 0) {
+        $detail = ($result.Findings | ForEach-Object { "[$($_.Check)] $($_.Message)" }) -join ' | '
+        return @(New-CheckResult -Name 'agents' -Status 'fail' -Detail $detail)
+    }
+    return @(New-CheckResult -Name 'agents' -Status 'pass' -Detail (
+            "$($AgentResults.Count) agent(s) on record; the A0-A4 gate found no over-grant."))
+}
+
 function Invoke-Verification {
     <#
     .SYNOPSIS
@@ -1467,6 +1568,8 @@ function Invoke-Verification {
         Results from Install-AllMcpServer.
     .PARAMETER SkillResults
         Results from Install-AllSkill, or replayed from the manifest.
+    .PARAMETER AgentResults
+        Results from Write-AgentConfiguration, or replayed from the manifest.
     .PARAMETER Inventory
         The host inventory.
     .PARAMETER RepoRoot
@@ -1481,6 +1584,7 @@ function Invoke-Verification {
         [Parameter(Mandatory)][object]$Config,
         [Parameter(Mandatory)][AllowEmptyCollection()][array]$ServerResults,
         [AllowEmptyCollection()][array]$SkillResults = @(),
+        [AllowEmptyCollection()][array]$AgentResults = @(),
         [object]$Inventory = $null,
         [string]$RepoRoot = '',
         [switch]$Attended
@@ -1496,6 +1600,7 @@ function Invoke-Verification {
     $checks += Get-ServerCheck -Config $Config -ServerResults $ServerResults -Attended:$Attended
     $checks += Get-SkillCheck -Config $Config -SkillResults $SkillResults -RepoRoot $RepoRoot `
         -Inventory $Inventory -Attended:$Attended
+    $checks += Get-AgentCheck -Config $Config -AgentResults $AgentResults
 
     $report = [ordered]@{
         tier2Requested = [bool]$Attended
@@ -1529,4 +1634,5 @@ Export-ModuleMember -Function New-CheckResult, Invoke-McpProbe, Test-ClaudeCli, 
     Get-SkillDriftLiveCheck, Test-SkillDriftCheck, Get-ServerSourcePin, `
     Get-PackPinCheck, `
     Get-PackAdaptationCheck, Get-PackDriftCheck, Get-SkillCheck, `
-    ConvertFrom-CatalogServerMap, Update-CatalogServerEntry, Save-ToolCatalog
+    ConvertFrom-CatalogServerMap, Update-CatalogServerEntry, Save-ToolCatalog, `
+    Invoke-AgentVerification, Get-AgentCheck

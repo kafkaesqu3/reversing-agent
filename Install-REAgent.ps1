@@ -92,6 +92,7 @@ $context = @{
     VerifyOnly    = [bool]$VerifyOnly
     ServerResults = @()
     SkillResults  = @()
+    AgentResults  = @()
     VerifyResults = @()
 }
 
@@ -115,7 +116,8 @@ $phaseTable = @(
     }
     @{ Id   = 4; Name = 'AgentConfig'
         Test = { $false }
-        Fn   = { param($c) Write-AgentConfiguration -Config $c.Config -ServerResults $c.ServerResults }
+        Fn   = { param($c) $c.AgentResults = @(Write-AgentConfiguration -Config $c.Config `
+                    -ServerResults $c.ServerResults) }
     }
     @{ Id   = 5; Name = 'Skills'
         Test = { $false }
@@ -134,8 +136,12 @@ $phaseTable = @(
             if (-not $c.SkillResults -or $c.SkillResults.Count -eq 0) {
                 $c.SkillResults = @(Get-RecordedSkillResult -Config $c.Config)
             }
+            if (-not $c.AgentResults -or $c.AgentResults.Count -eq 0) {
+                $c.AgentResults = @(Get-RecordedAgentResult -Config $c.Config)
+            }
             $c.VerifyResults = Invoke-Verification -Config $c.Config `
                 -ServerResults $c.ServerResults -SkillResults $c.SkillResults `
+                -AgentResults $c.AgentResults `
                 -Inventory $c.Inventory -RepoRoot $PSScriptRoot -Attended:$c.Attended
         }
     }

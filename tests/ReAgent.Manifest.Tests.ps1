@@ -369,3 +369,28 @@ Describe 'Get-RecordedSkillResult' {
         @(Get-RecordedSkillResult -Config $cfg) | Should -BeNullOrEmpty
     }
 }
+
+Describe 'Get-RecordedAgentResult' {
+    It 'returns nothing for a config with no agents key' {
+        # StrictMode: the same defect Get-RecordedSkillResult hit.
+        { Get-RecordedAgentResult -Config ([PSCustomObject]@{}) } | Should -Not -Throw
+    }
+
+    It 'replays name, level, servers and tool count from the manifest' {
+        $cfg = [PSCustomObject]@{ agents = @([PSCustomObject]@{ name = 'verifier' }) }
+        $man = [PSCustomObject]@{ agents = @([PSCustomObject]@{ name = 'verifier'
+                    enabled = $true; level = 'read'; servers = @('pyghidra-mcp')
+                    toolCount = 15; gate = 'pass'; disabledReason = '' }) }
+        $r = Get-RecordedAgentResult -Config $cfg -Manifest $man
+        $r[0].ToolCount | Should -Be 15
+        $r[0].Level | Should -Be 'read'
+    }
+
+    It 'drops an agent the current config no longer declares' {
+        $cfg = [PSCustomObject]@{ agents = @() }
+        $man = [PSCustomObject]@{ agents = @([PSCustomObject]@{ name = 'gone'
+                    enabled = $true; level = 'read'; servers = @(); toolCount = 1
+                    gate = 'pass'; disabledReason = '' }) }
+        @(Get-RecordedAgentResult -Config $cfg -Manifest $man).Count | Should -Be 0
+    }
+}

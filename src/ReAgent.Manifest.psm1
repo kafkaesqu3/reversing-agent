@@ -214,6 +214,9 @@ function Write-Manifest {
     $skillResults = if ($Context.ContainsKey('SkillResults')) {
         @($Context.SkillResults)
     } else { @() }
+    $agentResults = if ($Context.ContainsKey('AgentResults')) {
+        @($Context.AgentResults)
+    } else { @() }
 
     $exemptions = @($config.mcpServers |
             Where-Object { $_.PSObject.Properties.Name -contains 'authExemptReason' } |
@@ -240,6 +243,13 @@ function Write-Manifest {
                 ConvertTo-ManifestSkillRecord -Result $_ })
         verification  = @($Context.VerifyResults | ForEach-Object {
                 [ordered]@{ name = $_.Name; status = $_.Status }
+            })
+        agents        = @($agentResults | ForEach-Object {
+                [ordered]@{ name = $_.Name; enabled = $_.Enabled
+                    disabledReason = $_.DisabledReason; level = $_.Level
+                    servers = @($_.Servers); toolCount = $_.ToolCount
+                    gate = $(if ($_.PSObject.Properties.Name -contains 'Gate') { $_.Gate }
+                        else { 'pass' }) }
             })
         authExemptions = $exemptions
         manualSteps   = @(Get-ManualStep -Config $config -ServerResults $servers)
@@ -383,6 +393,76 @@ function Get-RecordedSkillResult {
     return $results
 }
 
+function Get-RecordedAgentResult {
+    <#
+    .SYNOPSIS
+        Replays the last run's agent results out of manifest.json.
+    .DESCRIPTION
+        Mirrors Get-RecordedSkillResult: -VerifyOnly cannot produce its own
+        generation results, so verification reads back what the last real run
+        recorded, and says nothing at all when there was none.
+
+        Agents the current config no longer declares are dropped: the manifest
+        describes a past run, and the config is what is being verified now.
+        Every field comes from the recorded entry rather than from the config
+        block - a config edit since then must not silently overwrite what was
+        actually generated.
+    .PARAMETER Config
+        The parsed configuration object.
+    .PARAMETER Manifest
+        The parsed manifest. When omitted it is read from the state root using
+        the same load-and-log-and-swallow pattern as Get-RecordedSkillResult.
+    .OUTPUTS
+        [array] One record per still-declared agent.
+    .EXAMPLE
+        Get-RecordedAgentResult -Config $cfg
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Config,
+        [object]$Manifest = $null
+    )
+
+    # 'agents' is an optional top-level key, so a config written before this
+    # slice must not throw under StrictMode. The indexer form is required, not
+    # just style: '.Properties.Name -notcontains' throws PropertyNotFoundStrict
+    # of its own when Properties is completely empty, which a bare
+    # [PSCustomObject]@{} triggers.
+    if ($null -eq $Config.PSObject.Properties['agents']) { return @() }
+
+    if ($null -eq $Manifest) {
+        $path = Join-Path $Config.paths.stateRoot 'manifest.json'
+        if (-not (Test-Path -LiteralPath $path)) {
+            Write-ReAgentLog -Level WARN -Message (
+                "No manifest at '$path', so nothing is known about which agents are " +
+                'generated. Run the installer without -VerifyOnly first.')
+            return @()
+        }
+        try {
+            $Manifest = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+        } catch {
+            Write-ReAgentLog -Level WARN -Message (
+                "Could not read '$path': $($_.Exception.Message) Verification will " +
+                'report every agent as unknown.')
+            return @()
+        }
+    }
+    if ($null -eq $Manifest.PSObject.Properties['agents']) { return @() }
+
+    $declared = @($Config.agents | ForEach-Object { $_.name })
+    $results = @()
+    foreach ($entry in $Manifest.agents) {
+        if ($declared -notcontains $entry.name) { continue }
+        $results += [PSCustomObject]@{
+            Name = $entry.name; Enabled = [bool]$entry.enabled
+            DisabledReason = "$($entry.disabledReason)"; Level = "$($entry.level)"
+            Servers = @($entry.servers); ToolCount = [int]$entry.toolCount
+            Path = ''; Changed = $false; Gate = "$($entry.gate)"
+        }
+    }
+    return $results
+}
+
 Export-ModuleMember -Function Get-ManualStep, Write-Manifest, Get-RecordedServerResult, `
     Get-SkillPackProp, Test-SkillPackReviewGap, Get-RecordedSkillResult, `
-    ConvertTo-ManifestSkillRecord, Get-ManifestSkillEntry
+    ConvertTo-ManifestSkillRecord, Get-ManifestSkillEntry, Get-RecordedAgentResult
