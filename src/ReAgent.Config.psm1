@@ -75,6 +75,7 @@ function Test-ReAgentConfigSchema {
         }
     }
     $null = Test-SkillPackSchema -Config $Config
+    $null = Test-AgentSchema -Config $Config
     return $true
 }
 
@@ -275,6 +276,64 @@ function Test-SkillEntrySchema {
     }
 }
 
+
+$script:ForbiddenBuiltinTool = @('Bash', 'Write', 'Edit', 'NotebookEdit', 'Task')
+
+function Test-AgentSchema {
+    <#
+    .SYNOPSIS
+        Validates the optional agents array in re-agent.config.json.
+    .DESCRIPTION
+        Optional matters: a config written before this slice must still load,
+        so an absent key returns rather than throwing.
+
+        level 'destructive' is rejected outright. The value exists so the
+        classification can name that class of tool, not so an agent can ask
+        for it. The forbidden built-ins are rejected here rather than only at
+        the gate so the operator is told at load, where they can act on it.
+    .PARAMETER Config
+        The parsed configuration object.
+    .EXAMPLE
+        Test-AgentSchema -Config $cfg
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][object]$Config)
+
+    if ($Config.PSObject.Properties.Name -notcontains 'agents') { return }
+
+    $serverNames = @($Config.mcpServers | ForEach-Object { $_.name })
+    $seen = @()
+    foreach ($a in $Config.agents) {
+        if ("$($a.name)" -cnotmatch '^[a-z][a-z0-9-]{2,31}$') {
+            throw ("Agent name '$($a.name)' is not a valid basename. It is also the " +
+                'file name and the frontmatter name:; Claude Code will not load a ' +
+                'file where those disagree. Use ^[a-z][a-z0-9-]{2,31}$.')
+        }
+        if ($seen -contains $a.name) { throw "Agent '$($a.name)' is a duplicate name." }
+        $seen += $a.name
+
+        if ($a.level -notin @('read', 'write')) {
+            throw ("Agent '$($a.name)' declares level '$($a.level)'. Valid levels are " +
+                "read and write; destructive is never granted to an agent.")
+        }
+        foreach ($s in @($a.targetServers)) {
+            if ($serverNames -notcontains $s) {
+                throw ("Agent '$($a.name)' targets server '$s', which mcpServers does " +
+                    "not declare. Known: [$($serverNames -join ', ')].")
+            }
+        }
+        foreach ($b in @($a.builtinTools)) {
+            if ($script:ForbiddenBuiltinTool -contains $b) {
+                throw ("Agent '$($a.name)' declares built-in '$b'. Forbidden: " +
+                    "[$($script:ForbiddenBuiltinTool -join ', ')].")
+            }
+        }
+        if (-not $a.enabled -and -not "$($a.disabledReason)".Trim()) {
+            throw "Agent '$($a.name)' ships disabled with no disabledReason."
+        }
+    }
+}
+
 Export-ModuleMember -Function Get-ReAgentConfig, Test-ReAgentConfigSchema, `
     Get-ServerPortMap, Write-PortsJson, Test-SkillPackSchema, Test-SkillEntrySchema, `
-    Test-SkillPackSourceSchema, Test-SkillPackTargetsSchema, Test-SkillPackScanExceptionsSchema
+    Test-SkillPackSourceSchema, Test-SkillPackTargetsSchema, Test-SkillPackScanExceptionsSchema, Test-AgentSchema

@@ -252,3 +252,70 @@ Describe 'the shipped re-agent.config.json' {
         Test-Path -LiteralPath $Script:Shipped.testBinary | Should -BeTrue
     }
 }
+
+Describe 'Test-AgentSchema' {
+    BeforeAll {
+        function Get-TestAgentConfig {
+            param($Agents)
+            [PSCustomObject]@{
+                mcpServers = @([PSCustomObject]@{ name = 'pyghidra-mcp' },
+                    [PSCustomObject]@{ name = 'mcp-windbg' })
+                agents     = $Agents
+            }
+        }
+        function Get-TestAgent {
+            param($Name = 'verifier', $Level = 'read', $Servers = @('pyghidra-mcp'),
+                  $Builtins = @('Read', 'Glob', 'Grep'), $Enabled = $true, $Reason = '')
+            [PSCustomObject]@{ name = $Name; enabled = $Enabled; level = $Level
+                targetServers = $Servers; builtinTools = $Builtins
+                model = 'inherit'; disabledReason = $Reason }
+        }
+    }
+
+    It 'accepts a config with no agents key at all' {
+        # StrictMode defect the skills slice already hit in Get-RecordedSkillResult.
+        { Test-AgentSchema -Config ([PSCustomObject]@{ mcpServers = @() }) } | Should -Not -Throw
+    }
+
+    It 'accepts a well-formed agent' {
+        { Test-AgentSchema -Config (Get-TestAgentConfig @(Get-TestAgent)) } | Should -Not -Throw
+    }
+
+    It 'rejects a name that is not a valid file basename' {
+        { Test-AgentSchema -Config (Get-TestAgentConfig @(Get-TestAgent -Name 'Verifier')) } |
+            Should -Throw '*Verifier*'
+    }
+
+    It 'rejects two agents sharing a name' {
+        $c = Get-TestAgentConfig @((Get-TestAgent), (Get-TestAgent))
+        { Test-AgentSchema -Config $c } | Should -Throw '*duplicate*'
+    }
+
+    It 'rejects an agent declaring level destructive' {
+        { Test-AgentSchema -Config (Get-TestAgentConfig @(Get-TestAgent -Level 'destructive')) } |
+            Should -Throw '*destructive*'
+    }
+
+    It 'rejects a targetServer absent from mcpServers' {
+        $c = Get-TestAgentConfig @(Get-TestAgent -Servers @('ida-pro'))
+        { Test-AgentSchema -Config $c } | Should -Throw '*ida-pro*'
+    }
+
+    It 'rejects Bash in builtinTools' {
+        # NEGATIVE TEST 5 from spec 11. BLUEPRINT 7.1: no host code execution while
+        # the model is reading untrusted decompiler output.
+        $c = Get-TestAgentConfig @(Get-TestAgent -Builtins @('Read', 'Bash'))
+        { Test-AgentSchema -Config $c } | Should -Throw '*Bash*'
+    }
+
+    It 'rejects Task in builtinTools so no agent can spawn an agent' {
+        $c = Get-TestAgentConfig @(Get-TestAgent -Builtins @('Read', 'Task'))
+        { Test-AgentSchema -Config $c } | Should -Throw '*Task*'
+    }
+
+    It 'requires a reason when an agent ships disabled' {
+        $c = Get-TestAgentConfig @(Get-TestAgent -Enabled $false -Reason '')
+        { Test-AgentSchema -Config $c } | Should -Throw '*disabledReason*'
+    }
+}
+
