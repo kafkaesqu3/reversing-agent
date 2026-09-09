@@ -294,10 +294,10 @@
         "subPath": "skills/dotnet-debugging"
       },
       "review": {
-        "reviewedBy": "",
-        "reviewedAt": "",
+        "reviewedBy": "david",
+        "reviewedAt": "2026-09-08",
         "reviewedCommit": "55647e56dbc1375db7c25079d0e14928109cc5c8",
-        "notes": ""
+        "notes": "Read SKILL.md and all 15 reference files in full. SOS commands correctly framed as run_cdb_command arguments, allowed-tools matches the 3 tools actually used, disabled-capability content (live-attach, kernel live-debug) correctly banner-flagged. Six toolRenames confirmed accurate. Not spot-checked against a real dump (optional per SKILLS_SIGNOFF.md, not a blocker)."
       },
       "targetServers": ["mcp-windbg"],
       "adaptation": { "toolRenames": {
