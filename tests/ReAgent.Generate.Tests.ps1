@@ -1,6 +1,7 @@
 BeforeAll {
     Import-Module "$PSScriptRoot/../src/ReAgent.Common.psm1" -Force
     Import-Module "$PSScriptRoot/../src/ReAgent.Tokens.psm1" -Force
+    Import-Module "$PSScriptRoot/../src/ReAgent.Agents.psm1" -Force
     Import-Module "$PSScriptRoot/../src/ReAgent.Generate.psm1" -Force
 
     function Get-TestResult {
@@ -240,3 +241,77 @@ Describe 'the shipped CLAUDE.md template' {
         $Script:Tpl | Should -BeLike '*open_cdb_remote*'
     }
 }
+
+Describe 'Write-AgentDefinition' {
+    BeforeEach {
+        $script:Dir = Join-Path ([IO.Path]::GetTempPath()) ("agt-" + [guid]::NewGuid())
+        New-Item -ItemType Directory -Path $script:Dir -Force | Out-Null
+        $script:Cat = [PSCustomObject]@{ servers = [PSCustomObject]@{
+                'pyghidra-mcp' = [PSCustomObject]@{
+                    tools = @('decompile_function', 'rename_function')
+                    classification = [PSCustomObject]@{
+                        classifiedTools = @('decompile_function', 'rename_function')
+                        write = @('rename_function'); destructive = @() } } } }
+        $script:Cfg = [PSCustomObject]@{ agents = @(
+                [PSCustomObject]@{ name = 'verifier'; enabled = $true; level = 'read'
+                    targetServers = @('pyghidra-mcp'); builtinTools = @('Read', 'Glob', 'Grep')
+                    model = 'inherit'; disabledReason = '' }) }
+        $script:Root = Join-Path $PSScriptRoot '..'
+    }
+    AfterEach { Remove-Item -LiteralPath $script:Dir -Recurse -Force -ErrorAction SilentlyContinue }
+
+    It 'writes one file per enabled agent, named for the agent' {
+        Write-AgentDefinition -Config $script:Cfg -Catalog $script:Cat -RepoRoot $script:Root `
+            -AgentDir $script:Dir | Out-Null
+        Test-Path (Join-Path $script:Dir 'verifier.md') | Should -BeTrue
+    }
+
+    It 'substitutes the derived tool list into the frontmatter' {
+        Write-AgentDefinition -Config $script:Cfg -Catalog $script:Cat -RepoRoot $script:Root `
+            -AgentDir $script:Dir | Out-Null
+        $t = Get-Content -LiteralPath (Join-Path $script:Dir 'verifier.md') -Raw
+        $t | Should -BeLike '*mcp__pyghidra-mcp__decompile_function*'
+        $t | Should -Not -BeLike '*rename_function*'
+        $t | Should -Not -BeLike '*{{TOOLS}}*'
+    }
+
+    It 'writes nothing on a second run and reports no change' {
+        Write-AgentDefinition -Config $script:Cfg -Catalog $script:Cat -RepoRoot $script:Root `
+            -AgentDir $script:Dir | Out-Null
+        $second = Write-AgentDefinition -Config $script:Cfg -Catalog $script:Cat `
+            -RepoRoot $script:Root -AgentDir $script:Dir
+        # Spec 1.3.4: byte-identical regeneration, no timestamp churn.
+        @($second | Where-Object { $_.Changed }).Count | Should -Be 0
+    }
+
+    It 'does not write a disabled agent, but still reports it' {
+        $script:Cfg.agents[0].enabled = $false
+        $script:Cfg.agents[0].disabledReason = 'no oracle yet'
+        $r = Write-AgentDefinition -Config $script:Cfg -Catalog $script:Cat `
+            -RepoRoot $script:Root -AgentDir $script:Dir
+        Test-Path (Join-Path $script:Dir 'verifier.md') | Should -BeFalse
+        $r[0].Enabled | Should -BeFalse
+        $r[0].DisabledReason | Should -Be 'no oracle yet'
+    }
+
+    It 'leaves an agent file this installer did not write alone' {
+        # The skills slice shipped exactly this defect against a shared root and had
+        # to fix it: removal is scoped to names this config knows.
+        $foreign = Join-Path $script:Dir 'operators-own.md'
+        Set-Content -LiteralPath $foreign -Value 'not ours' -NoNewline
+        Write-AgentDefinition -Config $script:Cfg -Catalog $script:Cat -RepoRoot $script:Root `
+            -AgentDir $script:Dir | Out-Null
+        Test-Path $foreign | Should -BeTrue
+    }
+
+    It 'removes a file for an agent this config used to declare and no longer enables' {
+        Write-AgentDefinition -Config $script:Cfg -Catalog $script:Cat -RepoRoot $script:Root `
+            -AgentDir $script:Dir | Out-Null
+        $script:Cfg.agents[0].enabled = $false
+        $script:Cfg.agents[0].disabledReason = 'turned off'
+        Write-AgentDefinition -Config $script:Cfg -Catalog $script:Cat -RepoRoot $script:Root `
+            -AgentDir $script:Dir | Out-Null
+        Test-Path (Join-Path $script:Dir 'verifier.md') | Should -BeFalse
+    }
+}
+

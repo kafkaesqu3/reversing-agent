@@ -1,8 +1,6 @@
-Set-StrictMode -Version Latest
+﻿Set-StrictMode -Version Latest
 
-# Depends on functions exported by sibling modules, which Install-REAgent.ps1
-# imports into the session before this one: Write-ReAgentLog (Common),
-# Get-ServerToken (Tokens).
+Import-Module (Join-Path $PSScriptRoot 'ReAgent.Agents.psm1') -Force
 
 function New-McpServerEntry {
     <#
@@ -211,5 +209,141 @@ function Write-AgentConfiguration {
     return $written
 }
 
+function Write-AgentDefinition {
+    <#
+    .SYNOPSIS
+        Generates one agent file per enabled agent, from template plus catalog.
+    .DESCRIPTION
+        Written through Write-FileIfChanged so a steady-state run touches no
+        timestamp - the lesson from the launcher-rewrite regression, where
+        unconditional writes made a staleness check fire on every run.
+
+        Removal is scoped to names this config declares. The .claude/agents
+        directory is shared and may hold files this installer never wrote;
+        deleting by "not in my wanted list" against a shared root is the defect
+        the skills slice shipped and had to fix.
+    .PARAMETER Config
+        The parsed configuration object.
+    .PARAMETER Catalog
+        From Get-ToolCatalog.
+    .PARAMETER RepoRoot
+        Repository root, for locating templates/agents.
+    .PARAMETER AgentDir
+        Destination directory, normally <agentRoot>\.claude\agents.
+    .OUTPUTS
+        [array] One record per declared agent.
+    .EXAMPLE
+        Write-AgentDefinition -Config $cfg -Catalog $cat -RepoRoot $root -AgentDir $d
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)][object]$Config,
+        [Parameter(Mandatory)][object]$Catalog,
+        [Parameter(Mandatory)][string]$RepoRoot,
+        [Parameter(Mandatory)][string]$AgentDir
+    )
+
+    if ($Config.PSObject.Properties.Name -notcontains 'agents') { return @() }
+    if (-not (Test-Path -LiteralPath $AgentDir)) {
+        New-Item -ItemType Directory -Path $AgentDir -Force | Out-Null
+    }
+
+    $results = @()
+    foreach ($agent in $Config.agents) {
+        $path = Join-Path $AgentDir "$($agent.name).md"
+        $grant = Get-AgentToolGrant -Agent $agent -Catalog $Catalog
+
+        if (-not $agent.enabled) {
+            if ((Test-Path -LiteralPath $path) -and $PSCmdlet.ShouldProcess($path, 'Remove')) {
+                Remove-Item -LiteralPath $path -Force
+            }
+            $results += [PSCustomObject]@{ Name = $agent.name; Enabled = $false
+                DisabledReason = "$($agent.disabledReason)"; Level = $agent.level
+                Servers = @($agent.targetServers); ToolCount = 0; Path = $path; Changed = $false }
+            continue
+        }
+
+        $tpl = Join-Path $RepoRoot "templates\agents\$($agent.name).md.template"
+        if (-not (Test-Path -LiteralPath $tpl)) {
+            throw ("No template at '$tpl' for agent '$($agent.name)'. Every declared " +
+                'agent needs one; agent bodies are authored here, not vendored.')
+        }
+        $text = Get-Content -LiteralPath $tpl -Raw
+        $text = $text.Replace('{{TOOLS}}', ($grant.Tools -join ', '))
+        $text = $text.Replace('{{SERVERS}}', (Get-AgentServerProse -Agent $agent -Grant $grant))
+        $text = $text.Replace('{{LIMITATIONS}}',
+            (Get-AgentLimitationProse -Agent $agent -Catalog $Catalog))
+
+        $changed = Write-FileIfChanged -Path $path -Text $text
+        $results += [PSCustomObject]@{ Name = $agent.name; Enabled = $true
+            DisabledReason = ''; Level = $agent.level; Servers = @($agent.targetServers)
+            ToolCount = $grant.Tools.Count; Path = $path; Changed = $changed }
+    }
+    return $results
+}
+
+function Get-AgentServerProse {
+    <#
+    .SYNOPSIS
+        Renders the {{SERVERS}} block: one line per target server.
+    .PARAMETER Agent
+        One entry from the config's agents[].
+    .PARAMETER Grant
+        From Get-AgentToolGrant.
+    .OUTPUTS
+        [string] Markdown list.
+    .EXAMPLE
+        Get-AgentServerProse -Agent $a -Grant $g
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Agent,
+        [Parameter(Mandatory)][object]$Grant
+    )
+
+    $lines = @()
+    foreach ($s in @($Agent.targetServers)) {
+        $n = @($Grant.Tools | Where-Object { $_ -like "mcp__${s}__*" }).Count
+        $lines += "- ``$s`` --- $n tool(s) at level ``$($Agent.level)``."
+    }
+    if (-not $lines) { $lines = @('- None. This agent has no MCP reach.') }
+    return ($lines -join "`n")
+}
+
+function Get-AgentLimitationProse {
+    <#
+    .SYNOPSIS
+        Renders the {{LIMITATIONS}} block from what the catalog cannot judge.
+    .DESCRIPTION
+        A target server with no classified catalog entry contributes a line, so
+        the agent states the gap rather than presenting an empty reach as a
+        working one. This is the prose half of check A1.
+    .PARAMETER Agent
+        One entry from the config's agents[].
+    .PARAMETER Catalog
+        From Get-ToolCatalog.
+    .OUTPUTS
+        [string] Markdown list.
+    .EXAMPLE
+        Get-AgentLimitationProse -Agent $a -Catalog $cat
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Agent,
+        [Parameter(Mandatory)][object]$Catalog
+    )
+
+    $lines = @()
+    foreach ($s in @($Agent.targetServers)) {
+        if ((Get-ToolClassification -Catalog $Catalog -Server $s).Known) { continue }
+        $lines += ("- ``$s`` is declared but not captured, so you hold no tools for it. " +
+            'Report this rather than working around it.')
+    }
+    $lines += ('- A tool you expect and cannot see is your grant, not a broken server. ' +
+        'The remedy is a config change plus an installer re-run --- never a workaround.')
+    return ($lines -join "`n")
+}
+
 Export-ModuleMember -Function New-McpServerEntry, New-McpJsonObject, `
-    New-ClaudeSettingsObject, Write-JsonFile, Write-AgentConfiguration
+    New-ClaudeSettingsObject, Write-JsonFile, Write-AgentConfiguration, `
+    Write-AgentDefinition, Get-AgentServerProse, Get-AgentLimitationProse
