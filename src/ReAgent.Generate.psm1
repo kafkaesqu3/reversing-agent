@@ -209,13 +209,14 @@ function Write-AgentConfiguration {
 
     $agentDir = Join-Path $agentRoot '.claude\agents'
     $catalog = Get-ToolCatalog
-    $written += Write-AgentDefinition -Config $Config -Catalog $catalog `
+    $agentResults = Write-AgentDefinition -Config $Config -Catalog $catalog `
         -RepoRoot (Split-Path $TemplateRoot) -AgentDir $agentDir
+    $written += @($agentResults | Where-Object { $_.Enabled -and $_.Changed } | Select-Object -ExpandProperty Path)
 
     foreach ($w in $written) {
         Write-ReAgentLog -Level INFO -Message "Generated '$w'."
     }
-    return $written
+    return @() + $written + @($agentResults)
 }
 
 function Write-AgentDefinition {
