@@ -1471,7 +1471,8 @@ function Invoke-AgentVerification {
     .PARAMETER AgentDir
         Where generated agent files live. May not exist.
     .OUTPUTS
-        [PSCustomObject] Name, Status, Findings.
+        [PSCustomObject] Name, Status, Findings, and a Reason on the not-testable
+        branch where the config declares no agents.
     .EXAMPLE
         Invoke-AgentVerification -Config $cfg -Catalog $cat -AgentDir $d
     #>

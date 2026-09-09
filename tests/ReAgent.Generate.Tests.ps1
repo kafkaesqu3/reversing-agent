@@ -362,7 +362,7 @@ Describe 'CLAUDE.md agents section' {
     }
 
     It 'states that the verifier runs last and independently' {
-        $script:Tpl | Should -BeLike '*last*'
+        $script:Tpl | Should -BeLike '*last and independently*'
         $script:Tpl | Should -BeLike '*ai_*'
     }
 

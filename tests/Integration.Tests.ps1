@@ -264,7 +264,6 @@ Describe 'agent topology end to end' {
 
     It 'passes the gate for every enabled agent' {
         foreach ($a in @($script:Cfg.agents | Where-Object { $_.enabled })) {
-            $g = Get-AgentToolGrant -Agent $a -Catalog $script:Cat
             Invoke-AgentGate -Agent $a -Catalog $script:Cat `
                 -Frontmatter @{ name = $a.name } -FileBaseName $a.name |
                 Should -BeNullOrEmpty -Because "agent '$($a.name)' must pass A0-A4"

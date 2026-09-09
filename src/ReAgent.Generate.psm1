@@ -318,7 +318,7 @@ function Get-AgentServerProse {
     $lines = @()
     foreach ($s in @($Agent.targetServers)) {
         $n = @($Grant.Tools | Where-Object { $_ -like "mcp__${s}__*" }).Count
-        $lines += "- ``$s`` --- $n tool(s) at level ``$($Agent.level)``."
+        $lines += "- ``$s`` $([char]0x2014) $n tool(s) at level ``$($Agent.level)``."
     }
     if (-not $lines) { $lines = @('- None. This agent has no MCP reach.') }
     return ($lines -join "`n")
@@ -354,7 +354,7 @@ function Get-AgentLimitationProse {
             'Report this rather than working around it.')
     }
     $lines += ('- A tool you expect and cannot see is your grant, not a broken server. ' +
-        'The remedy is a config change plus an installer re-run --- never a workaround.')
+        "The remedy is a config change plus an installer re-run $([char]0x2014) never a workaround.")
     return ($lines -join "`n")
 }
 
