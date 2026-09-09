@@ -208,6 +208,17 @@ Describe 'Test-AgentLevelCheck (A3)' {
         $f[0].Message | Should -BeLike '*Bash*'
     }
 
+    It 'fails A3 on a parameterized builtin like Bash(python:*), which an exact-match denylist would miss' {
+        # The allowlist closes the bypass a denylist could not: Bash(python:*) is not
+        # equal to the string 'Bash', so an exact-match denylist would have let it through.
+        $a = [PSCustomObject]@{ name = 'verifier'; level = 'read'
+            targetServers = @('pyghidra-mcp'); builtinTools = @('Read', 'Bash(python:*)') }
+        $f = Test-AgentLevelCheck -Agent $a -GrantedTools @('Read', 'Bash(python:*)') `
+            -Catalog (Get-TestCatalog)
+        $f[0].Check | Should -Be 'A3'
+        $f[0].Message | Should -BeLike '*Bash(python*'
+    }
+
     It 'passes a correctly derived verifier grant' {
         $a = [PSCustomObject]@{ name = 'verifier'; level = 'read'
             targetServers = @('pyghidra-mcp'); builtinTools = @('Read', 'Glob', 'Grep') }

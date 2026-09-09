@@ -313,6 +313,13 @@ Describe 'Test-AgentSchema' {
         { Test-AgentSchema -Config $c } | Should -Throw '*Task*'
     }
 
+    It 'rejects a parameterized builtin like Bash(python:*), which an exact-match denylist would miss' {
+        # The allowlist closes the bypass a denylist could not: Bash(python:*) is not
+        # equal to the string 'Bash', so an exact-match denylist would have let it through.
+        $c = Get-TestAgentConfig @(Get-TestAgent -Builtins @('Read', 'Bash(python:*)'))
+        { Test-AgentSchema -Config $c } | Should -Throw '*Bash(python:*)*'
+    }
+
     It 'requires a reason when an agent ships disabled' {
         $c = Get-TestAgentConfig @(Get-TestAgent -Enabled $false -Reason '')
         { Test-AgentSchema -Config $c } | Should -Throw '*disabledReason*'

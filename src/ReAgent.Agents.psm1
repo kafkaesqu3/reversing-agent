@@ -1,7 +1,7 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$script:ForbiddenAgentBuiltin = @('Bash', 'Write', 'Edit', 'NotebookEdit', 'Task')
+$script:AllowedAgentBuiltin = @('Read', 'Glob', 'Grep')
 
 function Get-ToolClassification {
     <#
@@ -311,13 +311,14 @@ function Test-AgentLevelCheck {
     $allowed = if ($Agent.level -eq 'write') { @('read', 'write') } else { @('read') }
     $findings = @()
     foreach ($granted in $GrantedTools) {
-        if ($script:ForbiddenAgentBuiltin -contains $granted) {
-            $findings += [PSCustomObject]@{ Check = 'A3'; Message = (
-                    "Agent '$($Agent.name)' is granted built-in '$granted', which no " +
-                    'agent may hold.') }
+        if ($granted -notmatch '^mcp__(?<server>[^_]+(?:[^_]|_(?!_))*)__(?<tool>.+)$') {
+            if ($script:AllowedAgentBuiltin -notcontains $granted) {
+                $findings += [PSCustomObject]@{ Check = 'A3'; Message = (
+                        "Agent '$($Agent.name)' is granted built-in '$granted', which is not " +
+                        "in the allowed set: [$($script:AllowedAgentBuiltin -join ', ')].") }
+            }
             continue
         }
-        if ($granted -notmatch '^mcp__(?<server>[^_]+(?:[^_]|_(?!_))*)__(?<tool>.+)$') { continue }
         $class = Get-ToolClassification -Catalog $Catalog -Server $Matches['server']
         if (-not $class.Known) { continue }
         $level = Get-ToolLevel -Classification $class -Tool $Matches['tool']

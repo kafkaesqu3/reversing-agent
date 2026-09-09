@@ -277,7 +277,7 @@ function Test-SkillEntrySchema {
 }
 
 
-$script:ForbiddenBuiltinTool = @('Bash', 'Write', 'Edit', 'NotebookEdit', 'Task')
+$script:AllowedAgentBuiltin = @('Read', 'Glob', 'Grep')
 
 function Test-SingleAgentSchema {
     <#
@@ -316,9 +316,9 @@ function Test-SingleAgentSchema {
         }
     }
     foreach ($b in @($Agent.builtinTools)) {
-        if ($script:ForbiddenBuiltinTool -contains $b) {
-            throw ("Agent '$($Agent.name)' declares built-in '$b'. Forbidden: " +
-                "[$($script:ForbiddenBuiltinTool -join ', ')].")
+        if ($script:AllowedAgentBuiltin -notcontains $b) {
+            throw ("Agent '$($Agent.name)' declares built-in '$b', which is not in the " +
+                "allowed set: [$($script:AllowedAgentBuiltin -join ', ')].")
         }
     }
 
