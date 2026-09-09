@@ -227,3 +227,48 @@ Describe 'Invoke-AgentGate' {
         @($f | Where-Object { $_.Check -eq 'A1' }).Count | Should -Be 1
     }
 }
+
+Describe 'agent templates' {
+    BeforeAll { $script:TplDir = Join-Path $PSScriptRoot '../templates/agents' }
+
+    It 'ships one template per agent the spec names' {
+        foreach ($n in @('static-analyst', 'dynamic-analyst', 'verifier')) {
+            Test-Path (Join-Path $script:TplDir "$n.md.template") | Should -BeTrue
+        }
+    }
+
+    It 'carries all three substitution tokens in every template' {
+        foreach ($f in Get-ChildItem $script:TplDir -Filter '*.md.template') {
+            $t = Get-Content -LiteralPath $f.FullName -Raw
+            $t | Should -BeLike '*{{TOOLS}}*'
+            $t | Should -BeLike '*{{SERVERS}}*'
+            $t | Should -BeLike '*{{LIMITATIONS}}*'
+        }
+    }
+
+    It 'opens the verifier with the ai_ exclusion rule, before its tool list' {
+        # Spec 4.1: without this, adding a verifier makes output look better-verified
+        # while verifying nothing - worse than having no verifier at all.
+        $t = Get-Content -LiteralPath (Join-Path $script:TplDir 'verifier.md.template') -Raw
+        $t | Should -BeLike '*ai_*'
+        $t.IndexOf('ai_') | Should -BeLessThan $t.IndexOf('{{TOOLS}}')
+    }
+
+    It 'tells the dynamic analyst that TTD replay is unavailable' {
+        # Spec 4.2: the agent should report the limitation, not discover it mid-case.
+        $t = Get-Content -LiteralPath (Join-Path $script:TplDir 'dynamic-analyst.md.template') -Raw
+        $t | Should -BeLike '*0x80070057*'
+    }
+
+    It 'tells the static analyst it has no Bash, so msvc_demangle cannot run' {
+        $t = Get-Content -LiteralPath (Join-Path $script:TplDir 'static-analyst.md.template') -Raw
+        $t | Should -BeLike '*msvc_demangle*'
+    }
+
+    It 'stamps every agent name into its own findings contract' {
+        foreach ($f in Get-ChildItem $script:TplDir -Filter '*.md.template') {
+            (Get-Content -LiteralPath $f.FullName -Raw) | Should -BeLike '*findings*'
+        }
+    }
+}
+
