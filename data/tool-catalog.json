@@ -5,20 +5,108 @@
     "pyghidra-mcp": {
       "pin": "0.2.5",
       "toolCount": 20,
-      "tools": ["decompile_function", "delete_project_binary", "disassemble",
-        "gen_callgraph", "import_binary", "list_exports", "list_imports",
-        "list_project_binaries", "list_project_binary_metadata", "list_xrefs",
-        "read_bytes", "rename_function", "rename_variable", "save", "search_code",
-        "search_strings", "search_symbols_by_name", "set_comment",
-        "set_function_prototype", "set_variable_type"]
+      "tools": [
+        "decompile_function",
+        "delete_project_binary",
+        "disassemble",
+        "gen_callgraph",
+        "import_binary",
+        "list_exports",
+        "list_imports",
+        "list_project_binaries",
+        "list_project_binary_metadata",
+        "list_xrefs",
+        "read_bytes",
+        "rename_function",
+        "rename_variable",
+        "save",
+        "search_code",
+        "search_strings",
+        "search_symbols_by_name",
+        "set_comment",
+        "set_function_prototype",
+        "set_variable_type"
+      ],
+      "classification": {
+        "classifiedBy": "david",
+        "classifiedAt": "2026-09-08",
+        "classifiedTools": [
+          "decompile_function",
+          "delete_project_binary",
+          "disassemble",
+          "gen_callgraph",
+          "import_binary",
+          "list_exports",
+          "list_imports",
+          "list_project_binaries",
+          "list_project_binary_metadata",
+          "list_xrefs",
+          "read_bytes",
+          "rename_function",
+          "rename_variable",
+          "save",
+          "search_code",
+          "search_strings",
+          "search_symbols_by_name",
+          "set_comment",
+          "set_function_prototype",
+          "set_variable_type"
+        ],
+        "write": [
+          "import_binary",
+          "rename_function",
+          "rename_variable",
+          "save",
+          "set_comment",
+          "set_function_prototype",
+          "set_variable_type"
+        ],
+        "destructive": [
+          "delete_project_binary"
+        ]
+      }
     },
     "mcp-windbg": {
       "pin": "1.2.1",
       "toolCount": 10,
-      "tools": ["list_dumps", "open_cdb_dump", "open_cdb_remote", "open_kd_session",
-        "run_cdb_command", "run_kd_command", "close_cdb_session", "close_kd_session",
-        "send_ctrl_break", "wait_for_break"],
-      "note": "Verified directly against the live mcp_windbg/server.py on this host (under C:/re/mcp/venvs/mcp-windbg) and the PyPI mcp-windbg==1.2.1 wheel: on_list_tools returns all ten tools unconditionally, with no CLI-flag-based filtering."
+      "tools": [
+        "list_dumps",
+        "open_cdb_dump",
+        "open_cdb_remote",
+        "open_kd_session",
+        "run_cdb_command",
+        "run_kd_command",
+        "close_cdb_session",
+        "close_kd_session",
+        "send_ctrl_break",
+        "wait_for_break"
+      ],
+      "note": "Verified directly against the live mcp_windbg/server.py on this host (under C:/re/mcp/venvs/mcp-windbg) and the PyPI mcp-windbg==1.2.1 wheel: on_list_tools returns all ten tools unconditionally, with no CLI-flag-based filtering.",
+      "classification": {
+        "classifiedBy": "david",
+        "classifiedAt": "2026-09-08",
+        "classifiedTools": [
+          "close_cdb_session",
+          "close_kd_session",
+          "list_dumps",
+          "open_cdb_dump",
+          "open_cdb_remote",
+          "open_kd_session",
+          "run_cdb_command",
+          "run_kd_command",
+          "send_ctrl_break",
+          "wait_for_break"
+        ],
+        "write": [
+          "close_cdb_session",
+          "close_kd_session",
+          "open_cdb_dump",
+          "open_cdb_remote",
+          "open_kd_session",
+          "send_ctrl_break"
+        ],
+        "destructive": []
+      }
     }
   }
 }
