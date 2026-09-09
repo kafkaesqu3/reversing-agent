@@ -192,10 +192,10 @@
         "subPath": ""
       },
       "review": {
-        "reviewedBy": "",
-        "reviewedAt": "",
+        "reviewedBy": "david",
+        "reviewedAt": "2026-09-08",
         "reviewedCommit": "55f2a0d57b1dc8224500ac00b9d5b3166074dffb",
-        "notes": ""
+        "notes": "SIGN-OFF (david, 2026-09-08): read SKILL.md, README.md and scripts/msvc_demangle in full; read references/game-recon.md in full; grepped the remaining ~7,000 lines across api.md, applying-changes.md, assertions.md, cpp-abi.md, harvesting-traps.md, oracles-and-abi.md, platforms-eras.md, trust-and-circularity.md, sources.md for host-risk instructions, prompt-injection payloads, and unsafe fetch/exec content -- none found. Confirmed msvc_demangle is a safe pure-Python PE/name-mangling parser with no shell-out, no network, no eval. Confirmed the prompt-injection payload SKILL.md says it encountered while being researched was not copied into the vendored content. Accepted the blanket Bash grant (justified by msvc_demangle, verified safe). Accepted the ~9,300-line reference corpus as vendored background theory rather than rewritten for pyghidra-mcp -- consistent with how route/dotnet/arch handle large un-rewritten reference material, and SKILL.md itself already tells the reader how to map it onto real tools."
       },
       "targetServers": ["pyghidra-mcp"],
       "adaptation": { "toolRenames": {} },
