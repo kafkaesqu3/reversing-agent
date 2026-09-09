@@ -911,3 +911,61 @@ Describe 'Write-SkillPackFile installs the exact bytes it was given' {
         Get-FileBase64 -Path $out | Should -Be (Get-FileBase64 -Path $refFile)
     }
 }
+
+Describe 'The router names every other enabled skill this install ships' {
+    # Whole-branch review I5: route-triage is reached first on an unfamiliar task, and it
+    # named none of reva-binary-triage, reva-deep-analysis, tob-trailmark,
+    # arch-architectural-analysis or dotnet-debugging - five of the eleven enabled skills,
+    # including the only .NET-aware one. A .NET dump routed to the native windbg skills and
+    # every static task to ghidra-iterative-re. Five review rounds missed it because nothing
+    # compares the router against the config. The config already lists what ships, so this
+    # is a comparison, not a heuristic.
+    BeforeAll {
+        $Script:RouterCfg = Get-Content -LiteralPath (
+            Join-Path $PSScriptRoot '../re-agent.config.json') -Raw -Encoding UTF8 |
+            ConvertFrom-Json
+        $Script:RouterName = 'route-triage'
+
+        function Get-UnroutedSkill {
+            param($Text, $Config)
+            $out = @()
+            foreach ($pack in @($Config.skills | Where-Object { $_.enabled })) {
+                foreach ($skill in @($pack.skills | Where-Object { $_.enabled })) {
+                    if ($skill.name -eq $Script:RouterName) { continue }
+                    if ($Text -match [regex]::Escape($skill.name)) { continue }
+                    $out += ("the router never names '$($skill.name)' " +
+                        "(enabled in the '$($pack.namespace)' pack)")
+                }
+            }
+            return @($out)
+        }
+    }
+
+    It 'names them in its own SKILL.md - a mention in a reference file does not count' {
+        # SKILL.md only, deliberately: the router's reference files are the ~19,000 lines of
+        # upstream CTF technique notes, which are not read to make a routing decision. A name
+        # that appears only there is not reachable from the dispatch.
+        $pack = @($Script:RouterCfg.skills |
+                Where-Object { $_.skills.name -contains $Script:RouterName })[0]
+        $pack | Should -Not -BeNullOrEmpty
+        $router = Join-Path $PSScriptRoot (
+            "../vendor/skills/$($pack.namespace)/$Script:RouterName/SKILL.md")
+        Test-Path -LiteralPath $router | Should -BeTrue
+
+        $text = Get-Content -LiteralPath $router -Raw -Encoding UTF8
+        $unrouted = Get-UnroutedSkill -Text $text -Config $Script:RouterCfg
+        ($unrouted -join "`n") | Should -BeNullOrEmpty
+    }
+
+    It 'names the missing skills in the failure rather than counting them' {
+        # Without this arm the check above could pass by comparing against nothing, and a
+        # failure that says only 'expected empty' leaves the next person to re-derive which
+        # skills went unrouted.
+        $unrouted = Get-UnroutedSkill -Text 'A router that mentions nobody.' `
+            -Config $Script:RouterCfg
+        $unrouted.Count | Should -BeGreaterThan 0
+        ($unrouted -join "`n") | Should -BeLike '*dotnet-debugging*'
+        ($unrouted -join "`n") | Should -BeLike '*reva-binary-triage*'
+        ($unrouted -join "`n") | Should -Not -BeLike "*$Script:RouterName*"
+    }
+}
