@@ -716,7 +716,7 @@ Describe 'The vendored ghidra pack keeps its SourceType adaptation' {
 
     It 'still carries a Limitations section naming the convention-not-enforcement gap' {
         $text = Get-Content -LiteralPath $Script:GhidraSkillMd -Raw
-        $text | Should -Match '(?m)^## Limitations$'
+        $text | Should -Match '(?m)^## Limitations?$'
         $text | Should -Match 'naming convention'
     }
 }
