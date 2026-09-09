@@ -41,26 +41,28 @@ token-substituted templates under `templates/` (no templating engine — DEPLOYM
 
 ## Open questions — resolve before Task 1 is committed
 
-**OQ1 — What level are `run_cdb_command` and `run_kd_command`?** This decides whether the verifier
-can use `mcp-windbg` at all, and the spec does not settle it.
+**OQ1 — RESOLVED (2026-09-08, david): `run_cdb_command` and `run_kd_command` are `read`.**
 
 The two commands are the debugger's entire surface: `dd` reads memory, `ed` writes it, `.attach`
 takes a live process. They cannot be sub-classified without parsing the command string, which is a
-denylist and will be bypassed.
+denylist and will be bypassed. That leaves two options, both imperfect:
 
-- If they are `write`, then A3 strips them from the verifier, and the verifier's `mcp-windbg` grant
-  reduces to `list_dumps`, `open_cdb_dump` and `wait_for_break` — it can open a dump and read
-  nothing out of it. Spec §4's table grants the verifier `mcp-windbg`, but that grant would be
-  inert, and shipping an inert grant is the phantom-feature failure AGENTS.md forbids.
-- If they are `read`, the verifier can inspect dumps, but a single unconstrained tool defeats A3 —
-  the verifier could `ed` memory in a live session. That is exactly "if the verifier can write, it
-  isn't a verifier."
+- Classify `write`: A3 strips them from the verifier, whose `mcp-windbg` grant collapses to
+  `list_dumps`, `open_cdb_dump` and `wait_for_break` — it can open a dump and read nothing out of
+  it. Correct under A3, but the verifier cannot do dynamic verification at all, which is most of
+  why it exists.
+- Classify `read`: the verifier keeps a working `mcp-windbg` grant and can actually inspect a dump
+  or live session. The cost is real — `run_cdb_command`/`run_kd_command` also carry `ed` and
+  `.attach`, so A3's "the verifier cannot write" guarantee is not enforced for this one tool pair.
+  A verifier operator who runs a write sub-command through it is trusted, not blocked.
 
-**Recommendation: classify both `write`, and drop `mcp-windbg` from the verifier's `targetServers`,
-recording it in spec §12 as a gap** — the verifier verifies static analysis only until a read-only
-dump-query tool exists. This keeps A3 meaningful and refuses to ship an inert grant. Task 1 and
-Task 9 both assume this; if the ruling differs, change the classification in Task 1 Step 1 and the
-config in Task 9 Step 1 and nothing else moves.
+**Ruling: classify `read`, on usability grounds** — a verifier that cannot query a dump is not
+worth shipping, and the alternative (drop `mcp-windbg` from the verifier's `targetServers`
+entirely) trades a working agent for a guarantee A3 cannot actually give this tool anyway, since
+the surface can't be sub-classified. The gap is recorded in spec §12 as an accepted risk rather
+than a TODO: closing it for real needs a read-only dump-query tool upstream, at which point these
+two go back to `write` and the verifier is re-pointed at the narrower tool. Task 1 Step 1 and
+Task 9 Step 1 both reflect this ruling.
 
 **OQ2 — `re-agent.config.json` declares six MCP servers, not the five spec §4 assumes.** They are
 `x64dbg-x64`, `x64dbg-x32`, `binaryninja`, `pyghidra-mcp`, `mcp-windbg`, `ghidramcp`. `ghidramcp`
@@ -129,8 +131,7 @@ d['servers']['mcp-windbg']['classification'] = collections.OrderedDict([
     ('classifiedAt', '2026-09-08'),
     ('classifiedTools', sorted(d['servers']['mcp-windbg']['tools'])),
     ('write', ['close_cdb_session', 'close_kd_session', 'open_cdb_dump',
-               'open_cdb_remote', 'open_kd_session', 'run_cdb_command',
-               'run_kd_command', 'send_ctrl_break']),
+               'open_cdb_remote', 'open_kd_session', 'send_ctrl_break']),
     ('destructive', []),
 ])
 open(p, 'w', encoding='utf-8', newline='\n').write(json.dumps(d, indent=2) + '\n')
@@ -141,8 +142,10 @@ Run: `python tools/patch-catalog.py`
 
 Rationale to record in the commit message: `import_binary` mutates the project, so it is `write`
 even though the spec's illustrative example omitted it. `run_cdb_command` and `run_kd_command` are
-`write` per **OQ1** — they are unconstrained debugger surfaces and cannot be sub-classified without
-a denylist. `wait_for_break` and `list_dumps` are the only `mcp-windbg` reads.
+`read` per **OQ1** — classifying them `write` would leave the verifier unable to query a dump at
+all, and the tools cannot be sub-classified without a denylist regardless of which way OQ1 was
+ruled. This is a recorded, accepted gap in A3's write-exclusion guarantee, not an oversight:
+`wait_for_break`, `list_dumps`, `run_cdb_command` and `run_kd_command` are the `mcp-windbg` reads.
 
 - [ ] **Step 2: Write the failing tests**
 
@@ -1882,8 +1885,8 @@ git commit -m "Record agents in the manifest and gate them during verify"
 - [ ] **Step 1: Add the agents block to the config**
 
 Patch `re-agent.config.json` with a Python script (existing file on `Z:`). Per **OQ1**, the verifier
-targets `pyghidra-mcp` only; per spec §12 gap 7, `dynamic-analyst` ships disabled because no
-`x64dbg` capture exists:
+targets both `pyghidra-mcp` and `mcp-windbg`; per spec §12 gap 7, `dynamic-analyst` ships disabled
+because no `x64dbg` capture exists:
 
 ```json
 "agents": [
@@ -1895,7 +1898,7 @@ targets `pyghidra-mcp` only; per spec §12 gap 7, `dynamic-analyst` ships disabl
     "model": "inherit",
     "disabledReason": "x64dbg's tool surface is not captured, so its half of this agent cannot be derived; enable after an attended -UpdateToolCatalog run" },
   { "name": "verifier", "enabled": true, "level": "read",
-    "targetServers": ["pyghidra-mcp"], "builtinTools": ["Read", "Glob", "Grep"],
+    "targetServers": ["pyghidra-mcp", "mcp-windbg"], "builtinTools": ["Read", "Glob", "Grep"],
     "model": "inherit", "disabledReason": "" }
 ]
 ```
@@ -1990,9 +1993,11 @@ Expected: PASS.
 
 - [ ] **Step 5: Record the OQ1 outcome in the spec**
 
-Add a row to spec §12: the verifier reaches `pyghidra-mcp` only, because `mcp-windbg`'s query tools
-are unconstrained and classifying them `read` would defeat A3. Fixed additively by a read-only
-dump-query tool, exactly like gap 1's oracle.
+Add a row to spec §12: the verifier reaches `mcp-windbg`, but `run_cdb_command`/`run_kd_command`
+are classified `read` on usability grounds even though they can write memory or attach to a live
+process — A3's write-exclusion guarantee does not hold for this tool pair, by ruling, not by
+defect. Fixed additively by a read-only dump-query tool, exactly like gap 1's oracle: when one
+ships, reclassify these two `write` and re-point the verifier at the narrower grant.
 
 - [ ] **Step 6: Run the full suite and the analyzer**
 
