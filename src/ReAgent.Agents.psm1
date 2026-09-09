@@ -167,7 +167,6 @@ function Get-AgentToolGrant {
     }
 }
 
-
 function Test-AgentNameCheck {
     <#
     .SYNOPSIS
@@ -265,7 +264,12 @@ function Test-AgentToolExistenceCheck {
         if ($granted -notmatch '^mcp__(?<server>[^_]+(?:[^_]|_(?!_))*)__(?<tool>.+)$') { continue }
         $server = $Matches['server']
         $tool = $Matches['tool']
-        if ($Catalog.servers.PSObject.Properties.Name -notcontains $server) { continue }
+        if ($Catalog.servers.PSObject.Properties.Name -notcontains $server) {
+            $findings += [PSCustomObject]@{ Check = 'A2'; Message = (
+                    "Granted '$granted', but '$server' is not in the catalog. The grant was " +
+                    'not derived from the catalog.') }
+            continue
+        }
         if (@($Catalog.servers.$server.tools) -contains $tool) { continue }
         $findings += [PSCustomObject]@{ Check = 'A2'; Message = (
                 "Granted '$granted', which '$server' does not advertise. The grant was " +

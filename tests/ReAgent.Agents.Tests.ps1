@@ -129,6 +129,7 @@ Describe 'Get-AgentToolGrant' {
         $g.Tools.Count | Should -Be 3
     }
 }
+
 Describe 'Test-AgentNameCheck (A0)' {
     It 'passes when frontmatter, filename and config name all agree' {
         Test-AgentNameCheck -Frontmatter @{ name = 'verifier' } -FileBaseName 'verifier' `
@@ -167,6 +168,13 @@ Describe 'Test-AgentToolExistenceCheck (A2)' {
     It 'ignores built-ins, which are not catalog tools' {
         Test-AgentToolExistenceCheck -GrantedTools @('Read', 'Glob') `
             -Catalog (Get-TestCatalog) | Should -BeNullOrEmpty
+    }
+
+    It 'fails A2 for a granted tool with a server absent from the catalog' {
+        $f = Test-AgentToolExistenceCheck -GrantedTools @('mcp__totally-fake-server__anything') `
+            -Catalog (Get-TestCatalog)
+        $f[0].Check | Should -Be 'A2'
+        $f[0].Message | Should -BeLike '*totally-fake-server*'
     }
 }
 
@@ -219,4 +227,3 @@ Describe 'Invoke-AgentGate' {
         @($f | Where-Object { $_.Check -eq 'A1' }).Count | Should -Be 1
     }
 }
-
