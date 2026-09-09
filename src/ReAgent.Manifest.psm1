@@ -196,6 +196,11 @@ function Write-Manifest {
         skills sits beside servers - the manifest is the one place both an
         MCP server's and a skill pack's last-known state are recorded together,
         including every skill a pack declares and why a disabled one is off.
+
+        Each agent's recorded gate is the real status of phase 6's 'agents'
+        check (pass, fail or not-testable), never a hardcoded value: a manifest
+        that always says an agent's gate passed would lie on exactly the run
+        where it did not.
     .PARAMETER Context
         The shared phase context.
     .PARAMETER PhaseResults
@@ -221,6 +226,13 @@ function Write-Manifest {
     $exemptions = @($config.mcpServers |
             Where-Object { $_.PSObject.Properties.Name -contains 'authExemptReason' } |
             ForEach-Object { [ordered]@{ server = $_.name; reason = $_.authExemptReason } })
+
+    # 'not-testable' when phase 6 did not run this invocation (e.g. -Phases
+    # excluded Verify): there is no real signal to report, and a hardcoded
+    # 'pass' would be indistinguishable from an actual pass.
+    $agentCheck = $Context.VerifyResults | Where-Object { $_.Name -eq 'agents' } |
+        Select-Object -First 1
+    $agentGate = if ($agentCheck) { $agentCheck.Status } else { 'not-testable' }
 
     $manifest = [ordered]@{
         generatedAt   = (Get-Date).ToString('o')
@@ -248,8 +260,7 @@ function Write-Manifest {
                 [ordered]@{ name = $_.Name; enabled = $_.Enabled
                     disabledReason = $_.DisabledReason; level = $_.Level
                     servers = @($_.Servers); toolCount = $_.ToolCount
-                    gate = $(if ($_.PSObject.Properties.Name -contains 'Gate') { $_.Gate }
-                        else { 'pass' }) }
+                    gate = $agentGate }
             })
         authExemptions = $exemptions
         manualSteps   = @(Get-ManualStep -Config $config -ServerResults $servers)

@@ -283,6 +283,69 @@ Describe 'Write-Manifest skills key' {
     }
 }
 
+Describe 'Write-Manifest agents key' {
+    BeforeAll {
+        function New-MAgentCfg {
+            # Pure factory: builds and returns an in-memory PSCustomObject, writes nothing.
+            [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+                'PSUseShouldProcessForStateChangingFunctions', '')]
+            param($StateRoot)
+            [PSCustomObject]@{
+                version = 1
+                paths = [PSCustomObject]@{
+                    stateRoot = $StateRoot
+                    agentRoot = (Join-Path $StateRoot 'agent')
+                }
+                mcpServers = @()
+            }
+        }
+        function New-MAgentResult {
+            # Pure factory: builds and returns an in-memory PSCustomObject, writes nothing.
+            [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+                'PSUseShouldProcessForStateChangingFunctions', '')]
+            param($Name = 'verifier')
+            [PSCustomObject]@{ Name = $Name; Enabled = $true; DisabledReason = ''
+                Level = 'read'; Servers = @('pyghidra-mcp'); ToolCount = 15 }
+        }
+        function Get-WrittenManifest {
+            param($Context)
+            $null = Write-Manifest -Context $Context -PhaseResults @()
+            $p = Join-Path $Context.Config.paths.stateRoot 'manifest.json'
+            return (Get-Content -LiteralPath $p -Raw | ConvertFrom-Json)
+        }
+    }
+
+    It 'records the agents check status as the gate, not a hardcoded pass' {
+        # This is the defect the fix closes: a manifest that always wrote 'pass'
+        # would say a failed A0-A4 gate passed.
+        $cfg = New-MAgentCfg -StateRoot (Join-Path $TestDrive 'wm-agent-fail')
+        $ctx = @{ Config = $cfg; Inventory = $null; ServerResults = @()
+            VerifyResults = @([PSCustomObject]@{ Name = 'agents'; Status = 'fail'
+                    Detail = '[A3] over-grant' })
+            AgentResults = @(New-MAgentResult) }
+        $m = Get-WrittenManifest -Context $ctx
+        $m.agents[0].gate | Should -Be 'fail'
+    }
+
+    It 'records a real pass when the agents check actually passed' {
+        $cfg = New-MAgentCfg -StateRoot (Join-Path $TestDrive 'wm-agent-pass')
+        $ctx = @{ Config = $cfg; Inventory = $null; ServerResults = @()
+            VerifyResults = @([PSCustomObject]@{ Name = 'agents'; Status = 'pass'
+                    Detail = '1 agent(s) on record; the A0-A4 gate found no over-grant.' })
+            AgentResults = @(New-MAgentResult) }
+        $m = Get-WrittenManifest -Context $ctx
+        $m.agents[0].gate | Should -Be 'pass'
+    }
+
+    It 'records not-testable rather than pass when phase 6 did not run' {
+        $cfg = New-MAgentCfg -StateRoot (Join-Path $TestDrive 'wm-agent-notestable')
+        $ctx = @{ Config = $cfg; Inventory = $null; ServerResults = @()
+            VerifyResults = @(); AgentResults = @(New-MAgentResult) }
+        $m = Get-WrittenManifest -Context $ctx
+        $m.agents[0].gate | Should -Be 'not-testable'
+    }
+}
+
 Describe 'Get-RecordedSkillResult' {
     It 'warns rather than throwing when there is no manifest' {
         # Mirrors Get-RecordedServerResult: a missing manifest is 'nothing recorded yet',
