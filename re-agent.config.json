@@ -164,10 +164,10 @@
         "subPath": "plugins/mcp-windbg/skills"
       },
       "review": {
-        "reviewedBy": "",
-        "reviewedAt": "",
+        "reviewedBy": "david",
+        "reviewedAt": "2026-09-08",
         "reviewedCommit": "0b38a2848dddc8f7db2a179a1d6161af43875c51",
-        "notes": ""
+        "notes": "Read all 4 SKILL.md in full. windbg-crash-analysis and windbg-doctor content and allowed-tools confirmed accurate. Decided: keep windbg-live-debugging and windbg-kernel-debug disabled for now (conservative default, can enable later). Accepted the dbgeng.dll TTD/!analyze limitations as-is without live re-verification -- carried over from a different WinDbg MCP server's evaluation but plausible for the same in-box engine, and low-stakes since it only sets expectations rather than gating a tool."
       },
       "targetServers": ["mcp-windbg"],
       "adaptation": { "toolRenames": {} },
