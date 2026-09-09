@@ -90,15 +90,13 @@ Describe 'the checked-in catalog' {
 }
 
 Describe 'Get-AgentToolGrant' {
-BeforeAll {
+    BeforeAll {
         function Get-GrantAgent {
-        param($Level = 'read', $Servers = @('pyghidra-mcp'), $Builtins = @('Read', 'Glob', 'Grep'))
-        [PSCustomObject]@{ name = 'verifier'; enabled = $true; level = $Level
-            targetServers = $Servers; builtinTools = $Builtins }
+            param($Level = 'read', $Servers = @('pyghidra-mcp'), $Builtins = @('Read', 'Glob', 'Grep'))
+            [PSCustomObject]@{ name = 'verifier'; enabled = $true; level = $Level
+                targetServers = $Servers; builtinTools = $Builtins }
+        }
     }
-    }
-
-        
 
     It 'grants a read agent only the read tools' {
         $g = Get-AgentToolGrant -Agent (Get-GrantAgent) -Catalog (Get-TestCatalog)

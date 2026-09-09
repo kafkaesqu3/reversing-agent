@@ -113,7 +113,6 @@ function Test-AgentClassificationCheck {
                 'Reclassify before any agent may be granted this server.') })
 }
 
-
 function Get-AgentToolGrant {
     <#
     .SYNOPSIS
@@ -165,7 +164,6 @@ function Get-AgentToolGrant {
         McpCount = $mcp.Count
     }
 }
-
 
 Export-ModuleMember -Function Get-ToolClassification, Get-ToolLevel, `
     Test-AgentClassificationCheck, Get-AgentToolGrant
