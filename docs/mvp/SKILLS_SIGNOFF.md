@@ -156,7 +156,14 @@ that belongs to the operator, not to the agent that vendored the pack.
   construction**. The target schema was verified against Trailmark's real source, but the
   mapping was never smoke-tested against a live `pyghidra-mcp` response. The skill says so
   plainly and tells the reader to treat a mismatch as a reason to change the mapping, not the
-  schema — confirm you accept that.
+  schema — **accepted at sign-off (2026-09-08)**.
+- **This is the only pack on the branch that instructs a mid-session tool install.** `SKILL.md`
+  says `uv tool install trailmark` is `MANDATORY` if the CLI is missing — unpinned, resolved from
+  PyPI at run time, with no entry in `mcpServers[]` or `data/tool-catalog.json`. Every sibling
+  pack (`re-unpacker`, `windbg-doctor`, `arch`, `route-triage`) explicitly forbids installing
+  tools mid-session; this skill's own text admits it sits outside the reviewed MCP surface rather
+  than hiding it. **Accepted at sign-off (2026-09-08)** — Trail of Bits is a reputable vendor and
+  `uv tool install` is a sandboxed-venv install, not a raw binary fetch.
 
 ### `arch` — NickCrew/Claude-Cortex, `architectural-analysis`
 
