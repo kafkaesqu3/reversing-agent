@@ -215,10 +215,10 @@
         "subPath": ".agents/skills"
       },
       "review": {
-        "reviewedBy": "",
-        "reviewedAt": "",
+        "reviewedBy": "david",
+        "reviewedAt": "2026-09-08",
         "reviewedCommit": "5e675640e0ec94372298c57bb335ecf047360688",
-        "notes": ""
+        "notes": "Read both SKILL.md in full. Confirmed advisory-only scope is intended: neither drives an MCP server, both work from evidence pasted in, both have explicit no-blind-execution / evidence-first guardrails. allowed-tools (Bash only) matches the read-only checks each body actually runs."
       },
       "targetServers": [],
       "adaptation": { "toolRenames": {} },
