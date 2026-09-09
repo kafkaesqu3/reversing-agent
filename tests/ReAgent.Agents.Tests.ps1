@@ -129,3 +129,94 @@ Describe 'Get-AgentToolGrant' {
         $g.Tools.Count | Should -Be 3
     }
 }
+Describe 'Test-AgentNameCheck (A0)' {
+    It 'passes when frontmatter, filename and config name all agree' {
+        Test-AgentNameCheck -Frontmatter @{ name = 'verifier' } -FileBaseName 'verifier' `
+            -ConfigName 'verifier' | Should -BeNullOrEmpty
+    }
+
+    It 'fails A0 when frontmatter disagrees with the filename' {
+        # NEGATIVE TEST 4 from spec 11. Claude Code will not load the file at all.
+        $f = Test-AgentNameCheck -Frontmatter @{ name = 'verify' } -FileBaseName 'verifier' `
+            -ConfigName 'verifier'
+        @($f).Count | Should -Be 1
+        $f[0].Check | Should -Be 'A0'
+    }
+}
+
+Describe 'Test-AgentCatalogCheck (A1)' {
+    It 'fails A1 for a target server the catalog has never measured' {
+        $a = [PSCustomObject]@{ name = 'dynamic-analyst'; level = 'write'
+            targetServers = @('x64dbg-x64'); builtinTools = @('Read') }
+        $f = Test-AgentCatalogCheck -Agent $a -Catalog (Get-TestCatalog)
+        $f[0].Check | Should -Be 'A1'
+        $f[0].Message | Should -BeLike '*x64dbg-x64*'
+    }
+}
+
+Describe 'Test-AgentToolExistenceCheck (A2)' {
+    It 'fails A2 for a granted tool absent from the catalog' {
+        # NEGATIVE TEST 1 from spec 11.
+        $f = Test-AgentToolExistenceCheck `
+            -GrantedTools @('Read', 'mcp__pyghidra-mcp__invented_tool') `
+            -Catalog (Get-TestCatalog)
+        $f[0].Check | Should -Be 'A2'
+        $f[0].Message | Should -BeLike '*invented_tool*'
+    }
+
+    It 'ignores built-ins, which are not catalog tools' {
+        Test-AgentToolExistenceCheck -GrantedTools @('Read', 'Glob') `
+            -Catalog (Get-TestCatalog) | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Test-AgentLevelCheck (A3)' {
+    It 'fails A3 when the verifier is granted a write tool' {
+        # NEGATIVE TEST 2 from spec 11, and the check that carries
+        # DEPLOYMENT_PLAN Phase 7: "If the verifier can write, it isn't a verifier."
+        $a = [PSCustomObject]@{ name = 'verifier'; level = 'read'
+            targetServers = @('pyghidra-mcp'); builtinTools = @('Read') }
+        $f = Test-AgentLevelCheck -Agent $a `
+            -GrantedTools @('Read', 'mcp__pyghidra-mcp__rename_function') `
+            -Catalog (Get-TestCatalog)
+        $f[0].Check | Should -Be 'A3'
+        $f[0].Message | Should -BeLike '*rename_function*'
+    }
+
+    It 'fails A3 when any agent is granted a destructive tool' {
+        $a = [PSCustomObject]@{ name = 'static-analyst'; level = 'write'
+            targetServers = @('pyghidra-mcp'); builtinTools = @('Read') }
+        $f = Test-AgentLevelCheck -Agent $a `
+            -GrantedTools @('mcp__pyghidra-mcp__delete_project_binary') `
+            -Catalog (Get-TestCatalog)
+        $f[0].Check | Should -Be 'A3'
+    }
+
+    It 'fails A3 on a forbidden built-in that slipped past config validation' {
+        $a = [PSCustomObject]@{ name = 'verifier'; level = 'read'
+            targetServers = @('pyghidra-mcp'); builtinTools = @('Read', 'Bash') }
+        $f = Test-AgentLevelCheck -Agent $a -GrantedTools @('Read', 'Bash') `
+            -Catalog (Get-TestCatalog)
+        $f[0].Message | Should -BeLike '*Bash*'
+    }
+
+    It 'passes a correctly derived verifier grant' {
+        $a = [PSCustomObject]@{ name = 'verifier'; level = 'read'
+            targetServers = @('pyghidra-mcp'); builtinTools = @('Read', 'Glob', 'Grep') }
+        $g = Get-AgentToolGrant -Agent $a -Catalog (Get-TestCatalog)
+        Test-AgentLevelCheck -Agent $a -GrantedTools $g.Tools -Catalog (Get-TestCatalog) |
+            Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Invoke-AgentGate' {
+    It 'returns findings from every check at once, not just the first' {
+        $a = [PSCustomObject]@{ name = 'verifier'; level = 'read'
+            targetServers = @('pyghidra-mcp', 'x64dbg-x64'); builtinTools = @('Read') }
+        $f = Invoke-AgentGate -Agent $a -Catalog (Get-TestCatalog) `
+            -Frontmatter @{ name = 'wrong' } -FileBaseName 'verifier'
+        @($f | Where-Object { $_.Check -eq 'A0' }).Count | Should -Be 1
+        @($f | Where-Object { $_.Check -eq 'A1' }).Count | Should -Be 1
+    }
+}
+
