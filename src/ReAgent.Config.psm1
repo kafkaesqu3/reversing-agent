@@ -279,6 +279,55 @@ function Test-SkillEntrySchema {
 
 $script:ForbiddenBuiltinTool = @('Bash', 'Write', 'Edit', 'NotebookEdit', 'Task')
 
+function Test-SingleAgentSchema {
+    <#
+    .SYNOPSIS
+        Validates a single agent entry in the agents array.
+    .DESCRIPTION
+        Checks name format, duplicates, permission level, target server references,
+        forbidden built-in tools, and disabled-reason requirement.
+    .PARAMETER Agent
+        The agent configuration object to validate.
+    .PARAMETER ServerNames
+        Names of declared servers for targetServers validation.
+    .EXAMPLE
+        Test-SingleAgentSchema -Agent $a -ServerNames $serverNames
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Agent,
+        [Parameter(Mandatory)][array]$ServerNames
+    )
+
+    if ("$($Agent.name)" -cnotmatch '^[a-z][a-z0-9-]{2,31}$') {
+        throw ("Agent name '$($Agent.name)' is not a valid basename. It is also the " +
+            'file name and the frontmatter name:; Claude Code will not load a ' +
+            'file where those disagree. Use ^[a-z][a-z0-9-]{2,31}$.')
+    }
+
+    if ($Agent.level -notin @('read', 'write')) {
+        throw ("Agent '$($Agent.name)' declares level '$($Agent.level)'. Valid levels are " +
+            "read and write; destructive is never granted to an agent.")
+    }
+    foreach ($s in @($Agent.targetServers)) {
+        if ($ServerNames -notcontains $s) {
+            throw ("Agent '$($Agent.name)' targets server '$s', which mcpServers does " +
+                "not declare. Known: [$($ServerNames -join ', ')].")
+        }
+    }
+    foreach ($b in @($Agent.builtinTools)) {
+        if ($script:ForbiddenBuiltinTool -contains $b) {
+            throw ("Agent '$($Agent.name)' declares built-in '$b'. Forbidden: " +
+                "[$($script:ForbiddenBuiltinTool -join ', ')].")
+        }
+    }
+
+    $reason = if ($Agent.PSObject.Properties['disabledReason']) { "$($Agent.disabledReason)" } else { '' }
+    if (-not $Agent.enabled -and -not $reason.Trim()) {
+        throw "Agent '$($Agent.name)' ships disabled with no disabledReason."
+    }
+}
+
 function Test-AgentSchema {
     <#
     .SYNOPSIS
@@ -302,35 +351,11 @@ function Test-AgentSchema {
     if ($Config.PSObject.Properties.Name -notcontains 'agents') { return }
 
     $serverNames = @($Config.mcpServers | ForEach-Object { $_.name })
-    $seen = @()
+    $seenNames = @()
     foreach ($a in $Config.agents) {
-        if ("$($a.name)" -cnotmatch '^[a-z][a-z0-9-]{2,31}$') {
-            throw ("Agent name '$($a.name)' is not a valid basename. It is also the " +
-                'file name and the frontmatter name:; Claude Code will not load a ' +
-                'file where those disagree. Use ^[a-z][a-z0-9-]{2,31}$.')
-        }
-        if ($seen -contains $a.name) { throw "Agent '$($a.name)' is a duplicate name." }
-        $seen += $a.name
-
-        if ($a.level -notin @('read', 'write')) {
-            throw ("Agent '$($a.name)' declares level '$($a.level)'. Valid levels are " +
-                "read and write; destructive is never granted to an agent.")
-        }
-        foreach ($s in @($a.targetServers)) {
-            if ($serverNames -notcontains $s) {
-                throw ("Agent '$($a.name)' targets server '$s', which mcpServers does " +
-                    "not declare. Known: [$($serverNames -join ', ')].")
-            }
-        }
-        foreach ($b in @($a.builtinTools)) {
-            if ($script:ForbiddenBuiltinTool -contains $b) {
-                throw ("Agent '$($a.name)' declares built-in '$b'. Forbidden: " +
-                    "[$($script:ForbiddenBuiltinTool -join ', ')].")
-            }
-        }
-        if (-not $a.enabled -and -not "$($a.disabledReason)".Trim()) {
-            throw "Agent '$($a.name)' ships disabled with no disabledReason."
-        }
+        if ($seenNames -contains $a.name) { throw "Agent '$($a.name)' is a duplicate name." }
+        $null = Test-SingleAgentSchema -Agent $a -ServerNames $serverNames
+        $seenNames += $a.name
     }
 }
 

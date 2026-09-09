@@ -317,5 +317,15 @@ Describe 'Test-AgentSchema' {
         $c = Get-TestAgentConfig @(Get-TestAgent -Enabled $false -Reason '')
         { Test-AgentSchema -Config $c } | Should -Throw '*disabledReason*'
     }
+
+    It 'rejects a disabled agent with disabledReason property omitted entirely' {
+        # StrictMode guard: agent has enabled=false but no disabledReason key at all.
+        # Should throw the crafted error, not a PropertyNotFoundException.
+        $agent = [PSCustomObject]@{ name = 'verifier'; enabled = $false; level = 'read'
+            targetServers = @('pyghidra-mcp'); builtinTools = @('Read', 'Glob', 'Grep')
+            model = 'inherit' }
+        $c = Get-TestAgentConfig @($agent)
+        { Test-AgentSchema -Config $c } | Should -Throw '*disabledReason*'
+    }
 }
 
