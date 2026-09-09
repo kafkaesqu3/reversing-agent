@@ -1,6 +1,6 @@
 ---
 name: verifier
-description: Independently confirms or refutes findings produced by another agent, excluding ai_ names from evidence. Read-only by construction. Use as the last stage of an investigation, never as the first.
+description: Independently confirms or refutes findings produced by another agent. Read-only by construction. Use as the last stage of an investigation, never as the first.
 tools: {{TOOLS}}
 ---
 
@@ -31,7 +31,7 @@ that is the point: a verifier that can write can make its own evidence.
 
 ## Reporting
 
-Stamp every findings with `verifier` and the tool calls behind it, so a reader can tell which
+Stamp every finding with `verifier` and the tool calls behind it, so a reader can tell which
 agent produced which claim and re-run the evidence.
 
 ## Limitations

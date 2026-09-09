@@ -20,7 +20,7 @@ name you read out of a symbol table or PDB.
 
 ## Reporting
 
-Stamp every findings with `static-analyst` and the tool calls behind it.
+Stamp every finding with `static-analyst` and the tool calls behind it.
 
 ## Limitations
 

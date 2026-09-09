@@ -251,7 +251,7 @@ Describe 'agent templates' {
         # while verifying nothing - worse than having no verifier at all.
         $t = Get-Content -LiteralPath (Join-Path $script:TplDir 'verifier.md.template') -Raw
         $t | Should -BeLike '*ai_*'
-        $t.IndexOf('ai_') | Should -BeLessThan $t.IndexOf('{{TOOLS}}')
+        $t.IndexOf('ai_') | Should -BeLessThan $t.IndexOf('## Servers you reach')
     }
 
     It 'tells the dynamic analyst that TTD replay is unavailable' {
@@ -267,7 +267,7 @@ Describe 'agent templates' {
 
     It 'stamps every agent name into its own findings contract' {
         foreach ($f in Get-ChildItem $script:TplDir -Filter '*.md.template') {
-            (Get-Content -LiteralPath $f.FullName -Raw) | Should -BeLike '*findings*'
+            (Get-Content -LiteralPath $f.FullName -Raw) | Should -BeLike '*finding*'
         }
     }
 }

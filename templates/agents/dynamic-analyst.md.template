@@ -24,7 +24,7 @@ Prefix any name you propose with `ai_`, so the verifier can tell your inferences
 
 ## Reporting
 
-Stamp every findings with `dynamic-analyst` and the tool calls behind it.
+Stamp every finding with `dynamic-analyst` and the tool calls behind it.
 
 ## Limitations
 
