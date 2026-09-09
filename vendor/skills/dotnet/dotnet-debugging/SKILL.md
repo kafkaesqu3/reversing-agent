@@ -2,7 +2,6 @@
 name: dotnet-debugging
 description: Debug Windows crash dumps, hangs, high CPU, and managed-memory pressure for native, .NET/CLR, or mixed-mode processes using the mcp-windbg MCP server (SOS commands like !analyze, !clrstack, !dumpheap, !gcroot, !syncblk, !dlk, !runaway issued through run_cdb_command). Spans 16 topic areas covering dump-based triage on this Windows-only install. Do not use for routine .NET SDK profiling, benchmark design, or CI test debugging -- this install vendors only the debugging skill from its upstream plugin, not the sibling profiling/testing/tooling skills.
 license: MIT
-user-invocable: false
 allowed-tools:
   - mcp__mcp-windbg__open_cdb_dump
   - mcp__mcp-windbg__run_cdb_command
