@@ -1,5 +1,14 @@
 # Gap Analysis — Agentic RE Blueprint & Deployment Plan
 
+> **Status, 2026-09-08:** eight of the packs surveyed below were vendored, adapted and gated
+> under `vendor/skills/` on branch `feat/skills-vendoring` (windbg, ghidra, re, route, reva,
+> dotnet, tob, arch — see `docs/mvp/SKILLS_SIGNOFF.md` for what shipped and what's still open
+> per pack). x64dbg was deferred by explicit decision; Binary Ninja's server exists but has no
+> skill pack yet. Everything else named below (SpecterOps, wshobson, frida-skills,
+> symbolic-execution-tools, `binary-re`, `symbol-recovery`, and the 13 dropped `tob` siblings)
+> remains untouched — tracked as backlog in `docs/mvp/HANDOFF.md` under "Skill packs surveyed
+> but not vendored." This file is otherwise the original, unedited survey.
+
 Review of `BLUEPRINT.md` and `DEPLOYMENT_PLAN.md`, cross-checked against current (2026) MCP-security, agentic-malware-analysis, and Windows vuln-research practice. Findings are split into **Critical** (will block correctness, safety, or usability if unaddressed) and **Nice-to-have** (real value, not on the critical path).
 
 Both documents are unusually complete. The trust boundary, prompt-injection-from-binary threat, supply-chain vetting, headless/aarch64 mapping, verification-stage-over-better-first-pass insight, and persistent case state are all already handled well. The gaps below are the things a careful second pass surfaces, not holes in the core thesis.

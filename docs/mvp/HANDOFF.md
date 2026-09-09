@@ -480,4 +480,35 @@ check `bn_*` names against.
 
 **Task 22** (local marketplace manifest) is measured, not built — see above.
 
+### Skill packs surveyed but not vendored — backlog
+
+`docs/GAP_ANALYSIS.md` surveys far more candidate packs than the eight that shipped. None of
+the following has an issue, priority, or owner yet; recorded here so they do not get lost back
+into that survey doc:
+
+- **PetoWorks/binaryninja-mcp** or **Sidekick** — the Binary Ninja skill layer. No BN skill
+  content exists at all yet, only the MCP server entry. Blocked behind Task 20's tool-catalog
+  capture, above, plus its own vendor/adapt/review pass once that lands.
+- **SpecterOps/skills** (`binary-ninja-mcp-analysis`, `ghidra-mcp-analysis`) — named once in
+  `docs/SPECTEROPS.md`, never cross-checked against this install's actual server surface.
+- **wshobson/reverse-engineering** — agents, not skills; needs a scope decision first, since
+  spec §1.2 puts subagent definitions out of scope for the skills-vendoring slice.
+- **Rudra-ravi/frida-skills** — no Frida MCP server is provisioned on this host yet; blocked on
+  that server existing before a skill pack driving it makes sense.
+- **yaklang/hack-skills** `symbolic-execution-tools` — angr/Z3 playbook; no angr MCP server is
+  provisioned yet either.
+- **ClaudePluginHub `binary-re`** — ELF/embedded-leaning triage skill; lowest priority, this
+  install is Windows-PE-focused.
+- **`symbol-recovery`** — `GAP_ANALYSIS.md` itself notes this doesn't exist upstream; it would
+  be a from-scratch skill (PDB/msdl fetch + FLIRT for library code), not a vendoring task.
+- **The 13 `trailofbits/skills` siblings dropped from `tob`** (`static-analysis`,
+  `variant-analysis`, `differential-review`, `fp-check`, `testing-handbook-skills`) —
+  deliberately narrowed out during Task 18's review because they assume a source tree, not a
+  stripped binary. Revisit only if this install ever analyzes source alongside binaries.
+
+Also still deferred by the earlier decision, unchanged: **Task 19 (x64dbg,
+`dariushoule/x64dbg-skills`)** — the most doc-emphasized pack of all of them and the one
+deliberately not built. See the ruling at the top of
+`.superpowers/sdd/2026-09-06-skills-vendoring/progress.md`.
+
 **No pack has a recorded human sign-off yet, so no pack installs yet.**
