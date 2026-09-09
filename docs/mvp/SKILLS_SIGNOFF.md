@@ -94,18 +94,17 @@ that belongs to the operator, not to the agent that vendored the pack.
 
 ### `route` — ljagiello/ctf-skills (`ctf-reverse`)
 
-- **A source substitution needs your explicit confirmation.** The pack the spec named
-  (`majiayu000/claude-skill-registry` → `reverse-engineering`) turned out to be a stale
-  aggregator-mirror slug pointing at unrelated content — a Japanese architecture-documentation
-  skill, confirmed via the registry's own `metadata.json`. The registry's scrape provenance
-  led to the real author, `ljagiello/ctf-skills`' `ctf-reverse` skill, which was vendored
-  instead. Every link in that chain was independently verified against live GitHub
-  (3,191 stars, actively maintained, pinned commit was HEAD at vendor time). **It was not
-  auto-approved.** Confirm the substitution before signing off, or reject it and drop the pack.
-- **`allowed-tools` declares `Write`, `Edit` and `Task`** on a skill whose own description says
-  it "decides which server or skill to reach for, then hands off". `Task` spawns subagents,
-  which spec §1.2 puts out of scope for this slice. Narrowing the list does not fence it, so
-  decide on the body: accept that reach deliberately, or cut the instructions that use it.
+- **A source substitution.** The pack the spec named (`majiayu000/claude-skill-registry` →
+  `reverse-engineering`) turned out to be a stale aggregator-mirror slug pointing at unrelated
+  content — a Japanese architecture-documentation skill, confirmed via the registry's own
+  `metadata.json`. The registry's scrape provenance led to the real author,
+  `ljagiello/ctf-skills`' `ctf-reverse` skill, which was vendored instead. Every link in that
+  chain was independently verified against live GitHub (3,191 stars, actively maintained,
+  pinned commit was HEAD at vendor time). **Confirmed and accepted at sign-off (2026-09-08).**
+- **`allowed-tools` originally declared `Write`, `Edit` and `Task`** with no line in the body
+  ever calling any of them — grepped in full at sign-off. Trimmed to `Bash`, `Read`, `Glob`,
+  `Grep` (2026-09-08) to match what the routing body actually does; the key doesn't fence
+  anything at runtime either way, so this changed the declaration's honesty, not its behavior.
 
 ### `dotnet` — fenzel999/dotnet-artisan (`dotnet-debugging`)
 

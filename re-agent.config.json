@@ -239,10 +239,10 @@
         "subPath": "ctf-reverse"
       },
       "review": {
-        "reviewedBy": "",
-        "reviewedAt": "",
+        "reviewedBy": "david",
+        "reviewedAt": "2026-09-08",
         "reviewedCommit": "36c72e53a96a035791821caff7440882ea0f5c57",
-        "notes": ""
+        "notes": "Read SKILL.md in full; grepped all 18 reference files for host-risk instructions (none found beyond CTF technique literature). Confirmed and accepted the ljagiello/ctf-skills substitution for the dead majiayu000 mirror slug. allowed-tools trimmed from Bash/Read/Write/Edit/Glob/Grep/Task to Bash/Read/Glob/Grep -- grepped the body and found no live Write/Edit/Task usage."
       },
       "targetServers": [],
       "adaptation": { "toolRenames": {} },

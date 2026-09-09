@@ -6,11 +6,8 @@ compatibility: Requires filesystem-based agent (Claude Code) with Bash. This ins
 allowed-tools:
   - Bash
   - Read
-  - Write
-  - Edit
   - Glob
   - Grep
-  - Task
 ---
 
 # Reverse-Engineering Triage and Routing
