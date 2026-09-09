@@ -996,4 +996,54 @@ Describe 'agent gate inside verification' {
             -AgentDir (Join-Path ([IO.Path]::GetTempPath()) 'does-not-exist')
         $r.Status | Should -Be 'failed'
     }
+
+    It 'reads a real generated agent file''s frontmatter and passes A0' {
+        # The nothing-installed tests above never exercise the frontmatter-read
+        # branch: Test-Path is always false there. This is the common case -
+        # phase 4 just wrote real files and phase 6 verifies them immediately.
+        $agentDir = Join-Path $TestDrive 'agents-real-pass'
+        $null = New-Item -ItemType Directory -Path $agentDir -Force
+        @(
+            '---'
+            'name: verifier'
+            'description: Test verifier agent.'
+            'tools: Read'
+            '---'
+            ''
+            '# Verifier'
+        ) -join "`n" | Set-Content -LiteralPath (Join-Path $agentDir 'verifier.md')
+
+        $cfg = [PSCustomObject]@{
+            mcpServers = @([PSCustomObject]@{ name = 'pyghidra-mcp' })
+            agents = @([PSCustomObject]@{ name = 'verifier'; enabled = $true
+                    level = 'read'; targetServers = @('pyghidra-mcp')
+                    builtinTools = @('Read'); disabledReason = '' }) }
+        $r = Invoke-AgentVerification -Config $cfg -Catalog (Get-ToolCatalog) `
+            -AgentDir $agentDir
+        $r.Status | Should -Be 'pass'
+    }
+
+    It 'reports an A0 finding when a generated file''s frontmatter name disagrees' {
+        $agentDir = Join-Path $TestDrive 'agents-real-mismatch'
+        $null = New-Item -ItemType Directory -Path $agentDir -Force
+        @(
+            '---'
+            'name: not-verifier'
+            'description: Test verifier agent.'
+            'tools: Read'
+            '---'
+            ''
+            '# Verifier'
+        ) -join "`n" | Set-Content -LiteralPath (Join-Path $agentDir 'verifier.md')
+
+        $cfg = [PSCustomObject]@{
+            mcpServers = @([PSCustomObject]@{ name = 'pyghidra-mcp' })
+            agents = @([PSCustomObject]@{ name = 'verifier'; enabled = $true
+                    level = 'read'; targetServers = @('pyghidra-mcp')
+                    builtinTools = @('Read'); disabledReason = '' }) }
+        $r = Invoke-AgentVerification -Config $cfg -Catalog (Get-ToolCatalog) `
+            -AgentDir $agentDir
+        $r.Status | Should -Be 'failed'
+        @($r.Findings | Where-Object { $_.Check -eq 'A0' }).Count | Should -Be 1
+    }
 }
