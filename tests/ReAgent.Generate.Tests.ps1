@@ -2,6 +2,7 @@ BeforeAll {
     Import-Module "$PSScriptRoot/../src/ReAgent.Common.psm1" -Force
     Import-Module "$PSScriptRoot/../src/ReAgent.Tokens.psm1" -Force
     Import-Module "$PSScriptRoot/../src/ReAgent.Agents.psm1" -Force
+    Import-Module "$PSScriptRoot/../src/ReAgent.Skills.psm1" -Force
     Import-Module "$PSScriptRoot/../src/ReAgent.Generate.psm1" -Force
 
     function Get-TestResult {
@@ -187,6 +188,30 @@ Describe 'Write-AgentConfiguration' {
         { Write-AgentConfiguration -Config $Script:GenCfg -ServerResults $Script:GenResults `
                 -TemplateRoot (Join-Path $TestDrive 'no-templates') } |
             Should -Throw '*template not found*'
+
+    It 'generates agent files when config includes agents' {
+        $agentCfg = [PSCustomObject]@{
+            paths      = [PSCustomObject]@{
+                toolRoot  = (Join-Path $TestDrive 're')
+                agentRoot = (Join-Path $TestDrive 'regent')
+            }
+            mcpServers = @([PSCustomObject]@{ name = 'ghidramcp'; enabled = $false })
+            agents     = @([PSCustomObject]@{
+                name = 'verifier'; enabled = $true; level = 'read'
+                targetServers = @('pyghidra-mcp'); builtinTools = @('Read', 'Glob', 'Grep')
+                model = 'inherit'; disabledReason = '' })
+        }
+        $agentTplDir = Join-Path $TestDrive 'templatesgents'
+        $null = New-Item -ItemType Directory -Path $agentTplDir -Force
+        '{{TOOLS}}
+{{SERVERS}}
+{{LIMITATIONS}}' | Set-Content (Join-Path $agentTplDir 'verifier.md.template')
+
+        Write-AgentConfiguration -Config $agentCfg -ServerResults $Script:GenResults `
+            -TemplateRoot (Split-Path $agentTplDir) | Out-Null
+        Test-Path (Join-Path $agentCfg.paths.agentRoot '.claudegentserifier.md') | Should -BeTrue
+    }
+
     }
 }
 

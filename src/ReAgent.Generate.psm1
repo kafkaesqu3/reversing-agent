@@ -1,6 +1,10 @@
-﻿Set-StrictMode -Version Latest
+Set-StrictMode -Version Latest
 
 Import-Module (Join-Path $PSScriptRoot 'ReAgent.Agents.psm1') -Force
+
+# Depends on functions exported by sibling modules, which Install-REAgent.ps1
+# imports into the session before this one: Write-ReAgentLog (Common),
+# Get-ServerToken (Tokens), Get-ToolCatalog (Skills).
 
 function New-McpServerEntry {
     <#
@@ -203,6 +207,11 @@ function Write-AgentConfiguration {
 
     $null = New-Item -ItemType Directory -Path (Join-Path $agentRoot 'cases') -Force
 
+    $agentDir = Join-Path $agentRoot '.claude\agents'
+    $catalog = Get-ToolCatalog
+    $written += Write-AgentDefinition -Config $Config -Catalog $catalog `
+        -RepoRoot $TemplateRoot -AgentDir $agentDir
+
     foreach ($w in $written) {
         Write-ReAgentLog -Level INFO -Message "Generated '$w'."
     }
@@ -251,7 +260,6 @@ function Write-AgentDefinition {
     $results = @()
     foreach ($agent in $Config.agents) {
         $path = Join-Path $AgentDir "$($agent.name).md"
-        $grant = Get-AgentToolGrant -Agent $agent -Catalog $Catalog
 
         if (-not $agent.enabled) {
             if ((Test-Path -LiteralPath $path) -and $PSCmdlet.ShouldProcess($path, 'Remove')) {
@@ -263,6 +271,7 @@ function Write-AgentDefinition {
             continue
         }
 
+        $grant = Get-AgentToolGrant -Agent $agent -Catalog $Catalog
         $tpl = Join-Path $RepoRoot "templates\agents\$($agent.name).md.template"
         if (-not (Test-Path -LiteralPath $tpl)) {
             throw ("No template at '$tpl' for agent '$($agent.name)'. Every declared " +
