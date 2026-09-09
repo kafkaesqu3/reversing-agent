@@ -104,8 +104,10 @@ function Test-AgentClassificationCheck {
     if ($unclassified.Count -eq 0 -and $stale.Count -eq 0) { return @() }
 
     $parts = @()
-    if ($unclassified.Count) { $parts += "captured but unclassified: [$($unclassified -join ', ')]" }
-    if ($stale.Count) { $parts += "classified but not captured: [$($stale -join ', ')]" }
+    if ($unclassified.Count) { $parts += ("captured but unclassified: [" +
+                "$($unclassified -join ', ')]") }
+    if ($stale.Count) { $parts += ("classified but not captured: [" +
+                "$($stale -join ', ')]") }
     return @([PSCustomObject]@{ Check = 'A4'; Message = (
                 "Server '$Server' classification is stale - $($parts -join '; '). " +
                 'Reclassify before any agent may be granted this server.') })
