@@ -113,5 +113,59 @@ function Test-AgentClassificationCheck {
                 'Reclassify before any agent may be granted this server.') })
 }
 
+
+function Get-AgentToolGrant {
+    <#
+    .SYNOPSIS
+        Derives the concrete tool list one agent receives.
+    .DESCRIPTION
+        Derived from the catalog, never hand-listed (spec 1.3.1). An agent at
+        level write receives read + write; at read, only read. destructive is
+        granted to nobody at any level, so it is filtered unconditionally
+        rather than by comparing against the agent's level.
+
+        A target server with no classification contributes nothing rather than
+        contributing everything. Check A1 reports that separately - silence
+        here plus a finding there is what makes the gate fail closed instead
+        of shipping an unjudged grant.
+
+        Ordering is total: built-ins in declared order, then MCP tools sorted
+        by full prefixed name. Spec 1.3.4 wants a re-run to reproduce the file
+        byte for byte, which incidental ordering would break.
+    .PARAMETER Agent
+        One entry from the config's agents[].
+    .PARAMETER Catalog
+        From Get-ToolCatalog.
+    .OUTPUTS
+        [PSCustomObject] Tools, McpCount.
+    .EXAMPLE
+        Get-AgentToolGrant -Agent $a -Catalog (Get-ToolCatalog)
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Agent,
+        [Parameter(Mandatory)][object]$Catalog
+    )
+
+    $allowed = if ($Agent.level -eq 'write') { @('read', 'write') } else { @('read') }
+    $mcp = @()
+    foreach ($server in @($Agent.targetServers)) {
+        $class = Get-ToolClassification -Catalog $Catalog -Server $server
+        if (-not $class.Known) { continue }
+        foreach ($tool in @($Catalog.servers.$server.tools)) {
+            $level = Get-ToolLevel -Classification $class -Tool $tool
+            if ($level -eq 'destructive') { continue }
+            if ($allowed -notcontains $level) { continue }
+            $mcp += "mcp__${server}__${tool}"
+        }
+    }
+    $mcp = @($mcp | Sort-Object)
+    return [PSCustomObject]@{
+        Tools    = @(@($Agent.builtinTools) + $mcp)
+        McpCount = $mcp.Count
+    }
+}
+
+
 Export-ModuleMember -Function Get-ToolClassification, Get-ToolLevel, `
-    Test-AgentClassificationCheck
+    Test-AgentClassificationCheck, Get-AgentToolGrant

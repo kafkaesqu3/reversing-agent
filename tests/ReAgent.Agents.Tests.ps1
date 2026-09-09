@@ -88,3 +88,46 @@ Describe 'the checked-in catalog' {
         $c.Destructive | Should -Contain 'delete_project_binary'
     }
 }
+
+Describe 'Get-AgentToolGrant' {
+BeforeAll {
+        function Get-GrantAgent {
+        param($Level = 'read', $Servers = @('pyghidra-mcp'), $Builtins = @('Read', 'Glob', 'Grep'))
+        [PSCustomObject]@{ name = 'verifier'; enabled = $true; level = $Level
+            targetServers = $Servers; builtinTools = $Builtins }
+    }
+    }
+
+        
+
+    It 'grants a read agent only the read tools' {
+        $g = Get-AgentToolGrant -Agent (Get-GrantAgent) -Catalog (Get-TestCatalog)
+        $g.Tools | Should -Contain 'mcp__pyghidra-mcp__decompile_function'
+        $g.Tools | Should -Not -Contain 'mcp__pyghidra-mcp__rename_function'
+    }
+
+    It 'grants a write agent read plus write, never destructive' {
+        $g = Get-AgentToolGrant -Agent (Get-GrantAgent -Level 'write') -Catalog (Get-TestCatalog)
+        $g.Tools | Should -Contain 'mcp__pyghidra-mcp__rename_function'
+        $g.Tools | Should -Contain 'mcp__pyghidra-mcp__decompile_function'
+        $g.Tools | Should -Not -Contain 'mcp__pyghidra-mcp__delete_project_binary'
+    }
+
+    It 'puts built-ins first in declared order, then MCP tools sorted by name' {
+        # Byte-identical regeneration depends on this being total, not incidental.
+        $g = Get-AgentToolGrant -Agent (Get-GrantAgent) -Catalog (Get-TestCatalog)
+        $g.Tools[0] | Should -Be 'Read'
+        $g.Tools[1] | Should -Be 'Glob'
+        $g.Tools[2] | Should -Be 'Grep'
+        $mcp = @($g.Tools | Select-Object -Skip 3)
+        ($mcp -join ',') | Should -Be (($mcp | Sort-Object) -join ',')
+    }
+
+    It 'contributes nothing for a server with no classification' {
+        $cat = [PSCustomObject]@{ servers = [PSCustomObject]@{
+                'binaryninja' = [PSCustomObject]@{ tools = @('bn_list') } } }
+        $g = Get-AgentToolGrant -Agent (Get-GrantAgent -Servers @('binaryninja')) -Catalog $cat
+        $g.McpCount | Should -Be 0
+        $g.Tools.Count | Should -Be 3
+    }
+}
