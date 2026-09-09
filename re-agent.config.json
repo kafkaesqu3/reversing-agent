@@ -152,6 +152,35 @@
       "maxGhidraVersion": "11.3.2"
     }
   ],
+  "agents": [
+    {
+      "name": "static-analyst",
+      "enabled": true,
+      "level": "write",
+      "targetServers": ["pyghidra-mcp"],
+      "builtinTools": ["Read", "Glob", "Grep"],
+      "model": "inherit",
+      "disabledReason": ""
+    },
+    {
+      "name": "dynamic-analyst",
+      "enabled": false,
+      "level": "write",
+      "targetServers": ["mcp-windbg"],
+      "builtinTools": ["Read", "Glob", "Grep"],
+      "model": "inherit",
+      "disabledReason": "x64dbg's tool surface is not captured, so its half of this agent cannot be derived; enable after an attended -UpdateToolCatalog run"
+    },
+    {
+      "name": "verifier",
+      "enabled": true,
+      "level": "read",
+      "targetServers": ["pyghidra-mcp", "mcp-windbg"],
+      "builtinTools": ["Read", "Glob", "Grep"],
+      "model": "inherit",
+      "disabledReason": ""
+    }
+  ],
   "skills": [
     {
       "namespace": "windbg",

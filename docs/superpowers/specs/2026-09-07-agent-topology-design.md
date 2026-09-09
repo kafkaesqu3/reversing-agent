@@ -311,6 +311,7 @@ Each is asserted to fail *before* the fix that makes it pass, per the repo's TDD
 | 5 | **DEPLOYMENT_PLAN Tier 3 lists the boundary test as recurring**; §3 ran it once. | Deliberate. The static gate runs every time; re-measure when Claude Code's minor version moves. |
 | 6 | **The `ghidra` skill's `Bash` dependency does not work inside `static-analyst`.** | §4. Degrade the skill or invoke it from the main session. |
 | 7 | **x64dbg's 80 tools and Binary Ninja's 75 are not in the catalog**, so `dynamic-analyst` and the Binary Ninja half of `static-analyst` cannot be generated until an attended capture runs. | A1 fails closed. If the capture cannot run, `dynamic-analyst` ships `enabled: false` with a recorded reason; the verifier needs only the two unattended servers and lands either way. |
+| 8 | **The verifier's `mcp-windbg` grant is not fully read-only.** Per OQ1, `run_cdb_command`/`run_kd_command` are classified `read` on usability grounds, but their surface includes `ed` (write memory) and `.attach` (take a live process); they cannot be sub-classified without a denylist. A3's write-exclusion guarantee does not hold for this tool pair. | By ruling, not by defect (OQ1). Fixed additively, exactly like gap 1's oracle: when a read-only dump-query tool ships upstream, reclassify these two `write` and re-point the verifier at the narrower grant. |
 
 ---
 

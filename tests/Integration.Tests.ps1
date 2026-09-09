@@ -1,7 +1,7 @@
 BeforeAll {
     $Script:Root = Join-Path $PSScriptRoot '..'
     foreach ($m in @('Common', 'Config', 'Discovery', 'Prereqs', 'Symbols',
-            'Tokens', 'Json', 'Servers', 'Generate', 'Skills', 'Verify', 'Manifest')) {
+            'Tokens', 'Json', 'Servers', 'Generate', 'Skills', 'Verify', 'Manifest', 'Agents')) {
         Import-Module (Join-Path $Script:Root "src\ReAgent.$m.psm1") -Force
     }
 }
@@ -249,5 +249,67 @@ Describe 'the entry point resolves its own config' {
         $script = Join-Path $Script:Root 'Install-REAgent.ps1'
         $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -WhatIf 2>&1
         ($out | Out-String) | Should -Not -BeLike '*Config file not found*'
+    }
+}
+
+Describe 'agent topology end to end' {
+    BeforeAll {
+        $script:Cfg = Get-ReAgentConfig -Path (Join-Path $PSScriptRoot '../re-agent.config.json')
+        $script:Cat = Get-ToolCatalog
+    }
+
+    It 'loads a config declaring three agents' {
+        @($script:Cfg.agents).Count | Should -Be 3
+    }
+
+    It 'passes the gate for every enabled agent' {
+        foreach ($a in @($script:Cfg.agents | Where-Object { $_.enabled })) {
+            $g = Get-AgentToolGrant -Agent $a -Catalog $script:Cat
+            Invoke-AgentGate -Agent $a -Catalog $script:Cat `
+                -Frontmatter @{ name = $a.name } -FileBaseName $a.name |
+                Should -BeNullOrEmpty -Because "agent '$($a.name)' must pass A0-A4"
+        }
+    }
+
+    It 'grants the verifier no tool classified write or destructive' {
+        # DEPLOYMENT_PLAN Phase 7: if the verifier can write, it isn't a verifier.
+        $v = @($script:Cfg.agents | Where-Object { $_.name -eq 'verifier' })[0]
+        $g = Get-AgentToolGrant -Agent $v -Catalog $script:Cat
+        foreach ($t in $g.Tools) {
+            if ($t -notmatch '^mcp__(?<s>.+?)__(?<t>.+)$') { continue }
+            $c = Get-ToolClassification -Catalog $script:Cat -Server $Matches['s']
+            Get-ToolLevel -Classification $c -Tool $Matches['t'] | Should -Be 'read'
+        }
+    }
+
+    It 'grants the static analyst write but never destructive' {
+        $s = @($script:Cfg.agents | Where-Object { $_.name -eq 'static-analyst' })[0]
+        $g = Get-AgentToolGrant -Agent $s -Catalog $script:Cat
+        $g.Tools | Should -Contain 'mcp__pyghidra-mcp__rename_function'
+        $g.Tools | Should -Not -Contain 'mcp__pyghidra-mcp__delete_project_binary'
+    }
+
+    It 'regenerates byte-identical files on a second run' {
+        # Spec 1.3.4.
+        $dir = Join-Path ([IO.Path]::GetTempPath()) ("idem-" + [guid]::NewGuid())
+        try {
+            $root = Join-Path $PSScriptRoot '..'
+            Write-AgentDefinition -Config $script:Cfg -Catalog $script:Cat -RepoRoot $root `
+                -AgentDir $dir | Out-Null
+            $before = @(Get-ChildItem $dir -Filter '*.md' | ForEach-Object {
+                    (Get-FileHash $_.FullName -Algorithm SHA256).Hash })
+            $second = Write-AgentDefinition -Config $script:Cfg -Catalog $script:Cat `
+                -RepoRoot $root -AgentDir $dir
+            $after = @(Get-ChildItem $dir -Filter '*.md' | ForEach-Object {
+                    (Get-FileHash $_.FullName -Algorithm SHA256).Hash })
+            ($after -join ',') | Should -Be ($before -join ',')
+            @($second | Where-Object { $_.Changed }).Count | Should -Be 0
+        } finally { Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+
+    It 'writes no file for the disabled dynamic analyst but records its reason' {
+        $d = @($script:Cfg.agents | Where-Object { $_.name -eq 'dynamic-analyst' })[0]
+        $d.enabled | Should -BeFalse
+        "$($d.disabledReason)".Trim() | Should -Not -BeNullOrEmpty
     }
 }
