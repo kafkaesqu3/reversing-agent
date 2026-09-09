@@ -188,12 +188,13 @@ Describe 'Write-AgentConfiguration' {
         { Write-AgentConfiguration -Config $Script:GenCfg -ServerResults $Script:GenResults `
                 -TemplateRoot (Join-Path $TestDrive 'no-templates') } |
             Should -Throw '*template not found*'
+    }
 
     It 'generates agent files when config includes agents' {
         $agentCfg = [PSCustomObject]@{
             paths      = [PSCustomObject]@{
                 toolRoot  = (Join-Path $TestDrive 're')
-                agentRoot = (Join-Path $TestDrive 'regent')
+                agentRoot = (Join-Path $TestDrive 're\agent')
             }
             mcpServers = @([PSCustomObject]@{ name = 'ghidramcp'; enabled = $false })
             agents     = @([PSCustomObject]@{
@@ -201,7 +202,7 @@ Describe 'Write-AgentConfiguration' {
                 targetServers = @('pyghidra-mcp'); builtinTools = @('Read', 'Glob', 'Grep')
                 model = 'inherit'; disabledReason = '' })
         }
-        $agentTplDir = Join-Path $TestDrive 'templatesgents'
+        $agentTplDir = Join-Path $TestDrive 'templates\agents'
         $null = New-Item -ItemType Directory -Path $agentTplDir -Force
         '{{TOOLS}}
 {{SERVERS}}
@@ -209,10 +210,9 @@ Describe 'Write-AgentConfiguration' {
 
         Write-AgentConfiguration -Config $agentCfg -ServerResults $Script:GenResults `
             -TemplateRoot (Split-Path $agentTplDir) | Out-Null
-        Test-Path (Join-Path $agentCfg.paths.agentRoot '.claudegentserifier.md') | Should -BeTrue
+        Test-Path (Join-Path $agentCfg.paths.agentRoot '.claude\agents\verifier.md') | Should -BeTrue
     }
 
-    }
 }
 
 Describe 'the shipped CLAUDE.md template' {
