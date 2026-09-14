@@ -245,7 +245,8 @@ C:\re\mcp\
     launch-pdbsql.cmd             <- generated; carries the resolved PDB path
   ghidrasql\
     ghidrasql.exe
-    launch-ghidrasql.cmd          <- generated; carries --readonly and the project
+    launch-ghidrasql.cmd          <- generated; carries --readonly, --ghidra,
+                                    --project-name and --program
     projects\                     <- ghidrasql's OWN project root, never pyghidra's
 ```
 

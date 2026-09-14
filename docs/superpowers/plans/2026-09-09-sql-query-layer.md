@@ -2084,75 +2084,87 @@ git add src/ReAgent.Servers.psm1 tests/ReAgent.Servers.Tests.ps1
 git commit -m "Wire ghidrasql's --ghidra flag and its LibGhidraHost extension install"
 ```
 
-- [ ] **Step 9: LIVE - install, observe the real failure mode, and decide the bootstrap**
+- [x] **Step 9: LIVE - install, observe the real failure mode, and decide the bootstrap**
 
-**Host-mutating. Ask before running**, per this plan's own established gating (Task 9's
-ledger note 8: "stopped and asked before every host-mutating step").
+**Ran with the user's explicit go-ahead**, asked fresh before this specific run, per this
+plan's own established gating.
 
-Run:
+First run (`.\Install-REAgent.ps1 -Phases 0,3,6,7`, user's elevated session) installed the
+extension and registered the scheduled task correctly, but `ghidrasql.exe` never came up
+listening within the 5-minute wait - `not-testable`, not pass. Running the generated launcher
+command directly surfaced the real error: `error: missing required option for headless mode:
+--project-name`. Captured `ghidrasql --help` in full this time (Task 9's capture was partial).
+`--project-name <name>` is a separate required flag from `--project <dir>`, undocumented in
+any text captured so far.
+
+Investigated by hand against a scratch project (`C:\re\scratch\ghidrasql-test-<ts>`), outside
+any code change, before touching the installer:
+
+1. A one-shot `--binary ntdll.dll --project-name testproj --list-project-programs` (no
+   `--readonly`) imports, analyzes, and **persists to disk** - confirmed via the log's
+   `shutdown_policy=save` and by re-querying the same project from a fresh process afterward
+   (`SELECT COUNT(*) AS n FROM funcs` -> 4631 both times).
+2. Reopening a project with only `--project`/`--project-name` (no `--binary`, no `--program`)
+   leaves `program=<none>`; every query then fails `[not_loaded]: no current program`.
+   `--program <name>` (the imported program's name - equals the binary's filename, confirmed
+   via `--list-project-programs`) is a **third** required flag for serving an already-imported
+   project.
+3. The full real invocation - `--ghidra <root> --project <dir> --project-name <name> --program
+   <name> --readonly --mcp <port> --bind 127.0.0.1` - binds and answers HTTP 200 on `/sse`.
+4. The on-disk idempotency marker for "this project was bootstrapped" is `<projectRoot>\
+   <projectName>.gpr`.
+
+**Ruling: this was within Task 10's own scope, not new scope** - the server still could not
+start at all, same class of gap as the original missing `--ghidra` flag that Steps 1-8 already
+closed. Dispatched a further fix round to the same implementer rather than opening a new task:
+added `projectName`/`bootstrap` (binary + programName) to ghidrasql's config; wired
+`--project-name`/`--program` into `Get-NativeSseLaunchArgument`; added
+`Invoke-GhidrasqlBootstrap` (the `.gpr`-marker-gated one-shot import), called from
+`Install-NativeSseServer` once the real exe path is known. TDD throughout, full task review
+(Approved, 0 Critical, 0 Important, 1 deferred Minor on an unrelated pre-existing flag-order
+question), commit `6f4c3ba`.
+
+Re-ran the live install: **`[pass] ghidrasql live call`** - `-VerifyOnly` confirms a real,
+connected query answer. Definition-of-done item 2 (Task 9) is now met.
+
+**Idempotency check found a second pre-existing, unrelated gap in the plan's own text**: this
+step's literal instruction to confirm idempotency with `.\Install-REAgent.ps1 -Phases 3` alone
+crashes - `Cannot bind argument to parameter 'Inventory' because it is null` - because
+`$context.Inventory` is populated only by Phase 0's `Fn`, and `-Phases 3` alone never runs
+Phase 0. This is not a Task 10 regression: `Install-AllMcpServer`'s `[Parameter(Mandatory)]
+[object]$Inventory` predates this task entirely (Task 5). It matches an earlier ruling already
+on record for this plan (Task 9: "`-Phases 3` then `-VerifyOnly` as two separate commands can
+never converge... the correct live command is one combined `-Phases 0,3,6,7` invocation") -
+this step's own text simply copied Task 7's `-Phases 3`-alone idempotency-check pattern
+without re-deriving it. **Ruling: use the combined invocation for the idempotency check too.**
+
+Re-running `.\Install-REAgent.ps1 -Phases 0,3,6,7` a second time with nothing changed: the
+`.gpr` marker's timestamp was untouched (no re-import - confirmed the bootstrap correctly
+short-circuits) and the launcher's content/timestamp were untouched (no rewrite). The
+`ghidrasql.exe` **process** did restart (new PID) - but so did `pdbsql.exe`'s, on the same run,
+despite its launcher being unchanged since the previous day. Tracing `Install-NativeSseServer`
+confirmed this is pre-existing, by-design behavior shared by every `native-sse` server, not a
+defect: it unconditionally stops any running instance before every install pass (so
+`Expand-Archive -Force` never hits a locked file), regardless of whether the release or
+launcher content changed. The idempotency contract this repo actually provides is "no
+spurious re-bootstrap, no launcher rewrite" - both hold.
+
+- [x] **Step 10: Update the docs that described this as a gap**
+
+Updated `docs/superpowers/specs/2026-09-09-sql-query-layer-design.md` SS4's launcher-layout
+comment to list `--ghidra`, `--project-name` and `--program` alongside `--readonly`. Updated
+`docs/mvp/MVP.md`'s ghidrasql row from "installed, disabled" to reflect the live-verified,
+connected, passing state.
+
+- [x] **Step 11: Commit the live outcome and doc updates**
+
 ```bash
-powershell.exe -NoProfile -Command ".\Install-REAgent.ps1 -Phases 0,3,6,7"
+git add docs/superpowers/plans/2026-09-09-sql-query-layer.md docs/superpowers/specs/2026-09-09-sql-query-layer-design.md docs/mvp/MVP.md
+git commit -m "Record ghidrasql's live connection-mode outcome"
 ```
 
-Two outcomes:
-
-| Outcome | Action |
-|---|---|
-| `ghidrasql` starts and answers `ghidrasql_help`, but `verify` reports `not-testable`/fails on the `funcs` count (empty project) | Expected. Continue below to investigate the bootstrap. |
-| `ghidrasql.exe` still fails to start | A gap this task's rulings missed. Do not guess further - record the exact error verbatim in the plan's ledger note and stop; this is the "plan so broken every path forward is a guess" case. |
-
-If it starts: run `ghidrasql --help` in full (already partially captured in Task 9's ledger
-note; capture the complete text this time) and identify the exact flag combination for
-importing and analyzing a binary into an existing `--project` non-interactively. Try it once
-by hand against `ntdll.dll` (mirrors pdbsql's own `ntdll` bootstrap choice in Task 7).
-
-- If a single, deterministic, non-interactive command imports and analyzes a binary and then
-  exits (success/failure observable from its exit code): codify it as a small
-  `Initialize-GhidrasqlProject` helper called from `Install-NativeSseServer` only when
-  `$Server.projectRoot` is empty of any prior project files, write a mocked test for it
-  (process-invocation mocked, same pattern as the rest of this task), and re-run Step 7's full
-  suite. Commit as its own step.
-- If it does not exit cleanly (blocks serving, needs a GUI, or the CLI's behavior is not
-  reliably scriptable) - **do not force it into the installer.** Record it as a known,
-  deferred gap the same way Task 9 recorded the original one: `ghidrasql` ships `enabled:
-  true` and starts correctly, but its `verify` check may report a zero `funcs` count on a
-  freshly-provisioned host until someone manually imports at least one binary through
-  `ghidrasql`'s own tooling. Say so in the ledger and in `MVP.md`.
-
-Then, regardless of which branch above applies, once `ghidrasql_query` answers at least one
-real query (even `SELECT COUNT(*) AS n FROM funcs` returning `0` is a real, connected answer -
-distinct from Task 9's `not-testable`):
-
-```bash
-powershell.exe -NoProfile -Command ".\Install-REAgent.ps1 -VerifyOnly"
-```
-
-Record the exact result in the ledger. If `funcs` is non-zero, `verify` passes outright and
-`ghidrasql`'s definition-of-done item 2 (Task 9) is now met. If `funcs` is zero because the
-bootstrap was deferred per the ruling above, flip `enabled: true` anyway - the server itself
-is correctly wired and connected, which is this task's own scope - and update `MVP.md`'s
-ghidrasql row to describe the narrower remaining gap precisely, replacing the current "ships
-disabled" line.
-
-Then confirm idempotency:
-```bash
-powershell.exe -NoProfile -Command ".\Install-REAgent.ps1 -Phases 3"
-```
-Expected: no launcher rewrite, no restart line, extension already current.
-
-- [ ] **Step 10: Update the docs that described this as a gap**
-
-- `docs/superpowers/specs/2026-09-09-sql-query-layer-design.md` SS4: the `launch-ghidrasql.cmd`
-  comment currently reads `<- generated; carries --readonly and the project`; add `--ghidra`.
-- `docs/mvp/MVP.md`: ghidrasql's row currently reads `installed, disabled` with the
-  `--ghidra` gap as its stated reason. Update to whatever Step 9 actually proved.
-
-- [ ] **Step 11: Commit the live outcome and doc updates**
-
-```bash
-git add re-agent.config.json docs/superpowers/plans/2026-09-09-sql-query-layer.md docs/superpowers/specs/2026-09-09-sql-query-layer-design.md docs/mvp/MVP.md
-git commit -m "Wire ghidrasql's connection mode; record its live outcome"
-```
+(`re-agent.config.json` - `enabled: true`, `projectName`, `bootstrap` - was already committed
+as part of the fix-round-2 commit `6f4c3ba`, alongside the code that consumes those fields.)
 
 ---
 
