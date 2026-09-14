@@ -336,3 +336,56 @@ Describe 'Test-AgentSchema' {
     }
 }
 
+Describe 'Test-McpServerTransport' {
+    BeforeAll {
+        function Get-TestServerConfig {
+            param($Servers)
+            [PSCustomObject]@{ mcpServers = $Servers }
+        }
+        function Get-TestServer {
+            param($Name = 'pdbsql', $Transport = 'sse', $Auth = 'none',
+                  $Reason = 'upstream MCP endpoint accepts no credential; loopback-only',
+                  $Pdb = $null)
+            $o = [PSCustomObject]@{ name = $Name; enabled = $true; kind = 'native-sse'
+                transport = $Transport; bind = '127.0.0.1'; port = 8770; path = '/sse'
+                auth = $Auth; authExemptReason = $Reason }
+            if ($null -ne $Pdb) { $o | Add-Member -NotePropertyName pdb -NotePropertyValue $Pdb }
+            return $o
+        }
+    }
+
+    It 'accepts sse as a transport' {
+        { Test-McpServerTransport -Config (Get-TestServerConfig @(Get-TestServer)) } |
+            Should -Not -Throw
+    }
+
+    It 'still accepts the existing http transport unchanged' {
+        # Every shipped server uses this; the new value must not narrow the old one.
+        { Test-McpServerTransport -Config (Get-TestServerConfig @(
+                    Get-TestServer -Transport 'http')) } | Should -Not -Throw
+    }
+
+    It 'rejects an unknown transport' {
+        { Test-McpServerTransport -Config (Get-TestServerConfig @(
+                    Get-TestServer -Transport 'grpc')) } | Should -Throw '*grpc*'
+    }
+
+    It 'rejects an unauthenticated server with no recorded reason' {
+        # The exemption must be a decision, not an omission.
+        { Test-McpServerTransport -Config (Get-TestServerConfig @(
+                    Get-TestServer -Reason '')) } | Should -Throw '*authExemptReason*'
+    }
+
+    It 'accepts a pdb block naming a module' {
+        $pdb = [PSCustomObject]@{ module = 'ntdll'; warmTables = @('publics') }
+        { Test-McpServerTransport -Config (Get-TestServerConfig @(
+                    Get-TestServer -Pdb $pdb)) } | Should -Not -Throw
+    }
+
+    It 'rejects a pdb block with no module' {
+        $pdb = [PSCustomObject]@{ warmTables = @('publics') }
+        { Test-McpServerTransport -Config (Get-TestServerConfig @(
+                    Get-TestServer -Pdb $pdb)) } | Should -Throw '*module*'
+    }
+}
+
