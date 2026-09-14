@@ -155,7 +155,7 @@
       "verify": {
         "tool": "pdbsql_query",
         "args": { "query": "SELECT COUNT(*) AS n FROM publics" },
-        "expect": "\"n\":\\s*[1-9]"
+        "expect": "\"rows\":\\s*\\[\\s*\\[\\s*\\\"[1-9]"
       }
     },
     {
