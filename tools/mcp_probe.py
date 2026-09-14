@@ -35,6 +35,7 @@ import os
 import re
 import socket
 import sys
+import time
 
 
 def parse_pairs(values):
@@ -126,6 +127,14 @@ def _read_headers(reader):
     return status_line, headers
 
 
+def _status_code(status_line):
+    """Parse the numeric status code out of an HTTP status line."""
+    parts = status_line.split(" ", 2)
+    if len(parts) < 2:
+        raise RuntimeError("malformed HTTP status line: %r" % status_line)
+    return int(parts[1])
+
+
 def _read_sse_endpoint(reader):
     """Chunk-decode the SSE handshake body until the endpoint event arrives.
 
@@ -170,9 +179,14 @@ def _post_json_rpc(host, port, path, payload, timeout):
     try:
         sock.sendall(request.encode("latin-1") + body)
         reader = _SocketLineReader(sock)
-        _, headers = _read_headers(reader)
-        length = next(int(v) for k, v in headers if k == "content-length")
-        response_body = reader.read_exact(length)
+        status_line, headers = _read_headers(reader)
+        code = _status_code(status_line)
+        if code < 200 or code >= 300:
+            raise RuntimeError("POST %s got HTTP %d" % (path, code))
+        length_value = next((v for k, v in headers if k == "content-length"), None)
+        if length_value is None:
+            raise RuntimeError("POST %s response had no Content-Length header" % path)
+        response_body = reader.read_exact(int(length_value))
     finally:
         sock.close()
     return json.loads(response_body.decode("utf-8"))
@@ -212,8 +226,26 @@ class _BlockingSSESession:
         self._port = parsed.port or 80
         self._headers = headers
         self._timeout = timeout
+        # A wall-clock deadline, not a per-call timeout: every socket op below
+        # asks for only what's left of it, so a session with several
+        # round-trips (init + notification + list_tools + each planned call)
+        # is bounded by args.timeout total, matching stdio/http instead of
+        # letting each op claim a fresh full timeout of its own.
+        self._deadline = time.monotonic() + timeout
         self._next_id = 0
-        self._endpoint_path = self._handshake(parsed.path or "/")
+        self._sse_sock = None
+        try:
+            self._endpoint_path = self._handshake(parsed.path or "/")
+        except Exception:
+            if self._sse_sock is not None:
+                self._sse_sock.close()
+            raise
+
+    def _remaining(self):
+        remaining = self._deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("timed out after %ss" % self._timeout)
+        return remaining
 
     def _handshake(self, path):
         # pdbsql ties the session to this connection: closing it invalidates
@@ -221,7 +253,9 @@ class _BlockingSSESession:
         # for the session's whole lifetime rather than closed once the
         # endpoint path is captured - see the task-7fix-report's live-test
         # finding for how this was discovered.
-        self._sse_sock = socket.create_connection((self._host, self._port), timeout=self._timeout)
+        self._sse_sock = socket.create_connection(
+            (self._host, self._port), timeout=self._remaining()
+        )
         lines = [
             "GET %s HTTP/1.1" % path,
             "Host: %s:%d" % (self._host, self._port),
@@ -237,12 +271,15 @@ class _BlockingSSESession:
         return _read_sse_endpoint(reader)
 
     def close(self):
-        self._sse_sock.close()
+        if self._sse_sock is not None:
+            self._sse_sock.close()
 
     def _request(self, method, params):
         self._next_id += 1
         payload = {"jsonrpc": "2.0", "id": self._next_id, "method": method, "params": params}
-        return _post_json_rpc(self._host, self._port, self._endpoint_path, payload, self._timeout)
+        return _post_json_rpc(
+            self._host, self._port, self._endpoint_path, payload, self._remaining()
+        )
 
     async def initialize(self):
         response = self._request(
@@ -260,7 +297,7 @@ class _BlockingSSESession:
             self._port,
             self._endpoint_path,
             {"jsonrpc": "2.0", "method": "notifications/initialized"},
-            self._timeout,
+            self._remaining(),
         )
         return response.get("result")
 
