@@ -2,6 +2,9 @@ BeforeAll {
     . "$PSScriptRoot/../tools/Build-LibGhidraExtension.ps1" -DotSourceOnly
 
     function New-FixtureZip {
+        # Pure test fixture factory: builds and returns a zip path, no ShouldProcess needed.
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+            'PSUseShouldProcessForStateChangingFunctions', '')]
         param([string]$VersionLine)
         Add-Type -AssemblyName System.IO.Compression.FileSystem
         $dir = Join-Path ([IO.Path]::GetTempPath()) ("ext-" + [guid]::NewGuid())

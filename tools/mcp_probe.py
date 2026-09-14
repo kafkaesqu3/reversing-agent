@@ -462,7 +462,7 @@ def main():
     if args.transport == "stdio" and not args.command:
         parser.error("--command is required for stdio")
     if args.transport in ("http", "sse") and not args.url:
-        parser.error("--url is required for http")
+        parser.error("--url is required for http and sse")
 
     if args.transport == "stdio":
         coroutine = probe_stdio(args)
