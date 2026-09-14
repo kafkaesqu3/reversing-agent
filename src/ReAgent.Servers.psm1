@@ -736,6 +736,115 @@ function Install-VenvHttpServer {
         -Command $command
 }
 
+function Get-NativeSseLaunchArgument {
+    <#
+    .SYNOPSIS
+        Builds the launcher argument list for a native-sse server.
+    .DESCRIPTION
+        pdbsql binds ONE PDB per process, taken as a positional argument at
+        launch, so the PDB belongs in the launcher rather than in a fan-out of
+        one server per PDB (spec SQ7). It also defaults to a RANDOM port in
+        9000-9999, so the port is always passed explicitly - ports are
+        allocated statically from config.
+
+        ghidrasql carries --readonly instead. That flag, not the tool
+        classification, is what actually makes its single *_query tool
+        read-only; check Q0 verifies it survived into the launcher.
+    .PARAMETER Server
+        One entry from the config's mcpServers[].
+    .PARAMETER Config
+        The parsed configuration object.
+    .OUTPUTS
+        [string[]] Arguments, in launcher order.
+    .EXAMPLE
+        Get-NativeSseLaunchArgument -Server $srv -Config $cfg
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Server,
+        [Parameter(Mandatory)][object]$Config
+    )
+
+    $launchArgs = @()
+    if ($Server.PSObject.Properties.Name -contains 'pdb') {
+        $root = $Config.paths.symbolCache
+        $module = "$($Server.pdb.module)"
+        $pdb = Resolve-PdbPath -SymbolRoot $root -Module $module
+        if (-not $pdb) {
+            throw ("Cannot launch '$($Server.name)': PDB module '$module' does not resolve " +
+                "to a file under '$root'. Warm the symbol cache first.")
+        }
+        $launchArgs += $pdb
+        if ($Server.pdb.PSObject.Properties.Name -contains 'warmTables') {
+            $launchArgs += @('--warm-tables', (@($Server.pdb.warmTables) -join ','))
+        }
+    }
+    if ($Server.PSObject.Properties.Name -contains 'readonly' -and $Server.readonly) {
+        $launchArgs += '--readonly'
+    }
+    if ($Server.PSObject.Properties.Name -contains 'projectRoot') {
+        $launchArgs += @('--project', "$($Server.projectRoot)")
+    }
+    $launchArgs += @('--mcp', "$($Server.port)")
+    if ($Server.PSObject.Properties.Name -contains 'bind') {
+        $launchArgs += @('--bind', "$($Server.bind)")
+    }
+    return $launchArgs
+}
+
+function Install-NativeSseServer {
+    <#
+    .SYNOPSIS
+        Installs a pinned native binary that serves MCP over SSE.
+    .DESCRIPTION
+        Extracts a hash-verified release zip, writes the launcher only when its
+        content differs (HANDOFF defect 7 - its timestamp drives the restart
+        decision), and registers the logon Scheduled Task. Claude Code cannot
+        spawn a long-running HTTP server, which is the same constraint that
+        produced L10 for pyghidra-mcp.
+    .PARAMETER Server
+        One entry from the config's mcpServers[].
+    .PARAMETER Config
+        The parsed configuration object.
+    .PARAMETER Inventory
+        Host inventory from Get-HostInventory.
+    .OUTPUTS
+        [PSCustomObject] A server result from New-ServerResult.
+    .EXAMPLE
+        Install-NativeSseServer -Server $srv -Config $cfg -Inventory $inv
+    #>
+    [CmdletBinding()]
+    # Inventory is part of the uniform handler signature the dispatcher calls with.
+    # This handler does not need it: a pinned native binary carries no host-detected
+    # dependency the way mcp-windbg needs cdb.exe or pyghidra-mcp needs Ghidra.
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '')]
+    param(
+        [Parameter(Mandatory)][object]$Server,
+        [Parameter(Mandatory)][object]$Config,
+        [Parameter(Mandatory)][object]$Inventory
+    )
+
+    $installDir = Join-Path (Join-Path $Config.paths.toolRoot 'mcp') $Server.name
+    $zip = Get-VerifiedRelease -Server $Server -Config $Config
+    if (-not (Test-Path -LiteralPath $installDir)) {
+        New-Item -ItemType Directory -Path $installDir -Force | Out-Null
+    }
+    Expand-Archive -LiteralPath $zip -DestinationPath $installDir -Force
+
+    $exe = Get-ChildItem -LiteralPath $installDir -Filter "$($Server.name).exe" -Recurse -File |
+        Select-Object -First 1
+    if ($null -eq $exe) {
+        return New-ServerResult -Server $Server -Status 'failed' -Reason (
+            "The release archive contained no $($Server.name).exe.")
+    }
+
+    $launcher = Join-Path $installDir "launch-$($Server.name).cmd"
+    Write-ServerLauncher -Path $launcher -Executable $exe.FullName `
+        -Arguments (Get-NativeSseLaunchArgument -Server $Server -Config $Config) | Out-Null
+    Register-ServerScheduledTask -Name $Server.scheduledTask -LauncherPath $launcher | Out-Null
+    return New-ServerResult -Server $Server -Status 'installed'
+}
+
 function Install-McpServer {
     <#
     .SYNOPSIS
@@ -783,6 +892,10 @@ function Install-McpServer {
             }
             'plugin-inproc' {
                 return Install-PluginInprocServer -Server $Server -Config $Config `
+                    -Inventory $Inventory
+            }
+            'native-sse' {
+                return Install-NativeSseServer -Server $Server -Config $Config `
                     -Inventory $Inventory
             }
             default {
@@ -1432,4 +1545,5 @@ Export-ModuleMember -Function New-ServerResult, Get-VenvPython, Get-VenvPackageV
     Test-TcpPortOpen, Wait-ServerListening, `
     Install-GuiPluginHttpServer, Install-PluginInprocServer, Get-VerifiedRelease, `
     Expand-X64dbgPlugin, Invoke-Download, Copy-PluginFile, Get-TreeHash, `
-    Get-VerifiedGitHubArchive, Expand-SkillPack
+    Get-VerifiedGitHubArchive, Expand-SkillPack, Get-NativeSseLaunchArgument, `
+    Install-NativeSseServer

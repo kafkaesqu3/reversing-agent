@@ -1009,3 +1009,130 @@ Describe 'Wait-ServerListening' {
             Should -BeFalse
     }
 }
+
+Describe 'Get-NativeSseLaunchArgument' {
+    BeforeAll {
+        $script:Cfg = [PSCustomObject]@{
+            paths = [PSCustomObject]@{ toolRoot = 'C:\re'; stateRoot = 'C:\re\state'
+                symbolCache = 'C:\re\symbols' }
+        }
+    }
+
+    It 'puts the resolved PDB first and pins an explicit port' {
+        # pdbsql defaults to a RANDOM port in 9000-9999. Ports are allocated
+        # statically from config; a server must never pick its own.
+        Mock -ModuleName ReAgent.Servers Resolve-PdbPath {
+            'C:\re\symbols\ntdll.pdb\GUID\ntdll.pdb'
+        }
+        $srv = [PSCustomObject]@{ name = 'pdbsql'; port = 8770
+            pdb = [PSCustomObject]@{ module = 'ntdll'; warmTables = @('publics', 'udts') } }
+        $a = Get-NativeSseLaunchArgument -Server $srv -Config $script:Cfg
+        $a[0] | Should -Be 'C:\re\symbols\ntdll.pdb\GUID\ntdll.pdb'
+        $a | Should -Contain '--mcp'
+        $a | Should -Contain '8770'
+        ($a -join ' ') | Should -BeLike '*--warm-tables publics,udts*'
+    }
+
+    It 'binds loopback explicitly' {
+        Mock -ModuleName ReAgent.Servers Resolve-PdbPath { 'C:\pdb\ntdll.pdb' }
+        $srv = [PSCustomObject]@{ name = 'pdbsql'; port = 8770; bind = '127.0.0.1'
+            pdb = [PSCustomObject]@{ module = 'ntdll' } }
+        (Get-NativeSseLaunchArgument -Server $srv -Config $script:Cfg) |
+            Should -Contain '127.0.0.1'
+    }
+
+    It 'passes --readonly for a server that declares it' {
+        # ghidrasql: A3 cannot see a launcher flag, so Q0 checks this separately,
+        # but the flag has to be here for Q0 to find.
+        $srv = [PSCustomObject]@{ name = 'ghidrasql'; port = 8771; bind = '127.0.0.1'
+            readonly = $true; projectRoot = 'C:\re\mcp\ghidrasql\projects' }
+        (Get-NativeSseLaunchArgument -Server $srv -Config $script:Cfg) |
+            Should -Contain '--readonly'
+    }
+
+    It 'throws when a pdb server names a module the cache lacks' {
+        Mock -ModuleName ReAgent.Servers Resolve-PdbPath { $null }
+        $srv = [PSCustomObject]@{ name = 'pdbsql'; port = 8770
+            pdb = [PSCustomObject]@{ module = 'nosuch' } }
+        { Get-NativeSseLaunchArgument -Server $srv -Config $script:Cfg } |
+            Should -Throw '*nosuch*'
+    }
+}
+
+Describe 'Install-McpServer dispatch' {
+    It 'routes kind native-sse to its handler rather than reporting no handler' {
+        Mock -ModuleName ReAgent.Servers Install-NativeSseServer {
+            New-ServerResult -Server $Server -Status 'installed'
+        }
+        $srv = Get-TestServer -Name 'pdbsql' -Kind 'native-sse'
+        $r = Install-McpServer -Server $srv -Config ([PSCustomObject]@{}) `
+            -Inventory ([PSCustomObject]@{})
+        $r.status | Should -Be 'installed'
+        Should -Invoke -ModuleName ReAgent.Servers Install-NativeSseServer -Times 1 -Exactly
+    }
+}
+
+Describe 'Install-NativeSseServer' {
+    BeforeAll {
+        $script:SseSrv = [PSCustomObject]@{
+            name          = 'pdbsql'; kind = 'native-sse'; enabled = $true
+            transport     = 'http'; bind = '127.0.0.1'; port = 8770; path = '/mcp'
+            auth          = 'none'; scheduledTask = 'ReLab-pdbsql'
+            pdb           = [PSCustomObject]@{ module = 'ntdll' }
+            source        = [PSCustomObject]@{ repo = 'x/pdbsql'; pin = 'v1.0'
+                sha256 = [PSCustomObject]@{ 'pdbsql-win64.zip' = 'deadbeef' } }
+        }
+    }
+
+    It 'extracts the release, writes the launcher, and registers the scheduled task' {
+        Mock -ModuleName ReAgent.Servers Resolve-PdbPath {
+            'C:\re\symbols\ntdll.pdb\GUID\ntdll.pdb'
+        }
+        Mock -ModuleName ReAgent.Servers Write-ServerLauncher {
+            'C:\re\mcp\pdbsql\launch-pdbsql.cmd'
+        }
+        Mock -ModuleName ReAgent.Servers Register-ServerScheduledTask { $true }
+
+        $staging = Join-Path $TestDrive 'pdbsql-release'
+        $null = New-Item -ItemType Directory -Path $staging -Force
+        $null = New-Item -ItemType File -Path (Join-Path $staging 'pdbsql.exe') -Force
+        $zip = Join-Path $TestDrive 'pdbsql.zip'
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [IO.Compression.ZipFile]::CreateFromDirectory($staging, $zip)
+        Mock -ModuleName ReAgent.Servers Get-VerifiedRelease { $zip }
+
+        $toolRoot = Join-Path $TestDrive 'case1'
+        $cfg = [PSCustomObject]@{
+            paths = [PSCustomObject]@{ toolRoot = $toolRoot; symbolCache = 'C:\re\symbols' }
+        }
+        $r = Install-NativeSseServer -Server $script:SseSrv -Config $cfg `
+            -Inventory ([PSCustomObject]@{})
+
+        $r.Status | Should -Be 'installed'
+        Test-Path (Join-Path $toolRoot 'mcp\pdbsql\pdbsql.exe') | Should -BeTrue
+        Should -Invoke -ModuleName ReAgent.Servers Register-ServerScheduledTask -Times 1 -Exactly `
+            -ParameterFilter { $Name -eq 'ReLab-pdbsql' }
+    }
+
+    It 'reports failed when the release archive has no matching exe' {
+        Mock -ModuleName ReAgent.Servers Resolve-PdbPath {
+            'C:\re\symbols\ntdll.pdb\GUID\ntdll.pdb'
+        }
+        $staging = Join-Path $TestDrive 'pdbsql-empty'
+        $null = New-Item -ItemType Directory -Path $staging -Force
+        $null = New-Item -ItemType File -Path (Join-Path $staging 'readme.txt') -Force
+        $zip = Join-Path $TestDrive 'pdbsql-empty.zip'
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [IO.Compression.ZipFile]::CreateFromDirectory($staging, $zip)
+        Mock -ModuleName ReAgent.Servers Get-VerifiedRelease { $zip }
+
+        $cfg = [PSCustomObject]@{
+            paths = [PSCustomObject]@{ toolRoot = (Join-Path $TestDrive 'case2')
+                symbolCache = 'C:\re\symbols' }
+        }
+        $r = Install-NativeSseServer -Server $script:SseSrv -Config $cfg `
+            -Inventory ([PSCustomObject]@{})
+        $r.Status | Should -Be 'failed'
+        $r.Reason | Should -BeLike '*pdbsql.exe*'
+    }
+}
