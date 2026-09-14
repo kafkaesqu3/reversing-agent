@@ -842,8 +842,9 @@ function Initialize-GhidraProjectDependency {
     .PARAMETER Inventory
         Host inventory from Get-HostInventory.
     .OUTPUTS
-        [string] A not-installed reason when the extension was never built on
-        this host, or $null when the project directory and extension are ready.
+        [string] A not-installed reason when no Ghidra was found on this host or the
+        extension was never built, or $null when the project directory and extension
+        are ready.
     .EXAMPLE
         Initialize-GhidraProjectDependency -Server $srv -Inventory $inv
     #>
@@ -853,6 +854,10 @@ function Initialize-GhidraProjectDependency {
         [Parameter(Mandatory)][object]$Inventory
     )
 
+    if (-not $Inventory.GhidraRoot) {
+        return ('No Ghidra installation was found on this host, so the LibGhidraHost ' +
+            'extension cannot be installed.')
+    }
     if (-not (Test-Path -LiteralPath $Server.projectRoot)) {
         New-Item -ItemType Directory -Path $Server.projectRoot -Force | Out-Null
     }

@@ -1412,6 +1412,24 @@ Describe 'Install-NativeSseServer, ghidrasql extension wiring' {
         $r.Status | Should -Be 'not-installed'
         $r.Reason | Should -BeLike '*Build-LibGhidraExtension*'
     }
+
+    It 'reports not-installed, not failed, when no Ghidra was found even with a built extension' {
+        # Install-LibGhidraExtension's -GhidraRoot is Mandatory][string]; passing it $null
+        # throws a raw ParameterBindingException instead of a readable reason, so this
+        # must be caught before that call, not left to fail there.
+        $toolRoot = Join-Path $TestDrive 'case-gh3'
+        $script:GhSrv.projectRoot = Join-Path $toolRoot 'mcp\ghidrasql\projects'
+        Mock -ModuleName ReAgent.Servers Resolve-LibGhidraExtensionZip { 'C:\vc\ext.zip' }
+        Mock -ModuleName ReAgent.Servers Install-LibGhidraExtension { $true }
+
+        $cfg = [PSCustomObject]@{ paths = [PSCustomObject]@{ toolRoot = $toolRoot } }
+        $inv = [PSCustomObject]@{ GhidraRoot = $null }
+        $r = Install-NativeSseServer -Server $script:GhSrv -Config $cfg -Inventory $inv
+
+        $r.Status | Should -Be 'not-installed'
+        $r.Reason | Should -BeLike '*Ghidra*'
+        Should -Invoke -ModuleName ReAgent.Servers Install-LibGhidraExtension -Times 0
+    }
 }
 
 
