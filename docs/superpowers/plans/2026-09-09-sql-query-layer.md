@@ -1667,7 +1667,60 @@ powershell.exe -NoProfile -Command "Import-Module Pester -MinimumVersion 5.5.0; 
 ```
 Expected: `FAILED=0` and no analyzer output.
 
-- [ ] **Step 5: LIVE — prove a real tool call**
+- [x] **Step 5: LIVE — install attempted; found an unaddressed gap, not achieved**
+
+Ran `.\Install-REAgent.ps1 -Phases 0,3,6,7` (the combined-invocation live command established while
+verifying pdbsql in Task 7 - see that task's ledger note; a bare `-Phases 3` then separate
+`-VerifyOnly` cannot converge for a server new to the manifest). Install itself succeeded:
+ghidrasql downloaded, hash-verified, scheduled task `ReLab-ghidrasql` registered.
+
+`ghidrasql live call` reports **not-testable**, not pass, because `ghidrasql.exe` fails to start
+at all: `error: no connection mode specified` - `use --ghidra <path> for headless mode ... or
+use --url <url> to connect to a running LibGhidraHost`. Confirmed by running the exact generated
+launcher command directly and by reading `ghidrasql --help` in full.
+
+**Root cause: two real gaps, present across this plan's own tasks, that no task ever closed.**
+
+1. `Get-NativeSseLaunchArgument` (Task 5, `src/ReAgent.Servers.psm1`) never adds a `--ghidra
+   <GhidraRoot>` (or `--url`) flag for ghidrasql - the launcher it builds has `--readonly
+   --project <dir> --mcp <port> --bind <addr>` and nothing telling ghidrasql how to reach Ghidra
+   at all. `--ghidra <path>` (headless mode) is the only mode compatible with an unattended
+   logon-scheduled-task service - `--url` requires a human to manually start LibGhidraHost
+   inside an interactive Ghidra GUI session (`Tools > libghidra Host > Start Server`), which
+   contradicts the whole point of running this as a background service. Headless mode DOES use
+   LibGhidraHost internally (`--rpc-port`, "LibGhidraHost RPC port (headless only)" per
+   `ghidrasql --help`) - so Task 1's entire gate (building and stamping the extension for this
+   host's Ghidra) is exactly the right prerequisite; the plan just never wired the resulting path
+   into the launcher.
+2. `Install-LibGhidraExtension` (Task 8) is fully implemented, tested, and exported - but is
+   **never called from anywhere in the actual install flow.** Grepping this plan's own text
+   confirms it: every reference to the function is its own definition, its own tests, or its own
+   `.EXAMPLE` docstring line - no task ever instructs `Install-NativeSseServer` or
+   `Install-McpServer`'s `ghidrasql` handling to call it. The built extension
+   (`9C6ECFC592AFA73438DDE6964A29BF36CB8BFE1BBAE44B2BC8424CE0F2C42EEF`, recorded in Task 1's gate
+   outcome above) has never actually been installed into this host's real Ghidra distribution.
+
+A third, smaller gap surfaced investigating the above: even with `--ghidra` wired in, the
+project directory (`--project C:e\mcp\ghidrasql\projects`) starts empty - `SELECT COUNT(*)
+AS n FROM funcs` would return zero rows until at least one binary is imported and analyzed
+(`--binary <path>`) into it, the same bootstrapping problem Task 7 solved for pdbsql by warming
+`ntdll`'s PDB in the symbol cache ahead of time. No task specifies an equivalent bootstrap for
+ghidrasql.
+
+**Ruling, with the user's explicit direction: record this as a known, deferred gap rather than
+design and implement the fix now.** This is new scope - a missing integration across three of
+this plan's own tasks, not a bug in any single one's diff, and not something any task's review
+could have caught (it only surfaces by actually starting the binary, which no task's test suite
+does). Definition-of-done item 2 (ghidrasql live pass) is NOT met. Recommended follow-up, for
+whoever picks this up: (a) add `--ghidra <GhidraRoot>` to `Get-NativeSseLaunchArgument`'s
+ghidrasql branch, resolving `GhidraRoot` via the same `Find-GhidraRoot` Task 1's build script
+already uses; (b) call `Install-LibGhidraExtension` from `Install-NativeSseServer` before
+building the ghidrasql launch command, using the SHA-256 recorded in Task 1's gate outcome to
+re-verify the pinned build; (c) ensure `--project <dir>` exists before first launch; (d)
+bootstrap the project with at least one imported+analyzed binary during install (ntdll.dll is a
+reasonable, always-present choice, mirroring pdbsql's own bootstrap).
+
+
 
 Definition-of-done item 2.
 
@@ -1679,7 +1732,29 @@ powershell.exe -NoProfile -Command ".\Install-REAgent.ps1 -VerifyOnly"
 Expected: `ghidrasql` reports `pass` with a non-zero `funcs` count, and `pyghidra-mcp` still
 reports `pass` — the two share a Ghidra distribution and must both work.
 
-- [ ] **Step 6: Verify Q0 catches a stripped flag, then restore**
+- [x] **Step 6: Verify Q0 catches a stripped flag, then restore**
+
+Done independently of Step 5's gap - Q0 (`Test-ReadOnlyLaunchCheck`) is a pure static-file check
+with no dependency on ghidrasql actually running. Stripped ` --readonly` from the real generated
+`C:e\mcp\ghidrasql\launch-ghidrasql.cmd`, called `Get-SqlCheck` directly:
+
+```
+Status: fail
+Detail: [Q0] Server 'ghidrasql' is declared read-only but its launcher does not pass --readonly...
+```
+
+Restored the launcher to its exact original content (byte-for-byte, written through Python to
+avoid a shell-escaping mishap that first corrupted it - caught immediately by inspecting the
+restored file's raw content before re-checking), re-ran the check:
+
+```
+Status: pass
+Detail: 2 native-sse server(s) on record; Q0/Q1 found no issues.
+```
+
+**Q0's red-green proof - the control this whole check exists for - is confirmed working.**
+
+
 
 The red-green check for the control this whole task rests on.
 
@@ -1697,7 +1772,9 @@ powershell.exe -NoProfile -Command ".\Install-REAgent.ps1 -VerifyOnly"
 ```
 Expected: Q0 passes.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
+
+The code/config/test commit (`48fb371`) landed as its own task earlier; this plan file's record of Steps 5-6's live outcome is committed separately, right after this section.
 
 ```bash
 git add data/tool-catalog.json re-agent.config.json tests/Integration.Tests.ps1
