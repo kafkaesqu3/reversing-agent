@@ -164,6 +164,8 @@ fixed by what each tool actually defaults to, because two of the three HTTP serv
 | `x64dbg-x32` | **9095** | Plugin default, compiled in per architecture |
 | `binaryninja` | **24642** | Vendor default — what `Copy Connection Info` and all BN docs show |
 | `ghidramcp` | 8761 | Disabled; reserved so nothing else claims it |
+| `pdbsql` | **8770** | Ours to choose; native binary, defaults to a random port so it must be pinned |
+| `ghidrasql` | 8771 | Disabled; reserved so nothing else claims it, pending its `--ghidra` connection-mode wiring |
 
 Diverging from a tool's own default buys nothing and breaks every piece of its documentation. Every port
 lands in `ports.json` regardless, so config generation and any future firewall rules read from one place.
