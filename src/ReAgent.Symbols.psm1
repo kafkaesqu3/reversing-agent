@@ -137,5 +137,77 @@ function Invoke-SymbolPrewarm {
     }
 }
 
+
+function Resolve-PdbPath {
+    <#
+    .SYNOPSIS
+        Resolves a module name to its PDB file inside a symbol-server cache.
+    .DESCRIPTION
+        A symbol-server cache nests one level deeper than it looks:
+        <root>\ntdll.pdb is a DIRECTORY holding <GUID>\ntdll.pdb. Handing the
+        directory to a PDB reader fails with HRESULT 0x806D0005, reported as
+        'file not found or inaccessible' - an error that names neither the
+        directory nor the cause.
+
+        The newest match wins when a cache holds several builds of one module,
+        which is what a re-warmed cache looks like.
+    .PARAMETER SymbolRoot
+        The cache root, e.g. C:\re\symbols.
+    .PARAMETER Module
+        Module name without extension, e.g. 'ntdll'.
+    .OUTPUTS
+        [string] Full path to the .pdb file, or $null when absent.
+    .EXAMPLE
+        Resolve-PdbPath -SymbolRoot 'C:\re\symbols' -Module 'ntdll'
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$SymbolRoot,
+        [Parameter(Mandatory)][string]$Module
+    )
+
+    $container = Join-Path $SymbolRoot "$Module.pdb"
+    if (-not (Test-Path -LiteralPath $container -PathType Container)) { return $null }
+    $match = Get-ChildItem -LiteralPath $container -Filter "$Module.pdb" -File -Recurse `
+        -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+    if ($null -eq $match) { return $null }
+    return $match.FullName
+}
+
+function Test-PdbPathCheck {
+    <#
+    .SYNOPSIS
+        Runs check Q1: a configured pdb module must resolve to a real file.
+    .DESCRIPTION
+        Reads only the repo's config and the symbol cache, so it runs on every
+        verification including -VerifyOnly on a host where nothing is installed.
+        A server with no pdb block is not this check's business.
+    .PARAMETER Server
+        One entry from the config's mcpServers[].
+    .PARAMETER SymbolRoot
+        The symbol cache root.
+    .OUTPUTS
+        [array] Zero or one {Check='Q1'; Message} findings.
+    .EXAMPLE
+        Test-PdbPathCheck -Server $srv -SymbolRoot 'C:\re\symbols'
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Server,
+        [Parameter(Mandatory)][string]$SymbolRoot
+    )
+
+    if ($Server.PSObject.Properties.Name -notcontains 'pdb') { return @() }
+    $module = "$($Server.pdb.module)"
+    if (Resolve-PdbPath -SymbolRoot $SymbolRoot -Module $module) { return @() }
+    return @([PSCustomObject]@{ Check = 'Q1'; Message = (
+                "Server '$($Server.name)' names PDB module '$module', which does not " +
+                "resolve to a file under '$SymbolRoot'. Passing the container directory " +
+                'fails inside pdbsql with HRESULT 0x806D0005 ("file not found or ' +
+                'inaccessible"). Warm the symbol cache for this module first.') })
+}
+
 Export-ModuleMember -Function Get-SymbolPathValue, Get-MachineSymbolPath, `
-    Test-SymbolsReady, Install-Symbols, Invoke-SymbolPrewarm
+    Test-SymbolsReady, Install-Symbols, Invoke-SymbolPrewarm, Resolve-PdbPath, `
+    Test-PdbPathCheck

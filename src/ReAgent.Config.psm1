@@ -1,7 +1,7 @@
 Set-StrictMode -Version Latest
 
 $Script:ValidKinds = @('plugin-inproc', 'venv-stdio', 'venv-http',
-    'gui-builtin-http', 'gui-plugin-http')
+    'gui-builtin-http', 'gui-plugin-http', 'native-sse')
 
 function Get-ReAgentConfig {
     <#
@@ -76,6 +76,7 @@ function Test-ReAgentConfigSchema {
     }
     $null = Test-SkillPackSchema -Config $Config
     $null = Test-AgentSchema -Config $Config
+    $null = Test-McpServerTransport -Config $Config
     return $true
 }
 
@@ -359,6 +360,54 @@ function Test-AgentSchema {
     }
 }
 
+$script:ValidTransport = @('stdio', 'http', 'sse')
+
+function Test-McpServerTransport {
+    <#
+    .SYNOPSIS
+        Validates transport, auth exemption and the optional pdb block.
+    .DESCRIPTION
+        'sse' joins the existing values rather than replacing them: pdbsql and
+        ghidrasql serve MCP over SSE, every previously shipped server does not,
+        and both must keep loading.
+
+        An HTTP-family server carrying no token must name a reason. The
+        exemption already exists for pyghidra-mcp (L10) and is reused rather
+        than reinvented, so an unauthenticated server is always a recorded
+        decision instead of an oversight.
+    .PARAMETER Config
+        The parsed configuration object.
+    .EXAMPLE
+        Test-McpServerTransport -Config $cfg
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][object]$Config)
+
+    foreach ($s in @($Config.mcpServers)) {
+        $transport = "$($s.transport)"
+        if ($script:ValidTransport -notcontains $transport) {
+            throw ("Server '$($s.name)' declares transport '$transport'. Valid: " +
+                "[$($script:ValidTransport -join ', ')].")
+        }
+        $hasAuth = $s.PSObject.Properties.Name -contains 'auth'
+        if ($transport -ne 'stdio' -and $hasAuth -and "$($s.auth)" -eq 'none') {
+            $reason = ''
+            if ($s.PSObject.Properties.Name -contains 'authExemptReason') {
+                $reason = "$($s.authExemptReason)"
+            }
+            if (-not $reason.Trim()) {
+                throw ("Server '$($s.name)' has transport '$transport' with auth 'none' and " +
+                    "no authExemptReason. An unauthenticated network transport must record why.")
+            }
+        }
+        if ($s.PSObject.Properties.Name -contains 'pdb' -and
+            -not "$($s.pdb.module)".Trim()) {
+            throw "Server '$($s.name)' has a pdb block with no 'module'."
+        }
+    }
+}
+
 Export-ModuleMember -Function Get-ReAgentConfig, Test-ReAgentConfigSchema, `
     Get-ServerPortMap, Write-PortsJson, Test-SkillPackSchema, Test-SkillEntrySchema, `
-    Test-SkillPackSourceSchema, Test-SkillPackTargetsSchema, Test-SkillPackScanExceptionsSchema, Test-AgentSchema
+    Test-SkillPackSourceSchema, Test-SkillPackTargetsSchema, Test-SkillPackScanExceptionsSchema, `
+    Test-AgentSchema, Test-McpServerTransport

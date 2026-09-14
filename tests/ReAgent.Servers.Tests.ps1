@@ -1009,3 +1009,658 @@ Describe 'Wait-ServerListening' {
             Should -BeFalse
     }
 }
+
+Describe 'Get-NativeSseLaunchArgument' {
+    BeforeAll {
+        $script:Cfg = [PSCustomObject]@{
+            paths = [PSCustomObject]@{ toolRoot = 'C:\re'; stateRoot = 'C:\re\state'
+                symbolCache = 'C:\re\symbols' }
+        }
+    }
+
+    It 'puts the resolved PDB first and pins an explicit port' {
+        # pdbsql defaults to a RANDOM port in 9000-9999. Ports are allocated
+        # statically from config; a server must never pick its own.
+        Mock -ModuleName ReAgent.Servers Resolve-PdbPath {
+            'C:\re\symbols\ntdll.pdb\GUID\ntdll.pdb'
+        }
+        $srv = [PSCustomObject]@{ name = 'pdbsql'; port = 8770
+            pdb = [PSCustomObject]@{ module = 'ntdll'; warmTables = @('publics', 'udts') } }
+        $a = Get-NativeSseLaunchArgument -Server $srv -Config $script:Cfg `
+            -Inventory ([PSCustomObject]@{ GhidraRoot = $null })
+        $a[0] | Should -Be 'C:\re\symbols\ntdll.pdb\GUID\ntdll.pdb'
+        $a | Should -Contain '--mcp'
+        $a | Should -Contain '8770'
+        ($a -join ' ') | Should -BeLike '*--warm-tables publics,udts*'
+    }
+
+    It 'binds loopback explicitly' {
+        Mock -ModuleName ReAgent.Servers Resolve-PdbPath { 'C:\pdb\ntdll.pdb' }
+        $srv = [PSCustomObject]@{ name = 'pdbsql'; port = 8770; bind = '127.0.0.1'
+            pdb = [PSCustomObject]@{ module = 'ntdll' } }
+        (Get-NativeSseLaunchArgument -Server $srv -Config $script:Cfg `
+            -Inventory ([PSCustomObject]@{ GhidraRoot = $null })) |
+            Should -Contain '127.0.0.1'
+    }
+
+    It 'passes --readonly for a server that declares it' {
+        # ghidrasql: A3 cannot see a launcher flag, so Q0 checks this separately,
+        # but the flag has to be here for Q0 to find.
+        $srv = [PSCustomObject]@{ name = 'ghidrasql'; port = 8771; bind = '127.0.0.1'
+            readonly = $true; projectRoot = 'C:\re\mcp\ghidrasql\projects'
+            projectName = 're-lab' }
+        (Get-NativeSseLaunchArgument -Server $srv -Config $script:Cfg `
+            -Inventory ([PSCustomObject]@{ GhidraRoot = 'C:\ghidra_12.1.2_PUBLIC' })) |
+            Should -Contain '--readonly'
+    }
+
+    It 'throws when a pdb server names a module the cache lacks' {
+        Mock -ModuleName ReAgent.Servers Resolve-PdbPath { $null }
+        $srv = [PSCustomObject]@{ name = 'pdbsql'; port = 8770
+            pdb = [PSCustomObject]@{ module = 'nosuch' } }
+        { Get-NativeSseLaunchArgument -Server $srv -Config $script:Cfg `
+            -Inventory ([PSCustomObject]@{ GhidraRoot = $null }) } |
+            Should -Throw '*nosuch*'
+    }
+
+    It 'adds --ghidra for a projectRoot server, from Inventory not Config' {
+        $srv = [PSCustomObject]@{ name = 'ghidrasql'; port = 8771; bind = '127.0.0.1'
+            readonly = $true; projectRoot = 'C:\re\mcp\ghidrasql\projects'
+            projectName = 're-lab' }
+        $inv = [PSCustomObject]@{ GhidraRoot = 'C:\ghidra_12.1.2_PUBLIC' }
+        $a = Get-NativeSseLaunchArgument -Server $srv -Config $script:Cfg -Inventory $inv
+        $i = [array]::IndexOf($a, '--ghidra')
+        $i | Should -BeGreaterOrEqual 0
+        $a[$i + 1] | Should -Be 'C:\ghidra_12.1.2_PUBLIC'
+    }
+
+    It 'adds --project-name alongside --project' {
+        $srv = [PSCustomObject]@{ name = 'ghidrasql'; port = 8771; bind = '127.0.0.1'
+            readonly = $true; projectRoot = 'C:\re\mcp\ghidrasql\projects'
+            projectName = 're-lab' }
+        $inv = [PSCustomObject]@{ GhidraRoot = 'C:\ghidra_12.1.2_PUBLIC' }
+        $a = Get-NativeSseLaunchArgument -Server $srv -Config $script:Cfg -Inventory $inv
+        $i = [array]::IndexOf($a, '--project-name')
+        $i | Should -BeGreaterOrEqual 0
+        $a[$i + 1] | Should -Be 're-lab'
+    }
+
+    It 'adds --program when the server carries a bootstrap config' {
+        $srv = [PSCustomObject]@{ name = 'ghidrasql'; port = 8771; bind = '127.0.0.1'
+            readonly = $true; projectRoot = 'C:\re\mcp\ghidrasql\projects'
+            projectName = 're-lab'
+            bootstrap = [PSCustomObject]@{ binary = 'C:\Windows\System32\ntdll.dll'
+                programName = 'ntdll.dll' } }
+        $inv = [PSCustomObject]@{ GhidraRoot = 'C:\ghidra_12.1.2_PUBLIC' }
+        $a = Get-NativeSseLaunchArgument -Server $srv -Config $script:Cfg -Inventory $inv
+        $i = [array]::IndexOf($a, '--program')
+        $i | Should -BeGreaterOrEqual 0
+        $a[$i + 1] | Should -Be 'ntdll.dll'
+    }
+
+    It 'never adds --program without a bootstrap config' {
+        $srv = [PSCustomObject]@{ name = 'ghidrasql'; port = 8771; bind = '127.0.0.1'
+            readonly = $true; projectRoot = 'C:\re\mcp\ghidrasql\projects'
+            projectName = 're-lab' }
+        $inv = [PSCustomObject]@{ GhidraRoot = 'C:\ghidra_12.1.2_PUBLIC' }
+        (Get-NativeSseLaunchArgument -Server $srv -Config $script:Cfg -Inventory $inv) |
+            Should -Not -Contain '--program'
+    }
+
+    It 'never adds --ghidra for a server with no projectRoot' {
+        Mock -ModuleName ReAgent.Servers Resolve-PdbPath { 'C:\pdb\ntdll.pdb' }
+        $srv = [PSCustomObject]@{ name = 'pdbsql'; port = 8770
+            pdb = [PSCustomObject]@{ module = 'ntdll' } }
+        $inv = [PSCustomObject]@{ GhidraRoot = 'C:\ghidra_12.1.2_PUBLIC' }
+        (Get-NativeSseLaunchArgument -Server $srv -Config $script:Cfg -Inventory $inv) |
+            Should -Not -Contain '--ghidra'
+    }
+
+    It 'throws when a projectRoot server has no Ghidra on this host' {
+        $srv = [PSCustomObject]@{ name = 'ghidrasql'; port = 8771
+            readonly = $true; projectRoot = 'C:\re\mcp\ghidrasql\projects' }
+        $inv = [PSCustomObject]@{ GhidraRoot = $null }
+        { Get-NativeSseLaunchArgument -Server $srv -Config $script:Cfg -Inventory $inv } |
+            Should -Throw '*Ghidra*'
+    }
+}
+
+Describe 'Install-McpServer dispatch' {
+    It 'routes kind native-sse to its handler rather than reporting no handler' {
+        Mock -ModuleName ReAgent.Servers Install-NativeSseServer {
+            New-ServerResult -Server $Server -Status 'installed'
+        }
+        $srv = Get-TestServer -Name 'pdbsql' -Kind 'native-sse'
+        $r = Install-McpServer -Server $srv -Config ([PSCustomObject]@{}) `
+            -Inventory ([PSCustomObject]@{})
+        $r.status | Should -Be 'installed'
+        Should -Invoke -ModuleName ReAgent.Servers Install-NativeSseServer -Times 1 -Exactly
+    }
+}
+
+Describe 'Install-NativeSseServer' {
+    BeforeAll {
+        $script:SseSrv = [PSCustomObject]@{
+            name          = 'pdbsql'; kind = 'native-sse'; enabled = $true
+            transport     = 'http'; bind = '127.0.0.1'; port = 8770; path = '/mcp'
+            auth          = 'none'; scheduledTask = 'ReLab-pdbsql'
+            pdb           = [PSCustomObject]@{ module = 'ntdll' }
+            source        = [PSCustomObject]@{ repo = 'x/pdbsql'; pin = 'v1.0'
+                sha256 = [PSCustomObject]@{ 'pdbsql-win64.zip' = 'deadbeef' } }
+        }
+    }
+
+    It 'extracts the release, writes the launcher, and registers the scheduled task' {
+        Mock -ModuleName ReAgent.Servers Resolve-PdbPath {
+            'C:\re\symbols\ntdll.pdb\GUID\ntdll.pdb'
+        }
+        Mock -ModuleName ReAgent.Servers Write-ServerLauncher {
+            'C:\re\mcp\pdbsql\launch-pdbsql.cmd'
+        }
+        Mock -ModuleName ReAgent.Servers Register-ServerScheduledTask { $true }
+        Mock -ModuleName ReAgent.Servers Restart-StaleServerTask { $false }
+
+        $staging = Join-Path $TestDrive 'pdbsql-release'
+        $null = New-Item -ItemType Directory -Path $staging -Force
+        $null = New-Item -ItemType File -Path (Join-Path $staging 'pdbsql.exe') -Force
+        $zip = Join-Path $TestDrive 'pdbsql.zip'
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [IO.Compression.ZipFile]::CreateFromDirectory($staging, $zip)
+        Mock -ModuleName ReAgent.Servers Get-VerifiedRelease { $zip }
+
+        $toolRoot = Join-Path $TestDrive 'case1'
+        $cfg = [PSCustomObject]@{
+            paths = [PSCustomObject]@{ toolRoot = $toolRoot; symbolCache = 'C:\re\symbols' }
+        }
+        $r = Install-NativeSseServer -Server $script:SseSrv -Config $cfg `
+            -Inventory ([PSCustomObject]@{})
+
+        $r.Status | Should -Be 'installed'
+        Test-Path (Join-Path $toolRoot 'mcp\pdbsql\pdbsql.exe') | Should -BeTrue
+        Should -Invoke -ModuleName ReAgent.Servers Register-ServerScheduledTask -Times 1 -Exactly `
+            -ParameterFilter { $Name -eq 'ReLab-pdbsql' }
+    }
+
+    It 'never invokes the ghidrasql bootstrap for a server with no bootstrap config' {
+        # pdbsql has neither projectRoot nor bootstrap - Invoke-GhidrasqlBootstrapIfNeeded
+        # must stay a no-op for every server that isn't ghidrasql-shaped.
+        Mock -ModuleName ReAgent.Servers Resolve-PdbPath {
+            'C:\re\symbols\ntdll.pdb\GUID\ntdll.pdb'
+        }
+        Mock -ModuleName ReAgent.Servers Write-ServerLauncher {
+            'C:\re\mcp\pdbsql\launch-pdbsql.cmd'
+        }
+        Mock -ModuleName ReAgent.Servers Register-ServerScheduledTask { $true }
+        Mock -ModuleName ReAgent.Servers Restart-StaleServerTask { $false }
+        Mock -ModuleName ReAgent.Servers Invoke-GhidrasqlBootstrap { }
+
+        $staging = Join-Path $TestDrive 'pdbsql-release-noboot'
+        $null = New-Item -ItemType Directory -Path $staging -Force
+        $null = New-Item -ItemType File -Path (Join-Path $staging 'pdbsql.exe') -Force
+        $zip = Join-Path $TestDrive 'pdbsql-noboot.zip'
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [IO.Compression.ZipFile]::CreateFromDirectory($staging, $zip)
+        Mock -ModuleName ReAgent.Servers Get-VerifiedRelease { $zip }
+
+        $cfg = [PSCustomObject]@{
+            paths = [PSCustomObject]@{ toolRoot = (Join-Path $TestDrive 'case-noboot')
+                symbolCache = 'C:\re\symbols' }
+        }
+        $r = Install-NativeSseServer -Server $script:SseSrv -Config $cfg `
+            -Inventory ([PSCustomObject]@{})
+
+        $r.Status | Should -Be 'installed'
+        Should -Invoke -ModuleName ReAgent.Servers Invoke-GhidrasqlBootstrap -Times 0
+    }
+
+    It 'reports failed when the release archive has no matching exe' {
+        Mock -ModuleName ReAgent.Servers Resolve-PdbPath {
+            'C:\re\symbols\ntdll.pdb\GUID\ntdll.pdb'
+        }
+        $staging = Join-Path $TestDrive 'pdbsql-empty'
+        $null = New-Item -ItemType Directory -Path $staging -Force
+        $null = New-Item -ItemType File -Path (Join-Path $staging 'readme.txt') -Force
+        $zip = Join-Path $TestDrive 'pdbsql-empty.zip'
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [IO.Compression.ZipFile]::CreateFromDirectory($staging, $zip)
+        Mock -ModuleName ReAgent.Servers Get-VerifiedRelease { $zip }
+
+        $cfg = [PSCustomObject]@{
+            paths = [PSCustomObject]@{ toolRoot = (Join-Path $TestDrive 'case2')
+                symbolCache = 'C:\re\symbols' }
+        }
+        $r = Install-NativeSseServer -Server $script:SseSrv -Config $cfg `
+            -Inventory ([PSCustomObject]@{})
+        $r.Status | Should -Be 'failed'
+        $r.Reason | Should -BeLike '*pdbsql.exe*'
+    }
+
+    It 'pins the version onto the manifest record' {
+        Mock -ModuleName ReAgent.Servers Resolve-PdbPath {
+            'C:\re\symbols\ntdll.pdb\GUID\ntdll.pdb'
+        }
+        Mock -ModuleName ReAgent.Servers Write-ServerLauncher {
+            'C:\re\mcp\pdbsql\launch-pdbsql.cmd'
+        }
+        Mock -ModuleName ReAgent.Servers Register-ServerScheduledTask { $true }
+        Mock -ModuleName ReAgent.Servers Restart-StaleServerTask { $false }
+
+        $staging = Join-Path $TestDrive 'pdbsql-release-version'
+        $null = New-Item -ItemType Directory -Path $staging -Force
+        $null = New-Item -ItemType File -Path (Join-Path $staging 'pdbsql.exe') -Force
+        $zip = Join-Path $TestDrive 'pdbsql-version.zip'
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [IO.Compression.ZipFile]::CreateFromDirectory($staging, $zip)
+        Mock -ModuleName ReAgent.Servers Get-VerifiedRelease { $zip }
+
+        $cfg = [PSCustomObject]@{
+            paths = [PSCustomObject]@{ toolRoot = (Join-Path $TestDrive 'case-version')
+                symbolCache = 'C:\re\symbols' }
+        }
+        $r = Install-NativeSseServer -Server $script:SseSrv -Config $cfg `
+            -Inventory ([PSCustomObject]@{})
+        $r.Version | Should -Be 'v1.0'
+    }
+
+    It 'stops an already-running instance before re-extracting over it' {
+        # Expand-Archive -Force fails 'access to the path is denied' against a
+        # running pdbsql.exe: the exe holds its own file open, so the old
+        # process has to go before the new bytes land, not after.
+        Mock -ModuleName ReAgent.Servers Resolve-PdbPath {
+            'C:\re\symbols\ntdll.pdb\GUID\ntdll.pdb'
+        }
+        Mock -ModuleName ReAgent.Servers Write-ServerLauncher {
+            'C:\re\mcp\pdbsql\launch-pdbsql.cmd'
+        }
+        Mock -ModuleName ReAgent.Servers Register-ServerScheduledTask { $true }
+        Mock -ModuleName ReAgent.Servers Restart-StaleServerTask { $false }
+        Mock -ModuleName ReAgent.Servers Stop-ProcessByPath { 1 }
+
+        $toolRoot = Join-Path $TestDrive 'case-stop'
+        $installDir = Join-Path $toolRoot 'mcp\pdbsql'
+        $null = New-Item -ItemType Directory -Path $installDir -Force
+        $existingExe = Join-Path $installDir 'pdbsql.exe'
+        $null = New-Item -ItemType File -Path $existingExe -Force
+
+        $staging = Join-Path $TestDrive 'pdbsql-release-stop'
+        $null = New-Item -ItemType Directory -Path $staging -Force
+        $null = New-Item -ItemType File -Path (Join-Path $staging 'pdbsql.exe') -Force
+        $zip = Join-Path $TestDrive 'pdbsql-stop.zip'
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [IO.Compression.ZipFile]::CreateFromDirectory($staging, $zip)
+        Mock -ModuleName ReAgent.Servers Get-VerifiedRelease { $zip }
+
+        $cfg = [PSCustomObject]@{
+            paths = [PSCustomObject]@{ toolRoot = $toolRoot; symbolCache = 'C:\re\symbols' }
+        }
+        $r = Install-NativeSseServer -Server $script:SseSrv -Config $cfg `
+            -Inventory ([PSCustomObject]@{})
+
+        $r.Status | Should -Be 'installed'
+        Should -Invoke -ModuleName ReAgent.Servers Stop-ProcessByPath -Times 1 -Exactly `
+            -ParameterFilter { $Path -eq $existingExe }
+    }
+
+    It 'never stops a process on a fresh install with nothing running yet' {
+        Mock -ModuleName ReAgent.Servers Resolve-PdbPath {
+            'C:\re\symbols\ntdll.pdb\GUID\ntdll.pdb'
+        }
+        Mock -ModuleName ReAgent.Servers Write-ServerLauncher {
+            'C:\re\mcp\pdbsql\launch-pdbsql.cmd'
+        }
+        Mock -ModuleName ReAgent.Servers Register-ServerScheduledTask { $true }
+        Mock -ModuleName ReAgent.Servers Restart-StaleServerTask { $false }
+        Mock -ModuleName ReAgent.Servers Stop-ProcessByPath { 0 }
+
+        $staging = Join-Path $TestDrive 'pdbsql-release-fresh'
+        $null = New-Item -ItemType Directory -Path $staging -Force
+        $null = New-Item -ItemType File -Path (Join-Path $staging 'pdbsql.exe') -Force
+        $zip = Join-Path $TestDrive 'pdbsql-fresh.zip'
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [IO.Compression.ZipFile]::CreateFromDirectory($staging, $zip)
+        Mock -ModuleName ReAgent.Servers Get-VerifiedRelease { $zip }
+
+        $cfg = [PSCustomObject]@{
+            paths = [PSCustomObject]@{ toolRoot = (Join-Path $TestDrive 'case-fresh')
+                symbolCache = 'C:\re\symbols' }
+        }
+        $r = Install-NativeSseServer -Server $script:SseSrv -Config $cfg `
+            -Inventory ([PSCustomObject]@{})
+
+        $r.Status | Should -Be 'installed'
+        Should -Invoke -ModuleName ReAgent.Servers Stop-ProcessByPath -Times 0
+    }
+
+    It 'restarts the task and waits for the port when the task was stale' {
+        Mock -ModuleName ReAgent.Servers Resolve-PdbPath {
+            'C:\re\symbols\ntdll.pdb\GUID\ntdll.pdb'
+        }
+        Mock -ModuleName ReAgent.Servers Write-ServerLauncher {
+            'C:\re\mcp\pdbsql\launch-pdbsql.cmd'
+        }
+        Mock -ModuleName ReAgent.Servers Register-ServerScheduledTask { $true }
+        Mock -ModuleName ReAgent.Servers Restart-StaleServerTask { $true }
+        Mock -ModuleName ReAgent.Servers Wait-ServerListening { $true }
+
+        $staging = Join-Path $TestDrive 'pdbsql-release-restart'
+        $null = New-Item -ItemType Directory -Path $staging -Force
+        $null = New-Item -ItemType File -Path (Join-Path $staging 'pdbsql.exe') -Force
+        $zip = Join-Path $TestDrive 'pdbsql-restart.zip'
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [IO.Compression.ZipFile]::CreateFromDirectory($staging, $zip)
+        Mock -ModuleName ReAgent.Servers Get-VerifiedRelease { $zip }
+
+        $toolRoot = Join-Path $TestDrive 'case-restart'
+        $cfg = [PSCustomObject]@{
+            paths = [PSCustomObject]@{ toolRoot = $toolRoot; symbolCache = 'C:\re\symbols' }
+        }
+        $r = Install-NativeSseServer -Server $script:SseSrv -Config $cfg `
+            -Inventory ([PSCustomObject]@{})
+
+        $r.Status | Should -Be 'installed'
+        $expectedLauncher = Join-Path $toolRoot 'mcp\pdbsql\launch-pdbsql.cmd'
+        Should -Invoke -ModuleName ReAgent.Servers Restart-StaleServerTask -Times 1 -Exactly `
+            -ParameterFilter {
+                $Name -eq 'ReLab-pdbsql' -and $LauncherPath -eq $expectedLauncher -and
+                $ExecutablePath -eq (Join-Path $toolRoot 'mcp\pdbsql\pdbsql.exe')
+            }
+        Should -Invoke -ModuleName ReAgent.Servers Wait-ServerListening -Times 1 -Exactly `
+            -ParameterFilter { $Bind -eq '127.0.0.1' -and $Port -eq 8770 }
+    }
+
+    It 'does not wait for the port when the task was already current' {
+        Mock -ModuleName ReAgent.Servers Resolve-PdbPath {
+            'C:\re\symbols\ntdll.pdb\GUID\ntdll.pdb'
+        }
+        Mock -ModuleName ReAgent.Servers Write-ServerLauncher {
+            'C:\re\mcp\pdbsql\launch-pdbsql.cmd'
+        }
+        Mock -ModuleName ReAgent.Servers Register-ServerScheduledTask { $true }
+        Mock -ModuleName ReAgent.Servers Restart-StaleServerTask { $false }
+        Mock -ModuleName ReAgent.Servers Wait-ServerListening { $true }
+
+        $staging = Join-Path $TestDrive 'pdbsql-release-current'
+        $null = New-Item -ItemType Directory -Path $staging -Force
+        $null = New-Item -ItemType File -Path (Join-Path $staging 'pdbsql.exe') -Force
+        $zip = Join-Path $TestDrive 'pdbsql-current.zip'
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [IO.Compression.ZipFile]::CreateFromDirectory($staging, $zip)
+        Mock -ModuleName ReAgent.Servers Get-VerifiedRelease { $zip }
+
+        $cfg = [PSCustomObject]@{
+            paths = [PSCustomObject]@{ toolRoot = (Join-Path $TestDrive 'case-current')
+                symbolCache = 'C:\re\symbols' }
+        }
+        $r = Install-NativeSseServer -Server $script:SseSrv -Config $cfg `
+            -Inventory ([PSCustomObject]@{})
+
+        $r.Status | Should -Be 'installed'
+        Should -Invoke -ModuleName ReAgent.Servers Wait-ServerListening -Times 0
+    }
+}
+
+Describe 'Resolve-LibGhidraExtensionZip' {
+    It 'returns the newest zip under the vendor-cache dist directory' {
+        $root = Join-Path $TestDrive 'vc1'
+        $dist = Join-Path $root 'libghidra\ghidra-extension\dist'
+        New-Item -ItemType Directory -Path $dist -Force | Out-Null
+        $old = Join-Path $dist 'old.zip'
+        $new = Join-Path $dist 'new.zip'
+        Set-Content -LiteralPath $old -Value 'x'
+        Start-Sleep -Milliseconds 50
+        Set-Content -LiteralPath $new -Value 'y'
+        Resolve-LibGhidraExtensionZip -VendorCacheRoot $root | Should -Be $new
+    }
+
+    It 'returns $null when no build has ever run' {
+        $root = Join-Path $TestDrive 'vc2'
+        Resolve-LibGhidraExtensionZip -VendorCacheRoot $root | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Invoke-GhidrasqlBootstrap' {
+    BeforeAll {
+        $script:BootSrv = [PSCustomObject]@{
+            name = 'ghidrasql'; projectName = 're-lab'
+            bootstrap = [PSCustomObject]@{ binary = 'C:\Windows\System32\ntdll.dll'
+                programName = 'ntdll.dll' }
+        }
+        $script:BootInv = [PSCustomObject]@{ GhidraRoot = 'C:\ghidra_12.1.2_PUBLIC' }
+    }
+
+    It 'is a no-op when the .bootstrapped marker already exists' {
+        $projectRoot = Join-Path $TestDrive 'igb-existing'
+        New-Item -ItemType Directory -Path $projectRoot -Force | Out-Null
+        New-Item -ItemType File -Path (Join-Path $projectRoot '.bootstrapped') -Force | Out-Null
+        $srv = $script:BootSrv.PSObject.Copy()
+        $srv | Add-Member -NotePropertyName projectRoot -NotePropertyValue $projectRoot
+        InModuleScope ReAgent.Servers -Parameters @{ Server = $srv; Inventory = $script:BootInv } {
+            # A bogus exe path proves the marker check short-circuits before any
+            # attempt to run it - if it didn't, this would fail trying to launch it.
+            { Invoke-GhidrasqlBootstrap -ExePath 'C:\nonexistent\ghidrasql.exe' `
+                    -Server $Server -Inventory $Inventory } | Should -Not -Throw
+        }
+    }
+
+    It 'retries when a .gpr exists but .bootstrapped does not (a prior run died partway)' {
+        # <projectName>.gpr is Ghidra's own project file, written the moment the
+        # project is *created* - before an import ever runs. A prior bootstrap
+        # killed partway (OOM, an interrupted install) leaves .gpr behind with no
+        # program actually saved, so gating on .gpr alone would wrongly skip the
+        # retry this run needs.
+        $projectRoot = Join-Path $TestDrive 'igb-partial'
+        New-Item -ItemType Directory -Path $projectRoot -Force | Out-Null
+        New-Item -ItemType File -Path (Join-Path $projectRoot 're-lab.gpr') -Force | Out-Null
+        $stub = Join-Path $TestDrive 'partial.cmd'
+        Set-Content -LiteralPath $stub -Value '@exit /b 0'
+        $srv = $script:BootSrv.PSObject.Copy()
+        $srv | Add-Member -NotePropertyName projectRoot -NotePropertyValue $projectRoot
+        InModuleScope ReAgent.Servers -Parameters @{
+            Server = $srv; Inventory = $script:BootInv; Stub = $stub
+        } {
+            { Invoke-GhidrasqlBootstrap -ExePath $Stub -Server $Server -Inventory $Inventory } |
+                Should -Not -Throw
+            Test-Path (Join-Path $Server.projectRoot '.bootstrapped') | Should -BeTrue
+        }
+    }
+
+    It 'runs the bootstrap and writes the marker when none exists yet' {
+        $projectRoot = Join-Path $TestDrive 'igb-run'
+        New-Item -ItemType Directory -Path $projectRoot -Force | Out-Null
+        $stub = Join-Path $TestDrive 'ok.cmd'
+        Set-Content -LiteralPath $stub -Value '@exit /b 0'
+        $srv = $script:BootSrv.PSObject.Copy()
+        $srv | Add-Member -NotePropertyName projectRoot -NotePropertyValue $projectRoot
+        InModuleScope ReAgent.Servers -Parameters @{
+            Server = $srv; Inventory = $script:BootInv; Stub = $stub
+        } {
+            { Invoke-GhidrasqlBootstrap -ExePath $Stub -Server $Server -Inventory $Inventory } |
+                Should -Not -Throw
+            Test-Path (Join-Path $Server.projectRoot '.bootstrapped') | Should -BeTrue
+        }
+    }
+
+    It 'throws when the bootstrap run exits nonzero, and writes no marker' {
+        $projectRoot = Join-Path $TestDrive 'igb-fail'
+        New-Item -ItemType Directory -Path $projectRoot -Force | Out-Null
+        $stub = Join-Path $TestDrive 'fail.cmd'
+        Set-Content -LiteralPath $stub -Value '@echo boom & exit /b 1'
+        $srv = $script:BootSrv.PSObject.Copy()
+        $srv | Add-Member -NotePropertyName projectRoot -NotePropertyValue $projectRoot
+        InModuleScope ReAgent.Servers -Parameters @{
+            Server = $srv; Inventory = $script:BootInv; Stub = $stub
+        } {
+            { Invoke-GhidrasqlBootstrap -ExePath $Stub -Server $Server -Inventory $Inventory } |
+                Should -Throw '*boom*'
+            Test-Path (Join-Path $Server.projectRoot '.bootstrapped') | Should -BeFalse
+        }
+    }
+}
+
+Describe 'Install-NativeSseServer, ghidrasql extension wiring' {
+    BeforeAll {
+        $script:GhSrv = [PSCustomObject]@{
+            name = 'ghidrasql'; kind = 'native-sse'; enabled = $true
+            transport = 'sse'; bind = '127.0.0.1'; port = 8771; path = '/sse'
+            auth = 'none'; scheduledTask = 'ReLab-ghidrasql'
+            readonly = $true; projectRoot = ''; projectName = 're-lab'
+            source = [PSCustomObject]@{ repo = 'x/ghidrasql'; pin = 'v0.0.6'
+                sha256 = [PSCustomObject]@{ 'ghidrasql-win64.zip' = 'deadbeef' } }
+        }
+    }
+
+    It 'installs the extension before writing the launcher, then extracts and registers' {
+        $toolRoot = Join-Path $TestDrive 'case-gh1'
+        $script:GhSrv.projectRoot = Join-Path $toolRoot 'mcp\ghidrasql\projects'
+
+        Mock -ModuleName ReAgent.Servers Write-ServerLauncher {
+            'C:\re\mcp\ghidrasql\launch-ghidrasql.cmd'
+        }
+        Mock -ModuleName ReAgent.Servers Register-ServerScheduledTask { $true }
+        Mock -ModuleName ReAgent.Servers Restart-StaleServerTask { $false }
+        Mock -ModuleName ReAgent.Servers Install-LibGhidraExtension { $true }
+
+        $staging = Join-Path $TestDrive 'ghidrasql-release'
+        New-Item -ItemType Directory -Path $staging -Force | Out-Null
+        New-Item -ItemType File -Path (Join-Path $staging 'ghidrasql.exe') -Force | Out-Null
+        $zip = Join-Path $TestDrive 'ghidrasql.zip'
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [IO.Compression.ZipFile]::CreateFromDirectory($staging, $zip)
+        Mock -ModuleName ReAgent.Servers Get-VerifiedRelease { $zip }
+
+        $vendorCache = Join-Path $TestDrive 'vc-installed'
+        $dist = Join-Path $vendorCache 'libghidra\ghidra-extension\dist'
+        New-Item -ItemType Directory -Path $dist -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $dist 'ext.zip') -Value 'x'
+        Mock -ModuleName ReAgent.Servers Resolve-LibGhidraExtensionZip {
+            Join-Path $dist 'ext.zip'
+        }
+
+        $cfg = [PSCustomObject]@{ paths = [PSCustomObject]@{ toolRoot = $toolRoot } }
+        $inv = [PSCustomObject]@{ GhidraRoot = 'C:\ghidra_12.1.2_PUBLIC' }
+        $r = Install-NativeSseServer -Server $script:GhSrv -Config $cfg -Inventory $inv
+
+        $r.Status | Should -Be 'installed'
+        Test-Path $script:GhSrv.projectRoot | Should -BeTrue
+        Should -Invoke -ModuleName ReAgent.Servers Install-LibGhidraExtension -Times 1 -Exactly `
+            -ParameterFilter { $GhidraRoot -eq 'C:\ghidra_12.1.2_PUBLIC' }
+    }
+
+    It 'reports not-installed, not failed, when the extension was never built' {
+        $toolRoot = Join-Path $TestDrive 'case-gh2'
+        $script:GhSrv.projectRoot = Join-Path $toolRoot 'mcp\ghidrasql\projects'
+        Mock -ModuleName ReAgent.Servers Resolve-LibGhidraExtensionZip { $null }
+
+        $cfg = [PSCustomObject]@{ paths = [PSCustomObject]@{ toolRoot = $toolRoot } }
+        $inv = [PSCustomObject]@{ GhidraRoot = 'C:\ghidra_12.1.2_PUBLIC' }
+        $r = Install-NativeSseServer -Server $script:GhSrv -Config $cfg -Inventory $inv
+
+        $r.Status | Should -Be 'not-installed'
+        $r.Reason | Should -BeLike '*Build-LibGhidraExtension*'
+    }
+
+    It 'reports not-installed, not failed, when no Ghidra was found even with a built extension' {
+        # Install-LibGhidraExtension's -GhidraRoot is Mandatory][string]; passing it $null
+        # throws a raw ParameterBindingException instead of a readable reason, so this
+        # must be caught before that call, not left to fail there.
+        $toolRoot = Join-Path $TestDrive 'case-gh3'
+        $script:GhSrv.projectRoot = Join-Path $toolRoot 'mcp\ghidrasql\projects'
+        Mock -ModuleName ReAgent.Servers Resolve-LibGhidraExtensionZip { 'C:\vc\ext.zip' }
+        Mock -ModuleName ReAgent.Servers Install-LibGhidraExtension { $true }
+
+        $cfg = [PSCustomObject]@{ paths = [PSCustomObject]@{ toolRoot = $toolRoot } }
+        $inv = [PSCustomObject]@{ GhidraRoot = $null }
+        $r = Install-NativeSseServer -Server $script:GhSrv -Config $cfg -Inventory $inv
+
+        $r.Status | Should -Be 'not-installed'
+        $r.Reason | Should -BeLike '*Ghidra*'
+        Should -Invoke -ModuleName ReAgent.Servers Install-LibGhidraExtension -Times 0
+    }
+
+    It 'invokes the ghidrasql bootstrap for a bootstrap-configured server' {
+        $toolRoot = Join-Path $TestDrive 'case-gh4'
+        $srv = $script:GhSrv.PSObject.Copy()
+        $srv.projectRoot = Join-Path $toolRoot 'mcp\ghidrasql\projects'
+        $srv | Add-Member -NotePropertyName bootstrap -NotePropertyValue ([PSCustomObject]@{
+                binary = 'C:\Windows\System32\ntdll.dll'; programName = 'ntdll.dll'
+            })
+
+        Mock -ModuleName ReAgent.Servers Write-ServerLauncher {
+            'C:\re\mcp\ghidrasql\launch-ghidrasql.cmd'
+        }
+        Mock -ModuleName ReAgent.Servers Register-ServerScheduledTask { $true }
+        Mock -ModuleName ReAgent.Servers Restart-StaleServerTask { $false }
+        Mock -ModuleName ReAgent.Servers Install-LibGhidraExtension { $true }
+        Mock -ModuleName ReAgent.Servers Invoke-GhidrasqlBootstrap { }
+
+        $staging = Join-Path $TestDrive 'ghidrasql-release-boot'
+        New-Item -ItemType Directory -Path $staging -Force | Out-Null
+        New-Item -ItemType File -Path (Join-Path $staging 'ghidrasql.exe') -Force | Out-Null
+        $zip = Join-Path $TestDrive 'ghidrasql-boot.zip'
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [IO.Compression.ZipFile]::CreateFromDirectory($staging, $zip)
+        Mock -ModuleName ReAgent.Servers Get-VerifiedRelease { $zip }
+
+        $vendorCache = Join-Path $TestDrive 'vc-installed-boot'
+        $dist = Join-Path $vendorCache 'libghidra\ghidra-extension\dist'
+        New-Item -ItemType Directory -Path $dist -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $dist 'ext.zip') -Value 'x'
+        Mock -ModuleName ReAgent.Servers Resolve-LibGhidraExtensionZip {
+            Join-Path $dist 'ext.zip'
+        }
+
+        $cfg = [PSCustomObject]@{ paths = [PSCustomObject]@{ toolRoot = $toolRoot } }
+        $inv = [PSCustomObject]@{ GhidraRoot = 'C:\ghidra_12.1.2_PUBLIC' }
+        $r = Install-NativeSseServer -Server $srv -Config $cfg -Inventory $inv
+
+        $r.Status | Should -Be 'installed'
+        Should -Invoke -ModuleName ReAgent.Servers Invoke-GhidrasqlBootstrap -Times 1 -Exactly
+    }
+}
+
+
+Describe 'Install-LibGhidraExtension' {
+    BeforeAll {
+        # Get-GhidraVersion reads the version out of the install directory's own
+        # name (ghidra_X.Y.Z...); this fixture's temp directory does not follow
+        # that naming, so it is mocked to report this host's real 12.1.2 instead.
+        Mock -ModuleName ReAgent.Servers Get-GhidraVersion { '12.1.2' }
+        $script:GRoot = Join-Path ([IO.Path]::GetTempPath()) ("gh-" + [guid]::NewGuid())
+        New-Item -ItemType Directory -Path (Join-Path $script:GRoot 'Ghidra\Extensions') `
+            -Force | Out-Null
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $stage = Join-Path ([IO.Path]::GetTempPath()) ("st-" + [guid]::NewGuid())
+        $inner = Join-Path $stage 'LibGhidraHost'
+        New-Item -ItemType Directory -Path $inner -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $inner 'extension.properties') `
+            -Value "name=LibGhidraHost`nversion=12.1.2"
+        $script:Zip = "$stage.zip"
+        [IO.Compression.ZipFile]::CreateFromDirectory($stage, $script:Zip)
+        Remove-Item -LiteralPath $stage -Recurse -Force
+    }
+    AfterAll {
+        Remove-Item -LiteralPath $script:GRoot -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $script:Zip -Force -ErrorAction SilentlyContinue
+    }
+
+    It 'writes the extension into the Ghidra tree on a first install' {
+        Install-LibGhidraExtension -ExtensionZip $script:Zip -GhidraRoot $script:GRoot |
+            Should -BeTrue
+        Test-Path (Join-Path $script:GRoot `
+                'Ghidra\Extensions\LibGhidraHost\extension.properties') | Should -BeTrue
+    }
+
+    It 'reports no change on a second run, so a steady-state run touches nothing' {
+        Install-LibGhidraExtension -ExtensionZip $script:Zip -GhidraRoot $script:GRoot | Out-Null
+        Install-LibGhidraExtension -ExtensionZip $script:Zip -GhidraRoot $script:GRoot |
+            Should -BeFalse
+    }
+
+    It 'refuses an extension stamped for a different Ghidra than the host runs' {
+        # The Task 1 gate again, enforced at install time: a stamp mismatch here
+        # means someone substituted a prebuilt release zip for the built one.
+        Mock -ModuleName ReAgent.Servers Get-GhidraVersion { '12.1.3' }
+        { Install-LibGhidraExtension -ExtensionZip $script:Zip -GhidraRoot $script:GRoot } |
+            Should -Throw '*12.1.2*'
+    }
+}

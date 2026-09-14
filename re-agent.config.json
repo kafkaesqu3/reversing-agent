@@ -131,6 +131,69 @@
       "verifyTier": "unattended"
     },
     {
+      "name": "pdbsql",
+      "enabled": true,
+      "kind": "native-sse",
+      "source": {
+        "type": "github-release",
+        "repo": "0xeb/pdbsql",
+        "pin": "v0.0.7",
+        "sha256": {
+          "pdbsql-windows-x64.zip": "bdfc1328397d4329ed3a2d8dc647e16e77709b077efb8075b1fd740fbe03a8e8"
+        }
+      },
+      "transport": "sse",
+      "bind": "127.0.0.1",
+      "port": 8770,
+      "path": "/sse",
+      "auth": "none",
+      "authExemptReason": "upstream --mcp endpoint accepts no credential; --token covers only the REST mode; loopback-only, Profile A",
+      "scheduledTask": "ReLab-pdbsql",
+      "requiresHostApp": false,
+      "verifyTier": "unattended",
+      "pdb": { "module": "ntdll", "warmTables": ["functions", "publics", "udts"] },
+      "verify": {
+        "tool": "pdbsql_query",
+        "args": { "query": "SELECT COUNT(*) AS n FROM publics" },
+        "expect": "\"rows\":\\s*\\[\\s*\\[\\s*\\\"[1-9]"
+      }
+    },
+    {
+      "name": "ghidrasql",
+      "enabled": true,
+      "kind": "native-sse",
+      "source": {
+        "type": "github-release",
+        "repo": "0xeb/ghidrasql",
+        "pin": "v0.0.6",
+        "sha256": {
+          "ghidrasql-cli-windows-v0.0.6.zip": "d646e49f1373846decdbc869722e3861b45cb84714fcd1a439f346c9816caff5"
+        },
+        "libghidra": { "repo": "0xeb/libghidra", "pin": "v0.0.7" }
+      },
+      "transport": "sse",
+      "bind": "127.0.0.1",
+      "port": 8771,
+      "path": "/sse",
+      "auth": "none",
+      "authExemptReason": "upstream --mcp endpoint accepts no credential; loopback-only, Profile A",
+      "scheduledTask": "ReLab-ghidrasql",
+      "requiresHostApp": false,
+      "verifyTier": "unattended",
+      "readonly": true,
+      "projectRoot": "C:\\re\\mcp\\ghidrasql\\projects",
+      "projectName": "re-lab",
+      "bootstrap": {
+        "binary": "C:\\Windows\\System32\\ntdll.dll",
+        "programName": "ntdll.dll"
+      },
+      "verify": {
+        "tool": "ghidrasql_query",
+        "args": { "query": "SELECT COUNT(*) AS n FROM funcs" },
+        "expect": "\"rows\":\\s*\\[\\s*\\[\\s*\\\"[1-9]"
+      }
+    },
+    {
       "name": "ghidramcp",
       "enabled": false,
       "kind": "gui-plugin-http",
@@ -157,7 +220,7 @@
       "name": "static-analyst",
       "enabled": true,
       "level": "write",
-      "targetServers": ["pyghidra-mcp"],
+      "targetServers": ["pyghidra-mcp", "pdbsql", "ghidrasql"],
       "builtinTools": ["Read", "Glob", "Grep"],
       "model": "inherit",
       "disabledReason": ""
@@ -175,7 +238,7 @@
       "name": "verifier",
       "enabled": true,
       "level": "read",
-      "targetServers": ["pyghidra-mcp", "mcp-windbg"],
+      "targetServers": ["pyghidra-mcp", "mcp-windbg", "pdbsql"],
       "builtinTools": ["Read", "Glob", "Grep"],
       "model": "inherit",
       "disabledReason": ""

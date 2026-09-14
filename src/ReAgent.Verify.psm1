@@ -4,10 +4,10 @@ Import-Module (Join-Path $PSScriptRoot 'ReAgent.Agents.psm1') -Force
 
 # Depends on functions exported by sibling modules, which Install-REAgent.ps1
 # imports into the session before this one: Write-ReAgentLog, Write-Utf8NoBomFile
-# (Common), Invoke-CommandLine (Discovery), Get-VenvPython / Get-ServerVenvPath /
-# Get-WindbgLaunchCommand (Servers), Get-ToolCatalog / Get-CatalogServerTool /
-# Compare-ToolCatalog / Test-SkillAdaptation / Get-SkillFrontmatter /
-# Get-SkillToolReference (Skills).
+# (Common), Invoke-CommandLine (Discovery), Test-PdbPathCheck (Symbols),
+# Get-VenvPython / Get-ServerVenvPath / Get-WindbgLaunchCommand (Servers),
+# Get-ToolCatalog / Get-CatalogServerTool / Compare-ToolCatalog / Test-SkillAdaptation /
+# Get-SkillFrontmatter / Get-SkillToolReference (Skills).
 
 $Script:ValidCheckStatus = @('pass', 'fail', 'not-testable')
 
@@ -491,7 +491,10 @@ function Test-HttpServerLive {
 
     $name = "$($Server.name) live call"
     $url = "http://$($Server.bind):$($Server.port)$($Server.path)"
-    $probeArgs = @('--transport=http', "--url=$url")
+    $transport = 'http'
+    if ($Server.PSObject.Properties.Name -contains 'transport' -and
+        "$($Server.transport)" -eq 'sse') { $transport = 'sse' }
+    $probeArgs = @("--transport=$transport", "--url=$url")
 
     if ($Server.auth -ne 'none') {
         $token = Get-ServerToken -Name $Server.name `
@@ -568,7 +571,59 @@ function Get-HostAppHint {
         $exe = if ($Server.arch -eq 'x32') { 'x32dbg' } else { 'x64dbg' }
         return "Open $exe with the target binary loaded, then re-run."
     }
+    if ($Server.kind -eq 'native-sse') {
+        return ("Start-ScheduledTask -TaskName '$($Server.scheduledTask)' - it is a " +
+            'background service, not a GUI application, and does not autostart until ' +
+            'next logon.')
+    }
     return 'Open the host application, then re-run.'
+}
+
+function Test-ReadOnlyLaunchCheck {
+    <#
+    .SYNOPSIS
+        Runs check Q0: a read-only server's launcher must carry --readonly.
+    .DESCRIPTION
+        The SQL layer collapses many operations into one tool, but the agent
+        gate classifies per tool. ghidrasql_query reads or writes depending on
+        the text of the SQL, and A3 cannot see the SQL. What makes the tool
+        genuinely read-only is the server flag, so the flag is what gets
+        checked - the classification is a consequence of it, not a control.
+
+        Sub-classifying by parsing SQL would be a denylist, and a denylist gets
+        bypassed. See spec section 7.3.
+    .PARAMETER Server
+        One entry from the config's mcpServers[].
+    .PARAMETER LauncherPath
+        The generated launcher for that server.
+    .OUTPUTS
+        [array] Zero or one {Check='Q0'; Message} findings.
+    .EXAMPLE
+        Test-ReadOnlyLaunchCheck -Server $srv -LauncherPath $p
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Server,
+        [Parameter(Mandatory)][string]$LauncherPath
+    )
+
+    if ($Server.PSObject.Properties.Name -notcontains 'readonly') { return @() }
+    if (-not $Server.readonly) { return @() }
+
+    $reason = ''
+    if (-not (Test-Path -LiteralPath $LauncherPath -PathType Leaf)) {
+        $reason = "its launcher '$LauncherPath' does not exist"
+    } else {
+        $text = Get-Content -LiteralPath $LauncherPath -Raw
+        if ($text -notmatch '(?m)--readonly\b') {
+            $reason = "its launcher does not pass --readonly"
+        }
+    }
+    if (-not $reason) { return @() }
+    return @([PSCustomObject]@{ Check = 'Q0'; Message = (
+                "Server '$($Server.name)' is declared read-only but $reason. Its " +
+                '*_query tool is classified read on the strength of that flag; without ' +
+                'it the tool can write and the agent gate will not notice.') })
 }
 
 function Get-ServerCheck {
@@ -675,11 +730,11 @@ function Get-ServerProbeContext {
         [AllowNull()][object]$Inventory = $null
     )
 
-    if ($Server.transport -eq 'http') {
+    if ($Server.transport -eq 'http' -or $Server.transport -eq 'sse') {
         $url = "http://$($Server.bind):$($Server.port)$($Server.path)"
         return [PSCustomObject]@{ Ok = $true; Reason = ''
             PythonPath = (Get-ProbeInterpreter -Config $Config)
-            ProbeArgs  = @('--transport=http', "--url=$url")
+            ProbeArgs  = @("--transport=$($Server.transport)", "--url=$url")
         }
     }
     if ($Server.transport -eq 'stdio' -and $Inventory) {
@@ -1554,6 +1609,49 @@ function Get-AgentCheck {
             "$($AgentResults.Count) agent(s) on record; the A0-A4 gate found no over-grant."))
 }
 
+function Get-SqlCheck {
+    <#
+    .SYNOPSIS
+        Runs checks Q0 and Q1 over every enabled native-sse server.
+    .DESCRIPTION
+        Both read only the repo's config and the generated launchers, so they
+        run on every verification including -VerifyOnly on a host where
+        nothing is installed (spec 7.3, 5.1). The findings from every target
+        server are folded into one "sql" check, mirroring how Get-AgentCheck
+        folds the A0-A4 findings into one "agents" check.
+    .PARAMETER Config
+        The parsed configuration object.
+    .OUTPUTS
+        [array] Empty when the config declares no native-sse servers, else one
+        'sql' check.
+    .EXAMPLE
+        Get-SqlCheck -Config $cfg
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][object]$Config)
+
+    $servers = @($Config.mcpServers | Where-Object {
+            ($_.PSObject.Properties.Name -contains 'kind') -and $_.kind -eq 'native-sse' -and
+            $_.enabled
+        })
+    if ($servers.Count -eq 0) { return @() }
+
+    $findings = @()
+    foreach ($server in $servers) {
+        $installDir = Join-Path (Join-Path $Config.paths.toolRoot 'mcp') $server.name
+        $launcher = Join-Path $installDir "launch-$($server.name).cmd"
+        $findings += Test-ReadOnlyLaunchCheck -Server $server -LauncherPath $launcher
+        $findings += Test-PdbPathCheck -Server $server -SymbolRoot $Config.paths.symbolCache
+    }
+
+    if ($findings.Count -gt 0) {
+        $detail = ($findings | ForEach-Object { "[$($_.Check)] $($_.Message)" }) -join ' | '
+        return @(New-CheckResult -Name 'sql' -Status 'fail' -Detail $detail)
+    }
+    return @(New-CheckResult -Name 'sql' -Status 'pass' -Detail (
+            "$($servers.Count) native-sse server(s) on record; Q0/Q1 found no issues."))
+}
+
 function Invoke-Verification {
     <#
     .SYNOPSIS
@@ -1602,6 +1700,7 @@ function Invoke-Verification {
     $checks += Get-SkillCheck -Config $Config -SkillResults $SkillResults -RepoRoot $RepoRoot `
         -Inventory $Inventory -Attended:$Attended
     $checks += Get-AgentCheck -Config $Config -AgentResults $AgentResults
+    $checks += Get-SqlCheck -Config $Config
 
     $report = [ordered]@{
         tier2Requested = [bool]$Attended
@@ -1636,4 +1735,4 @@ Export-ModuleMember -Function New-CheckResult, Invoke-McpProbe, Test-ClaudeCli, 
     Get-PackPinCheck, `
     Get-PackAdaptationCheck, Get-PackDriftCheck, Get-SkillCheck, `
     ConvertFrom-CatalogServerMap, Update-CatalogServerEntry, Save-ToolCatalog, `
-    Invoke-AgentVerification, Get-AgentCheck
+    Invoke-AgentVerification, Get-AgentCheck, Test-ReadOnlyLaunchCheck, Get-SqlCheck

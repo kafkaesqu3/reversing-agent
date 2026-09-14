@@ -736,6 +736,406 @@ function Install-VenvHttpServer {
         -Command $command
 }
 
+function Install-LibGhidraExtension {
+    <#
+    .SYNOPSIS
+        Installs the built LibGhidraHost extension into a Ghidra distribution.
+    .DESCRIPTION
+        The extension MUST be the one built against this host (spec SQ6): a
+        prebuilt release zip declares whatever Ghidra its author had, and
+        Ghidra matches that string exactly. The version is re-asserted here as
+        well as at build time, because the two happen at different moments and
+        a release zip could be substituted between them.
+
+        Writing only on change keeps a steady-state run from touching the
+        Ghidra tree that pyghidra-mcp also runs against.
+
+        Not called from production code yet: ghidrasql ships disabled because
+        its launcher has no --ghidra connection-mode flag wiring it to this
+        extension. This function is staged for that pending work.
+    .PARAMETER ExtensionZip
+        The zip produced by tools\Build-LibGhidraExtension.ps1.
+    .PARAMETER GhidraRoot
+        The Ghidra distribution root.
+    .OUTPUTS
+        [bool] True when the extension was written, false when already current.
+    .EXAMPLE
+        Install-LibGhidraExtension -ExtensionZip $zip -GhidraRoot $root
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ExtensionZip,
+        [Parameter(Mandatory)][string]$GhidraRoot
+    )
+
+    $expected = Get-GhidraVersion -GhidraRoot $GhidraRoot
+    # Dot-sourcing does not open a new scope: the tool script's own
+    # $GhidraRoot param would otherwise bind over this function's $GhidraRoot
+    # with $null, since it is not passed. Passing it through explicitly makes
+    # that collision a no-op self-reassignment instead of a silent clobber.
+    . "$PSScriptRoot\..\tools\Build-LibGhidraExtension.ps1" -GhidraRoot $GhidraRoot -DotSourceOnly
+    Assert-StampedExtensionVersion -ZipPath $ExtensionZip -ExpectedVersion $expected | Out-Null
+
+    $target = Join-Path (Join-Path $GhidraRoot 'Ghidra\Extensions') 'LibGhidraHost'
+    $marker = Join-Path $target 'extension.properties'
+    $hashFile = Join-Path $target '.re-agent-source-sha256'
+    $sourceHash = (Get-FileHash -LiteralPath $ExtensionZip -Algorithm SHA256).Hash
+    if ((Test-Path -LiteralPath $marker) -and (Test-Path -LiteralPath $hashFile) -and
+        (Get-Content -LiteralPath $hashFile -Raw).Trim() -eq $sourceHash) {
+        return $false
+    }
+
+    if (Test-Path -LiteralPath $target) {
+        Remove-Item -LiteralPath $target -Recurse -Force
+    }
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    # ExtractToDirectory has no (source, dest, overwrite) overload on .NET
+    # Framework - only (source, dest) and (source, dest, Encoding) - and a
+    # trailing $true there miscasts as Encoding. $target is already removed
+    # above, so no overwrite is needed.
+    [IO.Compression.ZipFile]::ExtractToDirectory(
+        $ExtensionZip, (Join-Path $GhidraRoot 'Ghidra\Extensions'))
+    Set-Content -LiteralPath $hashFile -Value $sourceHash -Encoding Ascii
+    return $true
+}
+
+function Resolve-LibGhidraExtensionZip {
+    <#
+    .SYNOPSIS
+        Finds the most recently built LibGhidraHost extension zip.
+    .DESCRIPTION
+        The build is a maintainer-only, network-requiring step
+        (tools\Build-LibGhidraExtension.ps1) that writes into .vendor-cache,
+        which is git-ignored (spec SQ6: never installed from a pinned release
+        zip). Install-NativeSseServer looks here rather than taking a config
+        path, because the artifact is host-specific and re-built on demand,
+        not a pinned asset with a hash to check against.
+    .PARAMETER VendorCacheRoot
+        The repo's .vendor-cache directory.
+    .OUTPUTS
+        [string] Full path to the newest zip, or $null if none was ever built.
+    .EXAMPLE
+        Resolve-LibGhidraExtensionZip -VendorCacheRoot (Join-Path $PSScriptRoot '..\.vendor-cache')
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$VendorCacheRoot)
+
+    $dist = Join-Path $VendorCacheRoot 'libghidra\ghidra-extension\dist'
+    if (-not (Test-Path -LiteralPath $dist)) { return $null }
+    $zip = Get-ChildItem -LiteralPath $dist -Filter '*.zip' -File |
+        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($null -eq $zip) { return $null }
+    return $zip.FullName
+}
+
+function Initialize-GhidraProjectDependency {
+    <#
+    .SYNOPSIS
+        Ensures a ghidrasql-style server's project directory and Ghidra extension exist.
+    .DESCRIPTION
+        Split out of Install-NativeSseServer to keep that function's cyclomatic
+        complexity within this repo's limit. ghidrasql --project needs its
+        directory to exist before first run, and its --ghidra connection mode
+        needs the LibGhidraHost extension installed into the host's Ghidra.
+    .PARAMETER Server
+        One entry from the config's mcpServers[]. Must carry projectRoot.
+    .PARAMETER Inventory
+        Host inventory from Get-HostInventory.
+    .OUTPUTS
+        [string] A not-installed reason when no Ghidra was found on this host or the
+        extension was never built, or $null when the project directory and extension
+        are ready.
+    .EXAMPLE
+        Initialize-GhidraProjectDependency -Server $srv -Inventory $inv
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Server,
+        [Parameter(Mandatory)][object]$Inventory
+    )
+
+    if (-not $Inventory.GhidraRoot) {
+        return ('No Ghidra installation was found on this host, so the LibGhidraHost ' +
+            'extension cannot be installed.')
+    }
+    if (-not (Test-Path -LiteralPath $Server.projectRoot)) {
+        New-Item -ItemType Directory -Path $Server.projectRoot -Force | Out-Null
+    }
+    $vendorCache = Join-Path $PSScriptRoot '..\.vendor-cache'
+    $extZip = Resolve-LibGhidraExtensionZip -VendorCacheRoot $vendorCache
+    if (-not $extZip) {
+        return ('LibGhidraHost extension not built on this host. Run ' +
+            'tools\Build-LibGhidraExtension.ps1 first (maintainer path, needs Gradle).')
+    }
+    Install-LibGhidraExtension -ExtensionZip $extZip -GhidraRoot $Inventory.GhidraRoot | Out-Null
+    return $null
+}
+
+function Invoke-GhidrasqlBootstrap {
+    <#
+    .SYNOPSIS
+        Imports and analyzes ghidrasql's bootstrap binary into its project, once.
+    .DESCRIPTION
+        A freshly-provisioned ghidrasql project starts with no imported program,
+        and every *_query tool then fails 'no current program' until one exists
+        (Task 10 Step 9, live). A one-shot run with --binary and no --readonly
+        (so Ghidra's own default shutdown=save applies) imports, analyzes, and
+        saves the program to the project on disk - confirmed live by re-querying
+        the same project from a fresh process afterward.
+
+        The marker is .bootstrapped under projectRoot, written by this function
+        itself only after a successful run - not <projectName>.gpr, which Ghidra
+        writes the moment the project is *created*, before the import ever runs.
+        Gating on .gpr would treat an import killed partway (analysis OOM, an
+        interrupted install) as already done: the next install pass would never
+        retry it, and --program would keep pointing at a program that was never
+        actually saved.
+    .PARAMETER ExePath
+        Path to the extracted ghidrasql.exe.
+    .PARAMETER Server
+        One entry from the config's mcpServers[]. Must carry projectRoot,
+        projectName and bootstrap.binary.
+    .PARAMETER Inventory
+        Host inventory from Get-HostInventory.
+    .EXAMPLE
+        Invoke-GhidrasqlBootstrap -ExePath $exe.FullName -Server $srv -Inventory $inv
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ExePath,
+        [Parameter(Mandatory)][object]$Server,
+        [Parameter(Mandatory)][object]$Inventory
+    )
+
+    $marker = Join-Path $Server.projectRoot '.bootstrapped'
+    if (Test-Path -LiteralPath $marker) { return }
+
+    Write-ReAgentLog -Level INFO -Message (
+        "Bootstrapping '$($Server.name)': importing and analyzing " +
+        "'$($Server.bootstrap.binary)'. This runs headless Ghidra analysis and can take " +
+        'several minutes with no further progress output.')
+    $output = @(& $ExePath --ghidra $Inventory.GhidraRoot --project $Server.projectRoot `
+            --project-name $Server.projectName --binary $Server.bootstrap.binary `
+            --list-project-programs 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        throw ("Bootstrapping '$($Server.name)' failed (exit $LASTEXITCODE): could not " +
+            "import '$($Server.bootstrap.binary)' into its project.`n" + ($output -join "`n"))
+    }
+    Set-Content -LiteralPath $marker -Value $Server.bootstrap.programName -Encoding Ascii
+}
+
+function Invoke-GhidrasqlBootstrapIfNeeded {
+    <#
+    .SYNOPSIS
+        Runs Invoke-GhidrasqlBootstrap for a bootstrap-configured server, else does nothing.
+    .DESCRIPTION
+        Split out of Install-NativeSseServer to keep that function's cyclomatic
+        complexity within this repo's limit, the same way Initialize-GhidraProjectDependency
+        was. Most native-sse servers, including ghidrasql without a bootstrap entry,
+        carry no bootstrap binary to import.
+    .PARAMETER ExePath
+        Path to the extracted server executable.
+    .PARAMETER Server
+        One entry from the config's mcpServers[].
+    .PARAMETER Inventory
+        Host inventory from Get-HostInventory.
+    .EXAMPLE
+        Invoke-GhidrasqlBootstrapIfNeeded -ExePath $exe.FullName -Server $srv -Inventory $inv
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ExePath,
+        [Parameter(Mandatory)][object]$Server,
+        [Parameter(Mandatory)][object]$Inventory
+    )
+
+    if ($Server.PSObject.Properties.Name -contains 'bootstrap') {
+        Invoke-GhidrasqlBootstrap -ExePath $ExePath -Server $Server -Inventory $Inventory
+    }
+}
+
+function Get-GhidraProjectLaunchArgument {
+    <#
+    .SYNOPSIS
+        Builds the --ghidra/--project/--project-name/--program arguments for ghidrasql.
+    .DESCRIPTION
+        Split out of Get-NativeSseLaunchArgument to keep that function's cyclomatic
+        complexity within this repo's limit. Live verification (Task 10 Step 9) found
+        ghidrasql's headless mode needs --project-name as a separate required flag
+        from --project, and reopening an already-imported program needs --program
+        naming it explicitly - otherwise every query fails 'no current program'.
+    .PARAMETER Server
+        One entry from the config's mcpServers[]. Must carry projectRoot and projectName.
+    .PARAMETER Inventory
+        Host inventory from Get-HostInventory.
+    .OUTPUTS
+        [string[]] The --ghidra/--project/--project-name[/--program] arguments, in order.
+    .EXAMPLE
+        Get-GhidraProjectLaunchArgument -Server $srv -Inventory $inv
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Server,
+        [Parameter(Mandatory)][object]$Inventory
+    )
+
+    if (-not $Inventory.GhidraRoot) {
+        throw ("Cannot launch '$($Server.name)': no Ghidra installation was found on " +
+            'this host.')
+    }
+    $projectArgs = @('--ghidra', "$($Inventory.GhidraRoot)", '--project', "$($Server.projectRoot)",
+        '--project-name', "$($Server.projectName)")
+    if ($Server.PSObject.Properties.Name -contains 'bootstrap') {
+        $projectArgs += @('--program', "$($Server.bootstrap.programName)")
+    }
+    return $projectArgs
+}
+
+function Get-NativeSseLaunchArgument {
+    <#
+    .SYNOPSIS
+        Builds the launcher argument list for a native-sse server.
+    .DESCRIPTION
+        pdbsql binds ONE PDB per process, taken as a positional argument at
+        launch, so the PDB belongs in the launcher rather than in a fan-out of
+        one server per PDB (spec SQ7). It also defaults to a RANDOM port in
+        9000-9999, so the port is always passed explicitly - ports are
+        allocated statically from config.
+
+        ghidrasql carries --readonly instead. That flag, not the tool
+        classification, is what actually makes its single *_query tool
+        read-only; check Q0 verifies it survived into the launcher.
+    .PARAMETER Server
+        One entry from the config's mcpServers[].
+    .PARAMETER Config
+        The parsed configuration object.
+    .PARAMETER Inventory
+        Host inventory from Get-HostInventory. Supplies GhidraRoot for --ghidra,
+        which is host-detected and therefore not present in Config.
+    .OUTPUTS
+        [string[]] Arguments, in launcher order.
+    .EXAMPLE
+        Get-NativeSseLaunchArgument -Server $srv -Config $cfg -Inventory $inv
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Server,
+        [Parameter(Mandatory)][object]$Config,
+        [Parameter(Mandatory)][object]$Inventory
+    )
+
+    $launchArgs = @()
+    if ($Server.PSObject.Properties.Name -contains 'pdb') {
+        $root = $Config.paths.symbolCache
+        $module = "$($Server.pdb.module)"
+        $pdb = Resolve-PdbPath -SymbolRoot $root -Module $module
+        if (-not $pdb) {
+            throw ("Cannot launch '$($Server.name)': PDB module '$module' does not resolve " +
+                "to a file under '$root'. Warm the symbol cache first.")
+        }
+        $launchArgs += $pdb
+        if ($Server.pdb.PSObject.Properties.Name -contains 'warmTables') {
+            $launchArgs += @('--warm-tables', (@($Server.pdb.warmTables) -join ','))
+        }
+    }
+    if ($Server.PSObject.Properties.Name -contains 'readonly' -and $Server.readonly) {
+        $launchArgs += '--readonly'
+    }
+    if ($Server.PSObject.Properties.Name -contains 'projectRoot') {
+        $launchArgs += Get-GhidraProjectLaunchArgument -Server $Server -Inventory $Inventory
+    }
+    $launchArgs += @('--mcp', "$($Server.port)")
+    if ($Server.PSObject.Properties.Name -contains 'bind') {
+        $launchArgs += @('--bind', "$($Server.bind)")
+    }
+    return $launchArgs
+}
+
+function Install-NativeSseServer {
+    <#
+    .SYNOPSIS
+        Installs a pinned native binary that serves MCP over SSE.
+    .DESCRIPTION
+        Extracts a hash-verified release zip, writes the launcher only when its
+        content differs (HANDOFF defect 7 - its timestamp drives the restart
+        decision), and registers the logon Scheduled Task. Claude Code cannot
+        spawn a long-running HTTP server, which is the same constraint that
+        produced L10 for pyghidra-mcp.
+
+        A running instance holds its own exe file open, so Expand-Archive -Force
+        fails with access-denied against it - it is therefore stopped by path
+        before extracting, the same way Restart-StaleServerTask stops a stale
+        instance before restarting one. Registering compares only the task's
+        action - the launcher path - which never changes, so a rewritten
+        launcher would otherwise not reach the running server until the next
+        logon; Restart-StaleServerTask and Wait-ServerListening after
+        registration close that gap the same way Install-VenvHttpServer does.
+    .PARAMETER Server
+        One entry from the config's mcpServers[].
+    .PARAMETER Config
+        The parsed configuration object.
+    .PARAMETER Inventory
+        Host inventory from Get-HostInventory.
+    .OUTPUTS
+        [PSCustomObject] A server result from New-ServerResult.
+    .EXAMPLE
+        Install-NativeSseServer -Server $srv -Config $cfg -Inventory $inv
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Server,
+        [Parameter(Mandatory)][object]$Config,
+        [Parameter(Mandatory)][object]$Inventory
+    )
+
+    $installDir = Join-Path (Join-Path $Config.paths.toolRoot 'mcp') $Server.name
+    if (-not (Test-Path -LiteralPath $installDir)) {
+        New-Item -ItemType Directory -Path $installDir -Force | Out-Null
+    } else {
+        $running = Get-ChildItem -LiteralPath $installDir -Filter "$($Server.name).exe" `
+            -Recurse -File | Select-Object -First 1
+        if ($running) {
+            Stop-ProcessByPath -Path $running.FullName -Confirm:$false | Out-Null
+        }
+    }
+
+    if ($Server.PSObject.Properties.Name -contains 'projectRoot') {
+        $reason = Initialize-GhidraProjectDependency -Server $Server -Inventory $Inventory
+        if ($reason) {
+            return New-ServerResult -Server $Server -Status 'not-installed' -Reason $reason
+        }
+    }
+
+    $zip = Get-VerifiedRelease -Server $Server -Config $Config
+    Expand-Archive -LiteralPath $zip -DestinationPath $installDir -Force
+
+    $exe = Get-ChildItem -LiteralPath $installDir -Filter "$($Server.name).exe" -Recurse -File |
+        Select-Object -First 1
+    if ($null -eq $exe) {
+        return New-ServerResult -Server $Server -Status 'failed' -Reason (
+            "The release archive contained no $($Server.name).exe.")
+    }
+    Invoke-GhidrasqlBootstrapIfNeeded -ExePath $exe.FullName -Server $Server -Inventory $Inventory
+
+    $launcher = Join-Path $installDir "launch-$($Server.name).cmd"
+    Write-ServerLauncher -Path $launcher -Executable $exe.FullName `
+        -Arguments (Get-NativeSseLaunchArgument -Server $Server -Config $Config `
+            -Inventory $Inventory) | Out-Null
+    Register-ServerScheduledTask -Name $Server.scheduledTask -LauncherPath $launcher | Out-Null
+
+    if (Restart-StaleServerTask -Name $Server.scheduledTask -LauncherPath $launcher `
+            -ExecutablePath $exe.FullName) {
+        if (-not (Wait-ServerListening -Bind $Server.bind -Port $Server.port)) {
+            Write-ReAgentLog -Level WARN -Message (
+                "'$($Server.name)' has not started listening on $($Server.bind):" +
+                "$($Server.port) yet. Its live check will report not-testable; " +
+                're-run with -VerifyOnly once it is up.')
+        }
+    }
+
+    return New-ServerResult -Server $Server -Status 'installed' -Version $Server.source.pin
+}
+
 function Install-McpServer {
     <#
     .SYNOPSIS
@@ -783,6 +1183,10 @@ function Install-McpServer {
             }
             'plugin-inproc' {
                 return Install-PluginInprocServer -Server $Server -Config $Config `
+                    -Inventory $Inventory
+            }
+            'native-sse' {
+                return Install-NativeSseServer -Server $Server -Config $Config `
                     -Inventory $Inventory
             }
             default {
@@ -1432,4 +1836,5 @@ Export-ModuleMember -Function New-ServerResult, Get-VenvPython, Get-VenvPackageV
     Test-TcpPortOpen, Wait-ServerListening, `
     Install-GuiPluginHttpServer, Install-PluginInprocServer, Get-VerifiedRelease, `
     Expand-X64dbgPlugin, Invoke-Download, Copy-PluginFile, Get-TreeHash, `
-    Get-VerifiedGitHubArchive, Expand-SkillPack
+    Get-VerifiedGitHubArchive, Expand-SkillPack, Get-NativeSseLaunchArgument, `
+    Install-NativeSseServer, Install-LibGhidraExtension, Resolve-LibGhidraExtensionZip

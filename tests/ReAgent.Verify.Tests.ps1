@@ -485,6 +485,23 @@ Describe 'the probe script' {
         $src = Get-Content (Join-Path $PSScriptRoot '..\tools\mcp_probe.py') -Raw
         $src | Should -BeLike '*--calls-file*'
     }
+
+    It 'offers an sse transport for the SQL-layer servers' {
+        # pdbsql and ghidrasql serve MCP over SSE, not streamable HTTP. Without
+        # this the probe answers 405 and a healthy server reads as unreachable -
+        # the same class of false negative as HANDOFF defect 3.
+        $src = Get-Content (Join-Path $PSScriptRoot '..\tools\mcp_probe.py') -Raw
+        $src | Should -BeLike '*"sse"*'
+    }
+
+    It 'reads the sse transport with a blocking socket, not an async client' {
+        # mcp.client.sse.sse_client hangs indefinitely reading pdbsql's real
+        # SSE stream under every async I/O client tested (task-7fix); a
+        # blocking socket reads the same stream instantly.
+        $src = Get-Content (Join-Path $PSScriptRoot '..\tools\mcp_probe.py') -Raw
+        $src | Should -BeLike '*_BlockingSSESession*'
+        $src | Should -Not -BeLike '*from mcp.client.sse import sse_client*'
+    }
 }
 
 Describe 'Test-PyghidraLive' {
@@ -1045,5 +1062,138 @@ Describe 'agent gate inside verification' {
             -AgentDir $agentDir
         $r.Status | Should -Be 'failed'
         @($r.Findings | Where-Object { $_.Check -eq 'A0' }).Count | Should -Be 1
+    }
+}
+
+Describe 'Test-HttpServerLive transport selection' {
+    BeforeAll {
+        $Script:SeenProbeArgs = @()
+        Mock -CommandName Invoke-McpProbe -MockWith {
+            $Script:SeenProbeArgs = $ProbeArgs
+            return [PSCustomObject]@{ ok = $true; toolCount = 2
+                tools = @('pdbsql_query', 'pdbsql_help') }
+        } -ModuleName ReAgent.Verify
+    }
+
+    It 'passes --transport=sse for a server declaring sse' {
+        $srv = [PSCustomObject]@{ name = 'pdbsql'; transport = 'sse'; bind = '127.0.0.1'
+            port = 8770; path = '/sse'; auth = 'none' }
+        $cfg = [PSCustomObject]@{ paths = [PSCustomObject]@{ toolRoot = 'C:\re' } }
+        Test-HttpServerLive -Server $srv -Config $cfg -PythonPath 'py.exe' | Out-Null
+        ($Script:SeenProbeArgs -join ' ') | Should -BeLike '*--transport=sse*'
+    }
+
+    It 'still passes --transport=http for every existing server' {
+        # Regression guard: sse must not become the default.
+        $srv = [PSCustomObject]@{ name = 'pyghidra-mcp'; transport = 'http'
+            bind = '127.0.0.1'; port = 8762; path = '/mcp'; auth = 'none' }
+        $cfg = [PSCustomObject]@{ paths = [PSCustomObject]@{ toolRoot = 'C:\re' } }
+        Test-HttpServerLive -Server $srv -Config $cfg -PythonPath 'py.exe' | Out-Null
+        ($Script:SeenProbeArgs -join ' ') | Should -BeLike '*--transport=http*'
+    }
+}
+
+Describe 'Test-ReadOnlyLaunchCheck (Q0)' {
+    BeforeAll {
+        $script:Dir = Join-Path ([IO.Path]::GetTempPath()) ("q0-" + [guid]::NewGuid())
+        New-Item -ItemType Directory -Path $script:Dir -Force | Out-Null
+    }
+    AfterAll { Remove-Item -LiteralPath $script:Dir -Recurse -Force -ErrorAction SilentlyContinue }
+
+    It 'passes when the launcher carries --readonly' {
+        $p = Join-Path $script:Dir 'ok.cmd'
+        Set-Content -LiteralPath $p -Value '"C:\ghidrasql.exe" --readonly --mcp 8771'
+        $srv = [PSCustomObject]@{ name = 'ghidrasql'; readonly = $true }
+        Test-ReadOnlyLaunchCheck -Server $srv -LauncherPath $p | Should -BeNullOrEmpty
+    }
+
+    It 'fails Q0 when --readonly was stripped from the launcher' {
+        # A3 judges the derived grant and cannot see a launcher flag. Without
+        # --readonly, ghidrasql_query writes to the program database while still
+        # classified 'read' - the gate would pass over a real write grant.
+        $p = Join-Path $script:Dir 'bad.cmd'
+        Set-Content -LiteralPath $p -Value '"C:\ghidrasql.exe" --mcp 8771'
+        $srv = [PSCustomObject]@{ name = 'ghidrasql'; readonly = $true }
+        $f = Test-ReadOnlyLaunchCheck -Server $srv -LauncherPath $p
+        @($f).Count | Should -Be 1
+        $f[0].Check | Should -Be 'Q0'
+        $f[0].Message | Should -BeLike '*--readonly*'
+    }
+
+    It 'fails Q0 when the launcher does not exist yet' {
+        $srv = [PSCustomObject]@{ name = 'ghidrasql'; readonly = $true }
+        $f = Test-ReadOnlyLaunchCheck -Server $srv `
+            -LauncherPath (Join-Path $script:Dir 'missing.cmd')
+        $f[0].Check | Should -Be 'Q0'
+    }
+
+    It 'returns nothing for a server that does not declare readonly' {
+        $p = Join-Path $script:Dir 'ok.cmd'
+        $srv = [PSCustomObject]@{ name = 'pdbsql' }
+        Test-ReadOnlyLaunchCheck -Server $srv -LauncherPath $p | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Get-SqlCheck' {
+    BeforeAll {
+        function New-SqlCheckConfig {
+            # Pure factory: builds and returns an in-memory PSCustomObject, writes nothing.
+            [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+                'PSUseShouldProcessForStateChangingFunctions', '')]
+            param($ToolRoot, $Server)
+            [PSCustomObject]@{
+                paths      = [PSCustomObject]@{ toolRoot = $ToolRoot; symbolCache = (
+                        Join-Path $ToolRoot 'symbols') }
+                mcpServers = @($Server)
+            }
+        }
+    }
+
+    It 'returns nothing when the config declares no native-sse server' {
+        $root = Join-Path $TestDrive 'gsq-none'
+        $cfg = New-SqlCheckConfig -ToolRoot $root -Server ([PSCustomObject]@{
+                name = 'pyghidra-mcp'; enabled = $true; kind = 'venv-http' })
+        Get-SqlCheck -Config $cfg | Should -BeNullOrEmpty
+    }
+
+    It 'runs Q0 and Q1 on a bare host where nothing is installed yet' {
+        # Both checks read only the repo and generated files (spec 7.3, 5.1), so
+        # -VerifyOnly must still report on a host phase 5 has never touched.
+        $root = Join-Path $TestDrive 'gsq-bare'
+        $cfg = New-SqlCheckConfig -ToolRoot $root -Server ([PSCustomObject]@{
+                name = 'ghidrasql'; enabled = $true; kind = 'native-sse'; readonly = $true
+                pdb  = [PSCustomObject]@{ module = 'ntdll' } })
+        $checks = @(Get-SqlCheck -Config $cfg)
+        $checks.Count | Should -Be 1
+        $checks[0].Name | Should -Be 'sql'
+        $checks[0].Status | Should -Be 'fail'
+        $checks[0].Detail | Should -BeLike '*[Q0]*'
+        $checks[0].Detail | Should -BeLike '*[Q1]*'
+    }
+
+    It 'passes when the launcher carries --readonly and the PDB resolves' {
+        $root = Join-Path $TestDrive 'gsq-pass'
+        $installDir = Join-Path $root 'mcp\ghidrasql'
+        New-Item -ItemType Directory -Path $installDir -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $installDir 'launch-ghidrasql.cmd') `
+            -Value '"C:\ghidrasql.exe" --readonly --mcp 8771'
+        $symbolCache = Join-Path $root 'symbols'
+        $pdbDir = Join-Path $symbolCache 'ntdll.pdb\ABCDEF1234567890'
+        New-Item -ItemType Directory -Path $pdbDir -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $pdbDir 'ntdll.pdb') -Value 'stub'
+
+        $cfg = New-SqlCheckConfig -ToolRoot $root -Server ([PSCustomObject]@{
+                name = 'ghidrasql'; enabled = $true; kind = 'native-sse'; readonly = $true
+                pdb  = [PSCustomObject]@{ module = 'ntdll' } })
+        $checks = @(Get-SqlCheck -Config $cfg)
+        $checks.Count | Should -Be 1
+        $checks[0].Status | Should -Be 'pass'
+    }
+
+    It 'skips a disabled native-sse server' {
+        $root = Join-Path $TestDrive 'gsq-disabled'
+        $cfg = New-SqlCheckConfig -ToolRoot $root -Server ([PSCustomObject]@{
+                name = 'ghidrasql'; enabled = $false; kind = 'native-sse'; readonly = $true })
+        Get-SqlCheck -Config $cfg | Should -BeNullOrEmpty
     }
 }
