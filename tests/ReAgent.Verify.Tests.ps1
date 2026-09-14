@@ -491,8 +491,16 @@ Describe 'the probe script' {
         # this the probe answers 405 and a healthy server reads as unreachable -
         # the same class of false negative as HANDOFF defect 3.
         $src = Get-Content (Join-Path $PSScriptRoot '..\tools\mcp_probe.py') -Raw
-        $src | Should -BeLike '*sse_client*'
         $src | Should -BeLike '*"sse"*'
+    }
+
+    It 'reads the sse transport with a blocking socket, not an async client' {
+        # mcp.client.sse.sse_client hangs indefinitely reading pdbsql's real
+        # SSE stream under every async I/O client tested (task-7fix); a
+        # blocking socket reads the same stream instantly.
+        $src = Get-Content (Join-Path $PSScriptRoot '..\tools\mcp_probe.py') -Raw
+        $src | Should -BeLike '*_BlockingSSESession*'
+        $src | Should -Not -BeLike '*from mcp.client.sse import sse_client*'
     }
 }
 
