@@ -75,3 +75,60 @@ Describe 'Test-SymbolsReady' {
         Test-SymbolsReady -Config $Script:ReadyCfg | Should -BeTrue
     }
 }
+
+Describe 'Resolve-PdbPath' {
+    BeforeAll {
+        $script:Root = Join-Path ([IO.Path]::GetTempPath()) ("sym-" + [guid]::NewGuid())
+        $guid = Join-Path $script:Root 'ntdll.pdb\1DF9DB46D55D6B869568C9F6E9287DE41'
+        New-Item -ItemType Directory -Path $guid -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $guid 'ntdll.pdb') -Value 'fake' -Encoding Ascii
+    }
+    AfterAll { Remove-Item -LiteralPath $script:Root -Recurse -Force -ErrorAction SilentlyContinue }
+
+    It 'walks the GUID directory to the real file' {
+        $p = Resolve-PdbPath -SymbolRoot $script:Root -Module 'ntdll'
+        (Test-Path -LiteralPath $p -PathType Leaf) | Should -BeTrue
+        $p | Should -BeLike '*1DF9DB46D55D6B869568C9F6E9287DE41\ntdll.pdb'
+    }
+
+    It 'never returns the container directory' {
+        # The 0x806D0005 trap: '<root>\ntdll.pdb' exists and is a directory.
+        $p = Resolve-PdbPath -SymbolRoot $script:Root -Module 'ntdll'
+        $p | Should -Not -Be (Join-Path $script:Root 'ntdll.pdb')
+    }
+
+    It 'returns null for a module the cache has never warmed' {
+        Resolve-PdbPath -SymbolRoot $script:Root -Module 'kernel32' | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Test-PdbPathCheck (Q1)' {
+    BeforeAll {
+        $script:Root2 = Join-Path ([IO.Path]::GetTempPath()) ("sym-" + [guid]::NewGuid())
+        $guid = Join-Path $script:Root2 'ntdll.pdb\AAAA1'
+        New-Item -ItemType Directory -Path $guid -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $guid 'ntdll.pdb') -Value 'fake' -Encoding Ascii
+    }
+    AfterAll { Remove-Item -LiteralPath $script:Root2 -Recurse -Force -ErrorAction SilentlyContinue }
+
+    It 'passes when the module resolves to a file' {
+        $srv = [PSCustomObject]@{ name = 'pdbsql'
+            pdb = [PSCustomObject]@{ module = 'ntdll' } }
+        Test-PdbPathCheck -Server $srv -SymbolRoot $script:Root2 | Should -BeNullOrEmpty
+    }
+
+    It 'fails Q1 naming 0x806D0005 when the module is not in the cache' {
+        $srv = [PSCustomObject]@{ name = 'pdbsql'
+            pdb = [PSCustomObject]@{ module = 'nosuch' } }
+        $f = Test-PdbPathCheck -Server $srv -SymbolRoot $script:Root2
+        @($f).Count | Should -Be 1
+        $f[0].Check | Should -Be 'Q1'
+        $f[0].Message | Should -BeLike '*0x806D0005*'
+    }
+
+    It 'returns nothing for a server with no pdb block' {
+        $srv = [PSCustomObject]@{ name = 'ghidrasql' }
+        Test-PdbPathCheck -Server $srv -SymbolRoot $script:Root2 | Should -BeNullOrEmpty
+    }
+}
+
