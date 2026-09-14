@@ -159,6 +159,36 @@
       }
     },
     {
+      "name": "ghidrasql",
+      "enabled": true,
+      "kind": "native-sse",
+      "source": {
+        "type": "github-release",
+        "repo": "0xeb/ghidrasql",
+        "pin": "v0.0.6",
+        "sha256": {
+          "ghidrasql-cli-windows-v0.0.6.zip": "d646e49f1373846decdbc869722e3861b45cb84714fcd1a439f346c9816caff5"
+        },
+        "libghidra": { "repo": "0xeb/libghidra", "pin": "v0.0.7" }
+      },
+      "transport": "sse",
+      "bind": "127.0.0.1",
+      "port": 8771,
+      "path": "/sse",
+      "auth": "none",
+      "authExemptReason": "upstream --mcp endpoint accepts no credential; loopback-only, Profile A",
+      "scheduledTask": "ReLab-ghidrasql",
+      "requiresHostApp": false,
+      "verifyTier": "unattended",
+      "readonly": true,
+      "projectRoot": "C:\\re\\mcp\\ghidrasql\\projects",
+      "verify": {
+        "tool": "ghidrasql_query",
+        "args": { "query": "SELECT COUNT(*) AS n FROM funcs" },
+        "expect": "\"n\":\\s*[1-9]"
+      }
+    },
+    {
       "name": "ghidramcp",
       "enabled": false,
       "kind": "gui-plugin-http",

@@ -1136,3 +1136,49 @@ Describe 'Install-NativeSseServer' {
         $r.Reason | Should -BeLike '*pdbsql.exe*'
     }
 }
+
+Describe 'Install-LibGhidraExtension' {
+    BeforeAll {
+        # Get-GhidraVersion reads the version out of the install directory's own
+        # name (ghidra_X.Y.Z...); this fixture's temp directory does not follow
+        # that naming, so it is mocked to report this host's real 12.1.2 instead.
+        Mock -ModuleName ReAgent.Servers Get-GhidraVersion { '12.1.2' }
+        $script:GRoot = Join-Path ([IO.Path]::GetTempPath()) ("gh-" + [guid]::NewGuid())
+        New-Item -ItemType Directory -Path (Join-Path $script:GRoot 'Ghidra\Extensions') `
+            -Force | Out-Null
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $stage = Join-Path ([IO.Path]::GetTempPath()) ("st-" + [guid]::NewGuid())
+        $inner = Join-Path $stage 'LibGhidraHost'
+        New-Item -ItemType Directory -Path $inner -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $inner 'extension.properties') `
+            -Value "name=LibGhidraHost`nversion=12.1.2"
+        $script:Zip = "$stage.zip"
+        [IO.Compression.ZipFile]::CreateFromDirectory($stage, $script:Zip)
+        Remove-Item -LiteralPath $stage -Recurse -Force
+    }
+    AfterAll {
+        Remove-Item -LiteralPath $script:GRoot -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $script:Zip -Force -ErrorAction SilentlyContinue
+    }
+
+    It 'writes the extension into the Ghidra tree on a first install' {
+        Install-LibGhidraExtension -ExtensionZip $script:Zip -GhidraRoot $script:GRoot |
+            Should -BeTrue
+        Test-Path (Join-Path $script:GRoot `
+                'Ghidra\Extensions\LibGhidraHost\extension.properties') | Should -BeTrue
+    }
+
+    It 'reports no change on a second run, so a steady-state run touches nothing' {
+        Install-LibGhidraExtension -ExtensionZip $script:Zip -GhidraRoot $script:GRoot | Out-Null
+        Install-LibGhidraExtension -ExtensionZip $script:Zip -GhidraRoot $script:GRoot |
+            Should -BeFalse
+    }
+
+    It 'refuses an extension stamped for a different Ghidra than the host runs' {
+        # The Task 1 gate again, enforced at install time: a stamp mismatch here
+        # means someone substituted a prebuilt release zip for the built one.
+        Mock -ModuleName ReAgent.Servers Get-GhidraVersion { '12.1.3' }
+        { Install-LibGhidraExtension -ExtensionZip $script:Zip -GhidraRoot $script:GRoot } |
+            Should -Throw '*12.1.2*'
+    }
+}

@@ -736,6 +736,65 @@ function Install-VenvHttpServer {
         -Command $command
 }
 
+function Install-LibGhidraExtension {
+    <#
+    .SYNOPSIS
+        Installs the built LibGhidraHost extension into a Ghidra distribution.
+    .DESCRIPTION
+        The extension MUST be the one built against this host (spec SQ6): a
+        prebuilt release zip declares whatever Ghidra its author had, and
+        Ghidra matches that string exactly. The version is re-asserted here as
+        well as at build time, because the two happen at different moments and
+        a release zip could be substituted between them.
+
+        Writing only on change keeps a steady-state run from touching the
+        Ghidra tree that pyghidra-mcp also runs against.
+    .PARAMETER ExtensionZip
+        The zip produced by tools\Build-LibGhidraExtension.ps1.
+    .PARAMETER GhidraRoot
+        The Ghidra distribution root.
+    .OUTPUTS
+        [bool] True when the extension was written, false when already current.
+    .EXAMPLE
+        Install-LibGhidraExtension -ExtensionZip $zip -GhidraRoot $root
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ExtensionZip,
+        [Parameter(Mandatory)][string]$GhidraRoot
+    )
+
+    $expected = Get-GhidraVersion -GhidraRoot $GhidraRoot
+    # Dot-sourcing does not open a new scope: the tool script's own
+    # $GhidraRoot param would otherwise bind over this function's $GhidraRoot
+    # with $null, since it is not passed. Passing it through explicitly makes
+    # that collision a no-op self-reassignment instead of a silent clobber.
+    . "$PSScriptRoot\..\tools\Build-LibGhidraExtension.ps1" -GhidraRoot $GhidraRoot -DotSourceOnly
+    Assert-StampedExtensionVersion -ZipPath $ExtensionZip -ExpectedVersion $expected | Out-Null
+
+    $target = Join-Path (Join-Path $GhidraRoot 'Ghidra\Extensions') 'LibGhidraHost'
+    $marker = Join-Path $target 'extension.properties'
+    $hashFile = Join-Path $target '.re-agent-source-sha256'
+    $sourceHash = (Get-FileHash -LiteralPath $ExtensionZip -Algorithm SHA256).Hash
+    if ((Test-Path -LiteralPath $marker) -and (Test-Path -LiteralPath $hashFile) -and
+        (Get-Content -LiteralPath $hashFile -Raw).Trim() -eq $sourceHash) {
+        return $false
+    }
+
+    if (Test-Path -LiteralPath $target) {
+        Remove-Item -LiteralPath $target -Recurse -Force
+    }
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    # ExtractToDirectory has no (source, dest, overwrite) overload on .NET
+    # Framework - only (source, dest) and (source, dest, Encoding) - and a
+    # trailing $true there miscasts as Encoding. $target is already removed
+    # above, so no overwrite is needed.
+    [IO.Compression.ZipFile]::ExtractToDirectory(
+        $ExtensionZip, (Join-Path $GhidraRoot 'Ghidra\Extensions'))
+    Set-Content -LiteralPath $hashFile -Value $sourceHash -Encoding Ascii
+    return $true
+}
+
 function Get-NativeSseLaunchArgument {
     <#
     .SYNOPSIS
@@ -1546,4 +1605,4 @@ Export-ModuleMember -Function New-ServerResult, Get-VenvPython, Get-VenvPackageV
     Install-GuiPluginHttpServer, Install-PluginInprocServer, Get-VerifiedRelease, `
     Expand-X64dbgPlugin, Invoke-Download, Copy-PluginFile, Get-TreeHash, `
     Get-VerifiedGitHubArchive, Expand-SkillPack, Get-NativeSseLaunchArgument, `
-    Install-NativeSseServer
+    Install-NativeSseServer, Install-LibGhidraExtension
