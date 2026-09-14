@@ -82,6 +82,27 @@ def http_transport(url, headers):
         )
 
 
+def sse_transport(url, headers):
+    """Open an SSE transport.
+
+    pdbsql and ghidrasql serve MCP over SSE: GET <url> streams an
+    `event: endpoint` naming a session-scoped POST path, and JSON-RPC then
+    flows to that path. This is not streamable-http and the two are not
+    interchangeable - posting to an SSE endpoint answers 405.
+    """
+    from mcp.client.sse import sse_client
+
+    return sse_client(url, headers=headers)
+
+
+async def probe_sse(args):
+    from mcp import ClientSession
+
+    async with sse_transport(args.url, parse_pairs(args.header)) as streams:
+        async with ClientSession(streams[0], streams[1]) as session:
+            return await run_checks(session, args)
+
+
 async def probe_http(args):
     from mcp import ClientSession
 
@@ -180,7 +201,8 @@ def describe(exc):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--transport", required=True, choices=["stdio", "http"])
+    parser.add_argument("--transport", required=True,
+                        choices=["stdio", "http", "sse"])
     parser.add_argument("--command")
     parser.add_argument("--arg", action="append")
     parser.add_argument("--env", action="append")
@@ -204,10 +226,15 @@ def main():
 
     if args.transport == "stdio" and not args.command:
         parser.error("--command is required for stdio")
-    if args.transport == "http" and not args.url:
+    if args.transport in ("http", "sse") and not args.url:
         parser.error("--url is required for http")
 
-    coroutine = probe_stdio(args) if args.transport == "stdio" else probe_http(args)
+    if args.transport == "stdio":
+        coroutine = probe_stdio(args)
+    elif args.transport == "sse":
+        coroutine = probe_sse(args)
+    else:
+        coroutine = probe_http(args)
     try:
         result = asyncio.run(asyncio.wait_for(coroutine, timeout=args.timeout))
     except asyncio.TimeoutError:

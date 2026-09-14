@@ -485,6 +485,15 @@ Describe 'the probe script' {
         $src = Get-Content (Join-Path $PSScriptRoot '..\tools\mcp_probe.py') -Raw
         $src | Should -BeLike '*--calls-file*'
     }
+
+    It 'offers an sse transport for the SQL-layer servers' {
+        # pdbsql and ghidrasql serve MCP over SSE, not streamable HTTP. Without
+        # this the probe answers 405 and a healthy server reads as unreachable -
+        # the same class of false negative as HANDOFF defect 3.
+        $src = Get-Content (Join-Path $PSScriptRoot '..\tools\mcp_probe.py') -Raw
+        $src | Should -BeLike '*sse_client*'
+        $src | Should -BeLike '*"sse"*'
+    }
 }
 
 Describe 'Test-PyghidraLive' {
