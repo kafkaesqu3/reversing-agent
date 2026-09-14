@@ -1092,6 +1092,7 @@ Describe 'Install-NativeSseServer' {
             'C:\re\mcp\pdbsql\launch-pdbsql.cmd'
         }
         Mock -ModuleName ReAgent.Servers Register-ServerScheduledTask { $true }
+        Mock -ModuleName ReAgent.Servers Restart-StaleServerTask { $false }
 
         $staging = Join-Path $TestDrive 'pdbsql-release'
         $null = New-Item -ItemType Directory -Path $staging -Force
@@ -1135,7 +1136,171 @@ Describe 'Install-NativeSseServer' {
         $r.Status | Should -Be 'failed'
         $r.Reason | Should -BeLike '*pdbsql.exe*'
     }
+
+    It 'pins the version onto the manifest record' {
+        Mock -ModuleName ReAgent.Servers Resolve-PdbPath {
+            'C:\re\symbols\ntdll.pdb\GUID\ntdll.pdb'
+        }
+        Mock -ModuleName ReAgent.Servers Write-ServerLauncher {
+            'C:\re\mcp\pdbsql\launch-pdbsql.cmd'
+        }
+        Mock -ModuleName ReAgent.Servers Register-ServerScheduledTask { $true }
+        Mock -ModuleName ReAgent.Servers Restart-StaleServerTask { $false }
+
+        $staging = Join-Path $TestDrive 'pdbsql-release-version'
+        $null = New-Item -ItemType Directory -Path $staging -Force
+        $null = New-Item -ItemType File -Path (Join-Path $staging 'pdbsql.exe') -Force
+        $zip = Join-Path $TestDrive 'pdbsql-version.zip'
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [IO.Compression.ZipFile]::CreateFromDirectory($staging, $zip)
+        Mock -ModuleName ReAgent.Servers Get-VerifiedRelease { $zip }
+
+        $cfg = [PSCustomObject]@{
+            paths = [PSCustomObject]@{ toolRoot = (Join-Path $TestDrive 'case-version')
+                symbolCache = 'C:\re\symbols' }
+        }
+        $r = Install-NativeSseServer -Server $script:SseSrv -Config $cfg `
+            -Inventory ([PSCustomObject]@{})
+        $r.Version | Should -Be 'v1.0'
+    }
+
+    It 'stops an already-running instance before re-extracting over it' {
+        # Expand-Archive -Force fails 'access to the path is denied' against a
+        # running pdbsql.exe: the exe holds its own file open, so the old
+        # process has to go before the new bytes land, not after.
+        Mock -ModuleName ReAgent.Servers Resolve-PdbPath {
+            'C:\re\symbols\ntdll.pdb\GUID\ntdll.pdb'
+        }
+        Mock -ModuleName ReAgent.Servers Write-ServerLauncher {
+            'C:\re\mcp\pdbsql\launch-pdbsql.cmd'
+        }
+        Mock -ModuleName ReAgent.Servers Register-ServerScheduledTask { $true }
+        Mock -ModuleName ReAgent.Servers Restart-StaleServerTask { $false }
+        Mock -ModuleName ReAgent.Servers Stop-ProcessByPath { 1 }
+
+        $toolRoot = Join-Path $TestDrive 'case-stop'
+        $installDir = Join-Path $toolRoot 'mcp\pdbsql'
+        $null = New-Item -ItemType Directory -Path $installDir -Force
+        $existingExe = Join-Path $installDir 'pdbsql.exe'
+        $null = New-Item -ItemType File -Path $existingExe -Force
+
+        $staging = Join-Path $TestDrive 'pdbsql-release-stop'
+        $null = New-Item -ItemType Directory -Path $staging -Force
+        $null = New-Item -ItemType File -Path (Join-Path $staging 'pdbsql.exe') -Force
+        $zip = Join-Path $TestDrive 'pdbsql-stop.zip'
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [IO.Compression.ZipFile]::CreateFromDirectory($staging, $zip)
+        Mock -ModuleName ReAgent.Servers Get-VerifiedRelease { $zip }
+
+        $cfg = [PSCustomObject]@{
+            paths = [PSCustomObject]@{ toolRoot = $toolRoot; symbolCache = 'C:\re\symbols' }
+        }
+        $r = Install-NativeSseServer -Server $script:SseSrv -Config $cfg `
+            -Inventory ([PSCustomObject]@{})
+
+        $r.Status | Should -Be 'installed'
+        Should -Invoke -ModuleName ReAgent.Servers Stop-ProcessByPath -Times 1 -Exactly `
+            -ParameterFilter { $Path -eq $existingExe }
+    }
+
+    It 'never stops a process on a fresh install with nothing running yet' {
+        Mock -ModuleName ReAgent.Servers Resolve-PdbPath {
+            'C:\re\symbols\ntdll.pdb\GUID\ntdll.pdb'
+        }
+        Mock -ModuleName ReAgent.Servers Write-ServerLauncher {
+            'C:\re\mcp\pdbsql\launch-pdbsql.cmd'
+        }
+        Mock -ModuleName ReAgent.Servers Register-ServerScheduledTask { $true }
+        Mock -ModuleName ReAgent.Servers Restart-StaleServerTask { $false }
+        Mock -ModuleName ReAgent.Servers Stop-ProcessByPath { 0 }
+
+        $staging = Join-Path $TestDrive 'pdbsql-release-fresh'
+        $null = New-Item -ItemType Directory -Path $staging -Force
+        $null = New-Item -ItemType File -Path (Join-Path $staging 'pdbsql.exe') -Force
+        $zip = Join-Path $TestDrive 'pdbsql-fresh.zip'
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [IO.Compression.ZipFile]::CreateFromDirectory($staging, $zip)
+        Mock -ModuleName ReAgent.Servers Get-VerifiedRelease { $zip }
+
+        $cfg = [PSCustomObject]@{
+            paths = [PSCustomObject]@{ toolRoot = (Join-Path $TestDrive 'case-fresh')
+                symbolCache = 'C:\re\symbols' }
+        }
+        $r = Install-NativeSseServer -Server $script:SseSrv -Config $cfg `
+            -Inventory ([PSCustomObject]@{})
+
+        $r.Status | Should -Be 'installed'
+        Should -Invoke -ModuleName ReAgent.Servers Stop-ProcessByPath -Times 0
+    }
+
+    It 'restarts the task and waits for the port when the task was stale' {
+        Mock -ModuleName ReAgent.Servers Resolve-PdbPath {
+            'C:\re\symbols\ntdll.pdb\GUID\ntdll.pdb'
+        }
+        Mock -ModuleName ReAgent.Servers Write-ServerLauncher {
+            'C:\re\mcp\pdbsql\launch-pdbsql.cmd'
+        }
+        Mock -ModuleName ReAgent.Servers Register-ServerScheduledTask { $true }
+        Mock -ModuleName ReAgent.Servers Restart-StaleServerTask { $true }
+        Mock -ModuleName ReAgent.Servers Wait-ServerListening { $true }
+
+        $staging = Join-Path $TestDrive 'pdbsql-release-restart'
+        $null = New-Item -ItemType Directory -Path $staging -Force
+        $null = New-Item -ItemType File -Path (Join-Path $staging 'pdbsql.exe') -Force
+        $zip = Join-Path $TestDrive 'pdbsql-restart.zip'
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [IO.Compression.ZipFile]::CreateFromDirectory($staging, $zip)
+        Mock -ModuleName ReAgent.Servers Get-VerifiedRelease { $zip }
+
+        $toolRoot = Join-Path $TestDrive 'case-restart'
+        $cfg = [PSCustomObject]@{
+            paths = [PSCustomObject]@{ toolRoot = $toolRoot; symbolCache = 'C:\re\symbols' }
+        }
+        $r = Install-NativeSseServer -Server $script:SseSrv -Config $cfg `
+            -Inventory ([PSCustomObject]@{})
+
+        $r.Status | Should -Be 'installed'
+        $expectedLauncher = Join-Path $toolRoot 'mcp\pdbsql\launch-pdbsql.cmd'
+        Should -Invoke -ModuleName ReAgent.Servers Restart-StaleServerTask -Times 1 -Exactly `
+            -ParameterFilter {
+                $Name -eq 'ReLab-pdbsql' -and $LauncherPath -eq $expectedLauncher -and
+                $ExecutablePath -eq (Join-Path $toolRoot 'mcp\pdbsql\pdbsql.exe')
+            }
+        Should -Invoke -ModuleName ReAgent.Servers Wait-ServerListening -Times 1 -Exactly `
+            -ParameterFilter { $Bind -eq '127.0.0.1' -and $Port -eq 8770 }
+    }
+
+    It 'does not wait for the port when the task was already current' {
+        Mock -ModuleName ReAgent.Servers Resolve-PdbPath {
+            'C:\re\symbols\ntdll.pdb\GUID\ntdll.pdb'
+        }
+        Mock -ModuleName ReAgent.Servers Write-ServerLauncher {
+            'C:\re\mcp\pdbsql\launch-pdbsql.cmd'
+        }
+        Mock -ModuleName ReAgent.Servers Register-ServerScheduledTask { $true }
+        Mock -ModuleName ReAgent.Servers Restart-StaleServerTask { $false }
+        Mock -ModuleName ReAgent.Servers Wait-ServerListening { $true }
+
+        $staging = Join-Path $TestDrive 'pdbsql-release-current'
+        $null = New-Item -ItemType Directory -Path $staging -Force
+        $null = New-Item -ItemType File -Path (Join-Path $staging 'pdbsql.exe') -Force
+        $zip = Join-Path $TestDrive 'pdbsql-current.zip'
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [IO.Compression.ZipFile]::CreateFromDirectory($staging, $zip)
+        Mock -ModuleName ReAgent.Servers Get-VerifiedRelease { $zip }
+
+        $cfg = [PSCustomObject]@{
+            paths = [PSCustomObject]@{ toolRoot = (Join-Path $TestDrive 'case-current')
+                symbolCache = 'C:\re\symbols' }
+        }
+        $r = Install-NativeSseServer -Server $script:SseSrv -Config $cfg `
+            -Inventory ([PSCustomObject]@{})
+
+        $r.Status | Should -Be 'installed'
+        Should -Invoke -ModuleName ReAgent.Servers Wait-ServerListening -Times 0
+    }
 }
+
 
 Describe 'Install-LibGhidraExtension' {
     BeforeAll {

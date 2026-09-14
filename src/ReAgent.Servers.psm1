@@ -749,6 +749,10 @@ function Install-LibGhidraExtension {
 
         Writing only on change keeps a steady-state run from touching the
         Ghidra tree that pyghidra-mcp also runs against.
+
+        Not called from production code yet: ghidrasql ships disabled because
+        its launcher has no --ghidra connection-mode flag wiring it to this
+        extension. This function is staged for that pending work.
     .PARAMETER ExtensionZip
         The zip produced by tools\Build-LibGhidraExtension.ps1.
     .PARAMETER GhidraRoot
@@ -861,6 +865,15 @@ function Install-NativeSseServer {
         decision), and registers the logon Scheduled Task. Claude Code cannot
         spawn a long-running HTTP server, which is the same constraint that
         produced L10 for pyghidra-mcp.
+
+        A running instance holds its own exe file open, so Expand-Archive -Force
+        fails with access-denied against it - it is therefore stopped by path
+        before extracting, the same way Restart-StaleServerTask stops a stale
+        instance before restarting one. Registering compares only the task's
+        action - the launcher path - which never changes, so a rewritten
+        launcher would otherwise not reach the running server until the next
+        logon; Restart-StaleServerTask and Wait-ServerListening after
+        registration close that gap the same way Install-VenvHttpServer does.
     .PARAMETER Server
         One entry from the config's mcpServers[].
     .PARAMETER Config
@@ -884,10 +897,17 @@ function Install-NativeSseServer {
     )
 
     $installDir = Join-Path (Join-Path $Config.paths.toolRoot 'mcp') $Server.name
-    $zip = Get-VerifiedRelease -Server $Server -Config $Config
     if (-not (Test-Path -LiteralPath $installDir)) {
         New-Item -ItemType Directory -Path $installDir -Force | Out-Null
+    } else {
+        $running = Get-ChildItem -LiteralPath $installDir -Filter "$($Server.name).exe" `
+            -Recurse -File | Select-Object -First 1
+        if ($running) {
+            Stop-ProcessByPath -Path $running.FullName -Confirm:$false | Out-Null
+        }
     }
+
+    $zip = Get-VerifiedRelease -Server $Server -Config $Config
     Expand-Archive -LiteralPath $zip -DestinationPath $installDir -Force
 
     $exe = Get-ChildItem -LiteralPath $installDir -Filter "$($Server.name).exe" -Recurse -File |
@@ -901,7 +921,18 @@ function Install-NativeSseServer {
     Write-ServerLauncher -Path $launcher -Executable $exe.FullName `
         -Arguments (Get-NativeSseLaunchArgument -Server $Server -Config $Config) | Out-Null
     Register-ServerScheduledTask -Name $Server.scheduledTask -LauncherPath $launcher | Out-Null
-    return New-ServerResult -Server $Server -Status 'installed'
+
+    if (Restart-StaleServerTask -Name $Server.scheduledTask -LauncherPath $launcher `
+            -ExecutablePath $exe.FullName) {
+        if (-not (Wait-ServerListening -Bind $Server.bind -Port $Server.port)) {
+            Write-ReAgentLog -Level WARN -Message (
+                "'$($Server.name)' has not started listening on $($Server.bind):" +
+                "$($Server.port) yet. Its live check will report not-testable; " +
+                're-run with -VerifyOnly once it is up.')
+        }
+    }
+
+    return New-ServerResult -Server $Server -Status 'installed' -Version $Server.source.pin
 }
 
 function Install-McpServer {
