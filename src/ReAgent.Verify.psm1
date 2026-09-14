@@ -571,6 +571,11 @@ function Get-HostAppHint {
         $exe = if ($Server.arch -eq 'x32') { 'x32dbg' } else { 'x64dbg' }
         return "Open $exe with the target binary loaded, then re-run."
     }
+    if ($Server.kind -eq 'native-sse') {
+        return ("Start-ScheduledTask -TaskName '$($Server.scheduledTask)' - it is a " +
+            'background service, not a GUI application, and does not autostart until ' +
+            'next logon.')
+    }
     return 'Open the host application, then re-run.'
 }
 
@@ -725,11 +730,11 @@ function Get-ServerProbeContext {
         [AllowNull()][object]$Inventory = $null
     )
 
-    if ($Server.transport -eq 'http') {
+    if ($Server.transport -eq 'http' -or $Server.transport -eq 'sse') {
         $url = "http://$($Server.bind):$($Server.port)$($Server.path)"
         return [PSCustomObject]@{ Ok = $true; Reason = ''
             PythonPath = (Get-ProbeInterpreter -Config $Config)
-            ProbeArgs  = @('--transport=http', "--url=$url")
+            ProbeArgs  = @("--transport=$($Server.transport)", "--url=$url")
         }
     }
     if ($Server.transport -eq 'stdio' -and $Inventory) {
