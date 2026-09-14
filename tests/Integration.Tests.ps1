@@ -349,3 +349,39 @@ Describe 'the SQL layer, stage 1' {
         }
     }
 }
+
+Describe 'the SQL layer, stage 2' {
+    BeforeAll {
+        $script:Cfg2 = Get-ReAgentConfig -Path (Join-Path $PSScriptRoot '../re-agent.config.json')
+        $script:Cat2 = Get-ToolCatalog
+    }
+
+    It 'declares ghidrasql read-only' {
+        $s = @($script:Cfg2.mcpServers | Where-Object { $_.name -eq 'ghidrasql' })[0]
+        $s.readonly | Should -BeTrue
+    }
+
+    It 'keeps ghidrasql off the verifier, whose read-only-ness rests on no flag' {
+        $v = @($script:Cfg2.agents | Where-Object { $_.name -eq 'verifier' })[0]
+        $v.targetServers | Should -Not -Contain 'ghidrasql'
+    }
+
+    It 'gives ghidrasql its own project root, never pyghidra-mcp''s' {
+        # HANDOFF defect 5 was a Ghidra project LockException. Two consumers of
+        # one distribution is fine; two consumers of one project is not. pyghidra-mcp
+        # has no projectRoot config field -- Install-PyghidraMcpServer computes its
+        # project path at launch time as agentRoot\cases\ghidra (ReAgent.Servers.psm1);
+        # compare against that real value instead of a nonexistent config property.
+        $s = @($script:Cfg2.mcpServers | Where-Object { $_.name -eq 'ghidrasql' })[0]
+        $pyghidraProjectPath = Join-Path $script:Cfg2.paths.agentRoot 'cases\ghidra'
+        $s.projectRoot | Should -Not -BeNullOrEmpty
+        $s.projectRoot | Should -Not -Be $pyghidraProjectPath
+    }
+
+    It 'passes A0-A4 for the static analyst with ghidrasql added' {
+        $a = @($script:Cfg2.agents | Where-Object { $_.name -eq 'static-analyst' })[0]
+        Invoke-AgentGate -Agent $a -Catalog $script:Cat2 `
+            -Frontmatter @{ name = 'static-analyst' } -FileBaseName 'static-analyst' |
+            Should -BeNullOrEmpty
+    }
+}

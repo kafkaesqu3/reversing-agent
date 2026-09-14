@@ -215,7 +215,7 @@
       "name": "static-analyst",
       "enabled": true,
       "level": "write",
-      "targetServers": ["pyghidra-mcp", "pdbsql"],
+      "targetServers": ["pyghidra-mcp", "pdbsql", "ghidrasql"],
       "builtinTools": ["Read", "Glob", "Grep"],
       "model": "inherit",
       "disabledReason": ""

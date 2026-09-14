@@ -78,6 +78,18 @@
         "destructive": []
       }
     },
+    "ghidrasql": {
+      "pin": "v0.0.6",
+      "toolCount": 2,
+      "tools": ["ghidrasql_help", "ghidrasql_query"],
+      "classification": {
+        "classifiedBy": "david",
+        "classifiedAt": "2026-09-09",
+        "classifiedTools": ["ghidrasql_help", "ghidrasql_query"],
+        "write": [],
+        "destructive": []
+      }
+    },
     "mcp-windbg": {
       "pin": "1.2.1",
       "toolCount": 10,
