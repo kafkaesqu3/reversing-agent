@@ -883,10 +883,13 @@ function Invoke-GhidrasqlBootstrap {
         saves the program to the project on disk - confirmed live by re-querying
         the same project from a fresh process afterward.
 
-        <projectName>.gpr under projectRoot is the marker: it is the file Ghidra
-        itself creates for a project, so its presence means a bootstrap (or any
-        other prior use of the project) already ran; this function is then a
-        no-op, keeping a steady-state install from re-importing on every run.
+        The marker is .bootstrapped under projectRoot, written by this function
+        itself only after a successful run - not <projectName>.gpr, which Ghidra
+        writes the moment the project is *created*, before the import ever runs.
+        Gating on .gpr would treat an import killed partway (analysis OOM, an
+        interrupted install) as already done: the next install pass would never
+        retry it, and --program would keep pointing at a program that was never
+        actually saved.
     .PARAMETER ExePath
         Path to the extracted ghidrasql.exe.
     .PARAMETER Server
@@ -904,16 +907,21 @@ function Invoke-GhidrasqlBootstrap {
         [Parameter(Mandatory)][object]$Inventory
     )
 
-    $marker = Join-Path $Server.projectRoot "$($Server.projectName).gpr"
+    $marker = Join-Path $Server.projectRoot '.bootstrapped'
     if (Test-Path -LiteralPath $marker) { return }
 
-    & $ExePath --ghidra $Inventory.GhidraRoot --project $Server.projectRoot `
-        --project-name $Server.projectName --binary $Server.bootstrap.binary `
-        --list-project-programs 2>&1 | Write-Verbose
+    Write-ReAgentLog -Level INFO -Message (
+        "Bootstrapping '$($Server.name)': importing and analyzing " +
+        "'$($Server.bootstrap.binary)'. This runs headless Ghidra analysis and can take " +
+        'several minutes with no further progress output.')
+    $output = @(& $ExePath --ghidra $Inventory.GhidraRoot --project $Server.projectRoot `
+            --project-name $Server.projectName --binary $Server.bootstrap.binary `
+            --list-project-programs 2>&1)
     if ($LASTEXITCODE -ne 0) {
         throw ("Bootstrapping '$($Server.name)' failed (exit $LASTEXITCODE): could not " +
-            "import '$($Server.bootstrap.binary)' into its project.")
+            "import '$($Server.bootstrap.binary)' into its project.`n" + ($output -join "`n"))
     }
+    Set-Content -LiteralPath $marker -Value $Server.bootstrap.programName -Encoding Ascii
 }
 
 function Invoke-GhidrasqlBootstrapIfNeeded {

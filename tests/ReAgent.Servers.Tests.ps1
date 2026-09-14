@@ -1422,15 +1422,16 @@ Describe 'Invoke-GhidrasqlBootstrap' {
     BeforeAll {
         $script:BootSrv = [PSCustomObject]@{
             name = 'ghidrasql'; projectName = 're-lab'
-            bootstrap = [PSCustomObject]@{ binary = 'C:\Windows\System32\ntdll.dll' }
+            bootstrap = [PSCustomObject]@{ binary = 'C:\Windows\System32\ntdll.dll'
+                programName = 'ntdll.dll' }
         }
         $script:BootInv = [PSCustomObject]@{ GhidraRoot = 'C:\ghidra_12.1.2_PUBLIC' }
     }
 
-    It 'is a no-op when the project .gpr marker already exists' {
+    It 'is a no-op when the .bootstrapped marker already exists' {
         $projectRoot = Join-Path $TestDrive 'igb-existing'
         New-Item -ItemType Directory -Path $projectRoot -Force | Out-Null
-        New-Item -ItemType File -Path (Join-Path $projectRoot 're-lab.gpr') -Force | Out-Null
+        New-Item -ItemType File -Path (Join-Path $projectRoot '.bootstrapped') -Force | Out-Null
         $srv = $script:BootSrv.PSObject.Copy()
         $srv | Add-Member -NotePropertyName projectRoot -NotePropertyValue $projectRoot
         InModuleScope ReAgent.Servers -Parameters @{ Server = $srv; Inventory = $script:BootInv } {
@@ -1441,7 +1442,29 @@ Describe 'Invoke-GhidrasqlBootstrap' {
         }
     }
 
-    It 'runs the bootstrap when no marker exists yet' {
+    It 'retries when a .gpr exists but .bootstrapped does not (a prior run died partway)' {
+        # <projectName>.gpr is Ghidra's own project file, written the moment the
+        # project is *created* - before an import ever runs. A prior bootstrap
+        # killed partway (OOM, an interrupted install) leaves .gpr behind with no
+        # program actually saved, so gating on .gpr alone would wrongly skip the
+        # retry this run needs.
+        $projectRoot = Join-Path $TestDrive 'igb-partial'
+        New-Item -ItemType Directory -Path $projectRoot -Force | Out-Null
+        New-Item -ItemType File -Path (Join-Path $projectRoot 're-lab.gpr') -Force | Out-Null
+        $stub = Join-Path $TestDrive 'partial.cmd'
+        Set-Content -LiteralPath $stub -Value '@exit /b 0'
+        $srv = $script:BootSrv.PSObject.Copy()
+        $srv | Add-Member -NotePropertyName projectRoot -NotePropertyValue $projectRoot
+        InModuleScope ReAgent.Servers -Parameters @{
+            Server = $srv; Inventory = $script:BootInv; Stub = $stub
+        } {
+            { Invoke-GhidrasqlBootstrap -ExePath $Stub -Server $Server -Inventory $Inventory } |
+                Should -Not -Throw
+            Test-Path (Join-Path $Server.projectRoot '.bootstrapped') | Should -BeTrue
+        }
+    }
+
+    It 'runs the bootstrap and writes the marker when none exists yet' {
         $projectRoot = Join-Path $TestDrive 'igb-run'
         New-Item -ItemType Directory -Path $projectRoot -Force | Out-Null
         $stub = Join-Path $TestDrive 'ok.cmd'
@@ -1453,21 +1476,23 @@ Describe 'Invoke-GhidrasqlBootstrap' {
         } {
             { Invoke-GhidrasqlBootstrap -ExePath $Stub -Server $Server -Inventory $Inventory } |
                 Should -Not -Throw
+            Test-Path (Join-Path $Server.projectRoot '.bootstrapped') | Should -BeTrue
         }
     }
 
-    It 'throws when the bootstrap run exits nonzero' {
+    It 'throws when the bootstrap run exits nonzero, and writes no marker' {
         $projectRoot = Join-Path $TestDrive 'igb-fail'
         New-Item -ItemType Directory -Path $projectRoot -Force | Out-Null
         $stub = Join-Path $TestDrive 'fail.cmd'
-        Set-Content -LiteralPath $stub -Value '@exit /b 1'
+        Set-Content -LiteralPath $stub -Value '@echo boom & exit /b 1'
         $srv = $script:BootSrv.PSObject.Copy()
         $srv | Add-Member -NotePropertyName projectRoot -NotePropertyValue $projectRoot
         InModuleScope ReAgent.Servers -Parameters @{
             Server = $srv; Inventory = $script:BootInv; Stub = $stub
         } {
             { Invoke-GhidrasqlBootstrap -ExePath $Stub -Server $Server -Inventory $Inventory } |
-                Should -Throw '*1*'
+                Should -Throw '*boom*'
+            Test-Path (Join-Path $Server.projectRoot '.bootstrapped') | Should -BeFalse
         }
     }
 }
