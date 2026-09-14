@@ -120,7 +120,7 @@ Describe 'the shipped config drives the real modules' {
 
     It 'gives every server a kind the dispatcher can handle' {
         $handled = @('plugin-inproc', 'venv-stdio', 'venv-http',
-            'gui-builtin-http', 'gui-plugin-http')
+            'gui-builtin-http', 'gui-plugin-http', 'native-sse')
         foreach ($s in $Script:Cfg.mcpServers) { $handled | Should -Contain $s.kind }
     }
 

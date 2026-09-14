@@ -1,7 +1,7 @@
 Set-StrictMode -Version Latest
 
 $Script:ValidKinds = @('plugin-inproc', 'venv-stdio', 'venv-http',
-    'gui-builtin-http', 'gui-plugin-http')
+    'gui-builtin-http', 'gui-plugin-http', 'native-sse')
 
 function Get-ReAgentConfig {
     <#
