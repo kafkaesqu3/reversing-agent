@@ -1,12 +1,14 @@
 # Skill pack sign-off — the human review gate
 
-Eight packs are vendored and adapted. **None is signed off, so none installs.**
-`Install-SkillPack` refuses each with *"human review gate: no sign-off recorded"* and
-`Get-ManualStep` repeats it in the manifest. That state is deliberate: an agent must not
-record an attestation a person never made.
+Eight packs are vendored and adapted. **All eight were signed off on 2026-09-08** —
+`reviewedBy: david` under `skills[<ns>].review` in `re-agent.config.json` — and all eight
+install. Before that sign-off `Install-SkillPack` refused each with *"human review gate: no
+sign-off recorded"*, which was deliberate: an agent must not record an attestation a person
+never made.
 
-This file is the checklist for making that attestation. It is not a substitute for reading
-the files — spec §4.5: *the real cost of this slice is the human review, not the PowerShell.
+This file is the checklist that attestation was made against, and the record of the open
+decisions it accepted. Re-work it whenever a pack's pin moves. It is not a substitute for
+reading the files — spec §4.5: *the real cost of this slice is the human review, not the PowerShell.
 The scanner is the backstop that catches what a tired reader misses.*
 
 ---

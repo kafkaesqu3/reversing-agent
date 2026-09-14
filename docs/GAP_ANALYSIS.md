@@ -8,6 +8,25 @@
 > symbolic-execution-tools, `binary-re`, `symbol-recovery`, and the 13 dropped `tob` siblings)
 > remains untouched — tracked as backlog in `docs/mvp/HANDOFF.md` under "Skill packs surveyed
 > but not vendored." This file is otherwise the original, unedited survey.
+>
+> **Prioritisation, 2026-09-09 (david):** four of the six Critical items are **deprioritised —
+> low priority, not withdrawn**. They are operational hygiene rather than reverse-engineering
+> capability, and this lab's next slices go to capability:
+>
+> | Item | Status |
+> |---|---|
+> | **C2** agent-action audit trail / chain of custody | 🔻 low priority |
+> | **C3** secure-coding contract for build-your-own MCP wrappers | 🔻 low priority — revisit **when** a wrapper is actually built, since it constrains that code |
+> | **C4** cost / token budget and runaway-spend control | 🔻 low priority |
+> | **C5** kill switch and resource containment | 🔻 low priority |
+> | **C1** adopt-an-existing-dirty-VM path | ✅ effectively answered — locked decision L4 made the installer adopt-and-reconcile from the start |
+> | **C6** the verification oracle | **still live** — it is capability, not hygiene, and stays a candidate for the next spec |
+>
+> The same ruling covers `DEPLOYMENT_PLAN.md`'s Phase 7 hooks table and its `settings.json`
+> default-deny permissions block (agent-topology spec §12 gap 4, the unbounded main session):
+> real, recorded, and not next. Nothing here is closed — the cost of leaving them open is
+> written up in each item below, and C3 in particular should be read before writing any
+> wrapper that shells out.
 
 Review of `BLUEPRINT.md` and `DEPLOYMENT_PLAN.md`, cross-checked against current (2026) MCP-security, agentic-malware-analysis, and Windows vuln-research practice. Findings are split into **Critical** (will block correctness, safety, or usability if unaddressed) and **Nice-to-have** (real value, not on the critical path).
 
