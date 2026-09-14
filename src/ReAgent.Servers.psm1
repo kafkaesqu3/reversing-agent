@@ -871,6 +871,118 @@ function Initialize-GhidraProjectDependency {
     return $null
 }
 
+function Invoke-GhidrasqlBootstrap {
+    <#
+    .SYNOPSIS
+        Imports and analyzes ghidrasql's bootstrap binary into its project, once.
+    .DESCRIPTION
+        A freshly-provisioned ghidrasql project starts with no imported program,
+        and every *_query tool then fails 'no current program' until one exists
+        (Task 10 Step 9, live). A one-shot run with --binary and no --readonly
+        (so Ghidra's own default shutdown=save applies) imports, analyzes, and
+        saves the program to the project on disk - confirmed live by re-querying
+        the same project from a fresh process afterward.
+
+        <projectName>.gpr under projectRoot is the marker: it is the file Ghidra
+        itself creates for a project, so its presence means a bootstrap (or any
+        other prior use of the project) already ran; this function is then a
+        no-op, keeping a steady-state install from re-importing on every run.
+    .PARAMETER ExePath
+        Path to the extracted ghidrasql.exe.
+    .PARAMETER Server
+        One entry from the config's mcpServers[]. Must carry projectRoot,
+        projectName and bootstrap.binary.
+    .PARAMETER Inventory
+        Host inventory from Get-HostInventory.
+    .EXAMPLE
+        Invoke-GhidrasqlBootstrap -ExePath $exe.FullName -Server $srv -Inventory $inv
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ExePath,
+        [Parameter(Mandatory)][object]$Server,
+        [Parameter(Mandatory)][object]$Inventory
+    )
+
+    $marker = Join-Path $Server.projectRoot "$($Server.projectName).gpr"
+    if (Test-Path -LiteralPath $marker) { return }
+
+    & $ExePath --ghidra $Inventory.GhidraRoot --project $Server.projectRoot `
+        --project-name $Server.projectName --binary $Server.bootstrap.binary `
+        --list-project-programs 2>&1 | Write-Verbose
+    if ($LASTEXITCODE -ne 0) {
+        throw ("Bootstrapping '$($Server.name)' failed (exit $LASTEXITCODE): could not " +
+            "import '$($Server.bootstrap.binary)' into its project.")
+    }
+}
+
+function Invoke-GhidrasqlBootstrapIfNeeded {
+    <#
+    .SYNOPSIS
+        Runs Invoke-GhidrasqlBootstrap for a bootstrap-configured server, else does nothing.
+    .DESCRIPTION
+        Split out of Install-NativeSseServer to keep that function's cyclomatic
+        complexity within this repo's limit, the same way Initialize-GhidraProjectDependency
+        was. Most native-sse servers, including ghidrasql without a bootstrap entry,
+        carry no bootstrap binary to import.
+    .PARAMETER ExePath
+        Path to the extracted server executable.
+    .PARAMETER Server
+        One entry from the config's mcpServers[].
+    .PARAMETER Inventory
+        Host inventory from Get-HostInventory.
+    .EXAMPLE
+        Invoke-GhidrasqlBootstrapIfNeeded -ExePath $exe.FullName -Server $srv -Inventory $inv
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ExePath,
+        [Parameter(Mandatory)][object]$Server,
+        [Parameter(Mandatory)][object]$Inventory
+    )
+
+    if ($Server.PSObject.Properties.Name -contains 'bootstrap') {
+        Invoke-GhidrasqlBootstrap -ExePath $ExePath -Server $Server -Inventory $Inventory
+    }
+}
+
+function Get-GhidraProjectLaunchArgument {
+    <#
+    .SYNOPSIS
+        Builds the --ghidra/--project/--project-name/--program arguments for ghidrasql.
+    .DESCRIPTION
+        Split out of Get-NativeSseLaunchArgument to keep that function's cyclomatic
+        complexity within this repo's limit. Live verification (Task 10 Step 9) found
+        ghidrasql's headless mode needs --project-name as a separate required flag
+        from --project, and reopening an already-imported program needs --program
+        naming it explicitly - otherwise every query fails 'no current program'.
+    .PARAMETER Server
+        One entry from the config's mcpServers[]. Must carry projectRoot and projectName.
+    .PARAMETER Inventory
+        Host inventory from Get-HostInventory.
+    .OUTPUTS
+        [string[]] The --ghidra/--project/--project-name[/--program] arguments, in order.
+    .EXAMPLE
+        Get-GhidraProjectLaunchArgument -Server $srv -Inventory $inv
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Server,
+        [Parameter(Mandatory)][object]$Inventory
+    )
+
+    if (-not $Inventory.GhidraRoot) {
+        throw ("Cannot launch '$($Server.name)': no Ghidra installation was found on " +
+            'this host.')
+    }
+    $projectArgs = @('--ghidra', "$($Inventory.GhidraRoot)", '--project', "$($Server.projectRoot)",
+        '--project-name', "$($Server.projectName)")
+    if ($Server.PSObject.Properties.Name -contains 'bootstrap') {
+        $projectArgs += @('--program', "$($Server.bootstrap.programName)")
+    }
+    return $projectArgs
+}
+
 function Get-NativeSseLaunchArgument {
     <#
     .SYNOPSIS
@@ -922,12 +1034,7 @@ function Get-NativeSseLaunchArgument {
         $launchArgs += '--readonly'
     }
     if ($Server.PSObject.Properties.Name -contains 'projectRoot') {
-        if (-not $Inventory.GhidraRoot) {
-            throw ("Cannot launch '$($Server.name)': no Ghidra installation was found on " +
-                'this host.')
-        }
-        $launchArgs += @('--ghidra', "$($Inventory.GhidraRoot)")
-        $launchArgs += @('--project', "$($Server.projectRoot)")
+        $launchArgs += Get-GhidraProjectLaunchArgument -Server $Server -Inventory $Inventory
     }
     $launchArgs += @('--mcp', "$($Server.port)")
     if ($Server.PSObject.Properties.Name -contains 'bind') {
@@ -1000,6 +1107,7 @@ function Install-NativeSseServer {
         return New-ServerResult -Server $Server -Status 'failed' -Reason (
             "The release archive contained no $($Server.name).exe.")
     }
+    Invoke-GhidrasqlBootstrapIfNeeded -ExePath $exe.FullName -Server $Server -Inventory $Inventory
 
     $launcher = Join-Path $installDir "launch-$($Server.name).cmd"
     Write-ServerLauncher -Path $launcher -Executable $exe.FullName `

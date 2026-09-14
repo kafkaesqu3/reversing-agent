@@ -125,10 +125,11 @@ Describe 'the shipped config drives the real modules' {
     }
 
     It 'generates a settings file disabling exactly the disabled servers' {
+        # ghidrasql is enabled (Task 10 wired its --ghidra flag and extension install
+        # live-verified); only ghidramcp - pending its own extension work - stays disabled.
         $s = New-ClaudeSettingsObject -Config $Script:Cfg
         $s.disabledMcpjsonServers | Should -Contain 'ghidramcp'
-        $s.disabledMcpjsonServers | Should -Contain 'ghidrasql'
-        $s.disabledMcpjsonServers.Count | Should -Be 2
+        $s.disabledMcpjsonServers.Count | Should -Be 1
     }
 }
 

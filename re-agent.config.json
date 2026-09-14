@@ -160,7 +160,7 @@
     },
     {
       "name": "ghidrasql",
-      "enabled": false,
+      "enabled": true,
       "kind": "native-sse",
       "source": {
         "type": "github-release",
@@ -182,6 +182,11 @@
       "verifyTier": "unattended",
       "readonly": true,
       "projectRoot": "C:\\re\\mcp\\ghidrasql\\projects",
+      "projectName": "re-lab",
+      "bootstrap": {
+        "binary": "C:\\Windows\\System32\\ntdll.dll",
+        "programName": "ntdll.dll"
+      },
       "verify": {
         "tool": "ghidrasql_query",
         "args": { "query": "SELECT COUNT(*) AS n FROM funcs" },
