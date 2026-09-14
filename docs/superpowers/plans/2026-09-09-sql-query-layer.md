@@ -23,7 +23,7 @@ tool classifiable for the agent gate.
 - **Task 1 is a gate.** Tasks 8 and 9 are stage 2 and MUST NOT be started until Task 1 has
   recorded a pass. If Task 1 fails, stop, report, and deliver stage 1 only.
 - **Never run the real installer.** Phase functions are exercised through tests with the host
-  mocked. The only exceptions are the explicitly-marked live steps in Tasks 1, 7 and 9.
+  mocked. The only exceptions are the explicitly-marked live steps in Tasks 1, 7, 9 and 10.
 - **`Z:` is an SMB share: `Edit`/`Write` fail with `ENOENT fchmod` when overwriting an existing
   file.** Create new files with `Write`; patch existing files with a Python script run through
   `C:\Python313\python.exe`.
@@ -62,6 +62,7 @@ tool classifiable for the agent gate.
 | `src/ReAgent.Verify.psm1` | **Modify.** Transport-aware probing, plus checks `Q0` and `Q1`. |
 | `data/tool-catalog.json` | **Modify.** Entries and classifications for both servers. |
 | `re-agent.config.json` | **Modify.** Two `mcpServers` entries; the `verifier` and `static-analyst` grants. |
+| `tools/Build-LibGhidraExtension.ps1` | **Read only** (Task 10 dot-sources it via `Install-LibGhidraExtension`, unchanged). |
 
 ---
 
@@ -1701,7 +1702,8 @@ launcher command directly and by reading `ghidrasql --help` in full.
    outcome above) has never actually been installed into this host's real Ghidra distribution.
 
 A third, smaller gap surfaced investigating the above: even with `--ghidra` wired in, the
-project directory (`--project C:e\mcp\ghidrasql\projects`) starts empty - `SELECT COUNT(*)
+project directory (`--project C:
+e\mcp\ghidrasql\projects`) starts empty - `SELECT COUNT(*)
 AS n FROM funcs` would return zero rows until at least one binary is imported and analyzed
 (`--binary <path>`) into it, the same bootstrapping problem Task 7 solved for pdbsql by warming
 `ntdll`'s PDB in the symbol cache ahead of time. No task specifies an equivalent bootstrap for
@@ -1736,7 +1738,8 @@ reports `pass` — the two share a Ghidra distribution and must both work.
 
 Done independently of Step 5's gap - Q0 (`Test-ReadOnlyLaunchCheck`) is a pure static-file check
 with no dependency on ghidrasql actually running. Stripped ` --readonly` from the real generated
-`C:e\mcp\ghidrasql\launch-ghidrasql.cmd`, called `Get-SqlCheck` directly:
+`C:
+e\mcp\ghidrasql\launch-ghidrasql.cmd`, called `Get-SqlCheck` directly:
 
 ```
 Status: fail
@@ -1779,6 +1782,376 @@ The code/config/test commit (`48fb371`) landed as its own task earlier; this pla
 ```bash
 git add data/tool-catalog.json re-agent.config.json tests/Integration.Tests.ps1
 git commit -m "Classify ghidrasql read-only and grant it to the static analyst"
+```
+
+---
+
+### Task 10: Wire ghidrasql's connection mode - closes the gap Task 9 recorded
+
+**Do not start this task if Task 1's gate did not record a pass.**
+
+Task 9's Step 5 found `ghidrasql.exe` cannot start at all (`error: no connection mode
+specified`) because of two gaps neither task closed: `Get-NativeSseLaunchArgument` never
+emits `--ghidra <path>`, and `Install-LibGhidraExtension` (Task 8, fully implemented and
+tested) is never called from the install flow. This task closes both, so ghidrasql can start.
+It does **not** attempt the third, smaller gap Task 9 also found - bootstrapping the project
+with an imported+analyzed binary so `funcs` is non-empty - because the exact CLI incantation
+for that is unverified from any committed doc; see Step 9 below, which investigates it live
+rather than guessing it in code.
+
+**Files:**
+- Modify: `src/ReAgent.Servers.psm1` (`Get-NativeSseLaunchArgument`, `Install-NativeSseServer`;
+  new `Resolve-LibGhidraExtensionZip`)
+- Modify: `tests/ReAgent.Servers.Tests.ps1`
+- Modify: `re-agent.config.json` (flip `ghidrasql.enabled` to `true` once Step 9 proves it live)
+- Modify: `docs/superpowers/specs/2026-09-09-sql-query-layer-design.md` (SS4 launcher layout
+  line, which currently omits `--ghidra`), `docs/mvp/MVP.md` (ghidrasql row)
+
+**Interfaces:**
+- Consumes: `Install-LibGhidraExtension` (Task 8, already exported); `Find-GhidraRoot`,
+  `Get-GhidraVersion` (`ReAgent.Discovery.psm1`, already exported).
+- Produces: `Resolve-LibGhidraExtensionZip -VendorCacheRoot <string>` -> the newest `*.zip`
+  under `<VendorCacheRoot>\libghidra\ghidra-extension\dist\`, or `$null` if none exists.
+
+**Rulings made ahead of implementation** (the design spec and Task 9's ledger note leave these
+open; recorded here so the implementer transcribes rather than invents):
+
+1. **Ghidra-shaped detection stays `projectRoot` presence.** `Get-NativeSseLaunchArgument`
+   already branches on `projectRoot` to emit `--project`; the same property gates the new
+   `--ghidra` emission and `Install-NativeSseServer`'s extension-install call. No new marker
+   field. Cost if wrong: a future native-sse server with a `projectRoot` but no Ghidra
+   dependency would wrongly get `--ghidra` - none exists today.
+2. **`Get-NativeSseLaunchArgument` gains a mandatory `-Inventory` parameter.** `--ghidra`
+   needs `$Inventory.GhidraRoot`, which is not in `$Config`. `Install-NativeSseServer` already
+   receives `-Inventory`; thread it through to its one call site.
+3. **The extension zip is located by glob, not pinned by hash in config.** SQ6 already
+   anchors trust in `Assert-StampedExtensionVersion` (Task 1/8), not a hash - the zip is a
+   local, host-specific build artifact (`.vendor-cache/` is git-ignored, never a pinned
+   release), so a hash pin here would just go stale on every rebuild. `Get-VerifiedRelease`'s
+   hash-pin pattern is for immutable upstream release assets and does not fit this artifact.
+4. **A missing extension zip is `not-installed`, not `failed`.** Mirrors the existing
+   `GhidraMCP`-version-mismatch handling (MVP.md: "Record not-installed, do not fail"). A host
+   that never ran the maintainer-only `Build-LibGhidraExtension.ps1` (needs Gradle) should not
+   fail its whole install run over it.
+5. **`$Server.projectRoot` is created (`New-Item -Force`) if missing**, before the launcher is
+   written - `ghidrasql --project <dir>` needs the directory to exist on first run.
+
+- [ ] **Step 1: Write the failing tests for `Get-NativeSseLaunchArgument`**
+
+Append to the existing `Describe 'Get-NativeSseLaunchArgument'` block in
+`tests/ReAgent.Servers.Tests.ps1` (it already has a `$script:Cfg` `BeforeAll`):
+
+```powershell
+    It 'adds --ghidra for a projectRoot server, from Inventory not Config' {
+        $srv = [PSCustomObject]@{ name = 'ghidrasql'; port = 8771; bind = '127.0.0.1'
+            readonly = $true; projectRoot = 'C:\re\mcp\ghidrasql\projects' }
+        $inv = [PSCustomObject]@{ GhidraRoot = 'C:\ghidra_12.1.2_PUBLIC' }
+        $a = Get-NativeSseLaunchArgument -Server $srv -Config $script:Cfg -Inventory $inv
+        $i = [array]::IndexOf($a, '--ghidra')
+        $i | Should -BeGreaterOrEqual 0
+        $a[$i + 1] | Should -Be 'C:\ghidra_12.1.2_PUBLIC'
+    }
+
+    It 'never adds --ghidra for a server with no projectRoot' {
+        Mock -ModuleName ReAgent.Servers Resolve-PdbPath { 'C:\pdb\ntdll.pdb' }
+        $srv = [PSCustomObject]@{ name = 'pdbsql'; port = 8770
+            pdb = [PSCustomObject]@{ module = 'ntdll' } }
+        $inv = [PSCustomObject]@{ GhidraRoot = 'C:\ghidra_12.1.2_PUBLIC' }
+        (Get-NativeSseLaunchArgument -Server $srv -Config $script:Cfg -Inventory $inv) |
+            Should -Not -Contain '--ghidra'
+    }
+
+    It 'throws when a projectRoot server has no Ghidra on this host' {
+        $srv = [PSCustomObject]@{ name = 'ghidrasql'; port = 8771
+            readonly = $true; projectRoot = 'C:\re\mcp\ghidrasql\projects' }
+        $inv = [PSCustomObject]@{ GhidraRoot = $null }
+        { Get-NativeSseLaunchArgument -Server $srv -Config $script:Cfg -Inventory $inv } |
+            Should -Throw '*Ghidra*'
+    }
+```
+
+Update the block's three existing `It`s that call `Get-NativeSseLaunchArgument` to pass
+`-Inventory ([PSCustomObject]@{ GhidraRoot = $null })` (none of them are `projectRoot`
+servers, so `$null` is fine and exercises nothing new).
+
+- [ ] **Step 2: Write the failing tests for the extension wiring**
+
+New `Describe` block in `tests/ReAgent.Servers.Tests.ps1`, after `Describe 'Install-NativeSseServer'`:
+
+```powershell
+Describe 'Resolve-LibGhidraExtensionZip' {
+    It 'returns the newest zip under the vendor-cache dist directory' {
+        $root = Join-Path $TestDrive 'vc1'
+        $dist = Join-Path $root 'libghidra\ghidra-extension\dist'
+        New-Item -ItemType Directory -Path $dist -Force | Out-Null
+        $old = Join-Path $dist 'old.zip'
+        $new = Join-Path $dist 'new.zip'
+        Set-Content -LiteralPath $old -Value 'x'
+        Start-Sleep -Milliseconds 50
+        Set-Content -LiteralPath $new -Value 'y'
+        Resolve-LibGhidraExtensionZip -VendorCacheRoot $root | Should -Be $new
+    }
+
+    It 'returns $null when no build has ever run' {
+        $root = Join-Path $TestDrive 'vc2'
+        Resolve-LibGhidraExtensionZip -VendorCacheRoot $root | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Install-NativeSseServer, ghidrasql extension wiring' {
+    BeforeAll {
+        $script:GhSrv = [PSCustomObject]@{
+            name = 'ghidrasql'; kind = 'native-sse'; enabled = $true
+            transport = 'sse'; bind = '127.0.0.1'; port = 8771; path = '/sse'
+            auth = 'none'; scheduledTask = 'ReLab-ghidrasql'
+            readonly = $true; projectRoot = ''
+            source = [PSCustomObject]@{ repo = 'x/ghidrasql'; pin = 'v0.0.6'
+                sha256 = [PSCustomObject]@{ 'ghidrasql-win64.zip' = 'deadbeef' } }
+        }
+    }
+
+    It 'installs the extension before writing the launcher, then extracts and registers' {
+        $toolRoot = Join-Path $TestDrive 'case-gh1'
+        $script:GhSrv.projectRoot = Join-Path $toolRoot 'mcp\ghidrasql\projects'
+
+        Mock -ModuleName ReAgent.Servers Write-ServerLauncher {
+            'C:\re\mcp\ghidrasql\launch-ghidrasql.cmd'
+        }
+        Mock -ModuleName ReAgent.Servers Register-ServerScheduledTask { $true }
+        Mock -ModuleName ReAgent.Servers Restart-StaleServerTask { $false }
+        Mock -ModuleName ReAgent.Servers Install-LibGhidraExtension { $true }
+
+        $staging = Join-Path $TestDrive 'ghidrasql-release'
+        New-Item -ItemType Directory -Path $staging -Force | Out-Null
+        New-Item -ItemType File -Path (Join-Path $staging 'ghidrasql.exe') -Force | Out-Null
+        $zip = Join-Path $TestDrive 'ghidrasql.zip'
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [IO.Compression.ZipFile]::CreateFromDirectory($staging, $zip)
+        Mock -ModuleName ReAgent.Servers Get-VerifiedRelease { $zip }
+
+        $vendorCache = Join-Path $TestDrive 'vc-installed'
+        $dist = Join-Path $vendorCache 'libghidra\ghidra-extension\dist'
+        New-Item -ItemType Directory -Path $dist -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $dist 'ext.zip') -Value 'x'
+        Mock -ModuleName ReAgent.Servers Resolve-LibGhidraExtensionZip {
+            Join-Path $dist 'ext.zip'
+        }
+
+        $cfg = [PSCustomObject]@{ paths = [PSCustomObject]@{ toolRoot = $toolRoot } }
+        $inv = [PSCustomObject]@{ GhidraRoot = 'C:\ghidra_12.1.2_PUBLIC' }
+        $r = Install-NativeSseServer -Server $script:GhSrv -Config $cfg -Inventory $inv
+
+        $r.Status | Should -Be 'installed'
+        Test-Path $script:GhSrv.projectRoot | Should -BeTrue
+        Should -Invoke -ModuleName ReAgent.Servers Install-LibGhidraExtension -Times 1 -Exactly `
+            -ParameterFilter { $GhidraRoot -eq 'C:\ghidra_12.1.2_PUBLIC' }
+    }
+
+    It 'reports not-installed, not failed, when the extension was never built' {
+        $toolRoot = Join-Path $TestDrive 'case-gh2'
+        $script:GhSrv.projectRoot = Join-Path $toolRoot 'mcp\ghidrasql\projects'
+        Mock -ModuleName ReAgent.Servers Resolve-LibGhidraExtensionZip { $null }
+
+        $cfg = [PSCustomObject]@{ paths = [PSCustomObject]@{ toolRoot = $toolRoot } }
+        $inv = [PSCustomObject]@{ GhidraRoot = 'C:\ghidra_12.1.2_PUBLIC' }
+        $r = Install-NativeSseServer -Server $script:GhSrv -Config $cfg -Inventory $inv
+
+        $r.Status | Should -Be 'not-installed'
+        $r.Reason | Should -BeLike '*Build-LibGhidraExtension*'
+    }
+}
+```
+
+- [ ] **Step 3: Run to verify they fail**
+
+Run:
+```bash
+powershell.exe -NoProfile -Command "Import-Module Pester -MinimumVersion 5.5.0; Invoke-Pester -Path tests/ReAgent.Servers.Tests.ps1 -Output Detailed"
+```
+Expected: FAIL - `Resolve-LibGhidraExtensionZip` not recognized; the `-Inventory`-less calls
+and the missing `--ghidra`/extension-install behavior fail the new assertions.
+
+- [ ] **Step 4: Implement `Resolve-LibGhidraExtensionZip`**
+
+Add to `src/ReAgent.Servers.psm1` and its `Export-ModuleMember`:
+
+```powershell
+function Resolve-LibGhidraExtensionZip {
+    <#
+    .SYNOPSIS
+        Finds the most recently built LibGhidraHost extension zip.
+    .DESCRIPTION
+        The build is a maintainer-only, network-requiring step
+        (tools\Build-LibGhidraExtension.ps1) that writes into .vendor-cache,
+        which is git-ignored (spec SQ6: never installed from a pinned release
+        zip). Install-NativeSseServer looks here rather than taking a config
+        path, because the artifact is host-specific and re-built on demand,
+        not a pinned asset with a hash to check against.
+    .PARAMETER VendorCacheRoot
+        The repo's .vendor-cache directory.
+    .OUTPUTS
+        [string] Full path to the newest zip, or $null if none was ever built.
+    .EXAMPLE
+        Resolve-LibGhidraExtensionZip -VendorCacheRoot (Join-Path $PSScriptRoot '..\.vendor-cache')
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$VendorCacheRoot)
+
+    $dist = Join-Path $VendorCacheRoot 'libghidra\ghidra-extension\dist'
+    if (-not (Test-Path -LiteralPath $dist)) { return $null }
+    $zip = Get-ChildItem -LiteralPath $dist -Filter '*.zip' -File |
+        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($null -eq $zip) { return $null }
+    return $zip.FullName
+}
+```
+
+- [ ] **Step 5: Wire `--ghidra` into `Get-NativeSseLaunchArgument`**
+
+Add an `-Inventory` parameter and, inside the existing `projectRoot` branch (which already
+emits `--project`), emit `--ghidra` first. Keep the function under the 100-line/complexity-8
+limits - this is a few lines, not a restructure:
+
+```powershell
+    param(
+        [Parameter(Mandatory)][object]$Server,
+        [Parameter(Mandatory)][object]$Config,
+        [Parameter(Mandatory)][object]$Inventory
+    )
+
+    $launchArgs = @()
+    ...
+    if ($Server.PSObject.Properties.Name -contains 'projectRoot') {
+        if (-not $Inventory.GhidraRoot) {
+            throw ("Cannot launch '$($Server.name)': no Ghidra installation was found on " +
+                'this host.')
+        }
+        $launchArgs += @('--ghidra', "$($Inventory.GhidraRoot)")
+        $launchArgs += @('--project', "$($Server.projectRoot)")
+    }
+    ...
+```
+
+(Fold this into the existing `if ($Server.PSObject.Properties.Name -contains 'projectRoot')`
+block rather than adding a second one.)
+
+- [ ] **Step 6: Wire the extension install and project-dir creation into `Install-NativeSseServer`**
+
+Its `param()` block is unchanged (it already takes `-Inventory`); remove the
+`SuppressMessageAttribute('PSReviewUnusedParameter', ...)` on `$Inventory` now that it is used.
+Before `Get-NativeSseLaunchArgument` is called, for a `projectRoot` server:
+
+```powershell
+    if ($Server.PSObject.Properties.Name -contains 'projectRoot') {
+        if (-not (Test-Path -LiteralPath $Server.projectRoot)) {
+            New-Item -ItemType Directory -Path $Server.projectRoot -Force | Out-Null
+        }
+        $vendorCache = Join-Path $PSScriptRoot '..\.vendor-cache'
+        $extZip = Resolve-LibGhidraExtensionZip -VendorCacheRoot $vendorCache
+        if (-not $extZip) {
+            return New-ServerResult -Server $Server -Status 'not-installed' -Reason (
+                'LibGhidraHost extension not built on this host. Run ' +
+                'tools\Build-LibGhidraExtension.ps1 first (maintainer path, needs Gradle).')
+        }
+        Install-LibGhidraExtension -ExtensionZip $extZip -GhidraRoot $Inventory.GhidraRoot |
+            Out-Null
+    }
+```
+
+Pass `-Inventory $Inventory` through to `Get-NativeSseLaunchArgument`'s call site further down
+in the same function.
+
+**Ruling on the `$vendorCache` path:** resolve it relative to `$PSScriptRoot`
+(`src/ReAgent.Servers.psm1`'s own directory), the same way `Install-LibGhidraExtension`'s own
+dot-source already does - `.vendor-cache` lives at the repo root, not under
+`$Config.paths.toolRoot` (which is the separate install tree, `C:\re`). Step 2's test mocks
+`Resolve-LibGhidraExtensionZip` directly, so this resolution line is not exercised by the unit
+suite; it only matters for real at Step 9's live run.
+
+- [ ] **Step 7: Run to verify they pass, then the full suite and the analyzer**
+
+Run:
+```bash
+powershell.exe -NoProfile -Command "Import-Module Pester -MinimumVersion 5.5.0; Invoke-Pester -Path tests/ReAgent.Servers.Tests.ps1 -Output Detailed"
+powershell.exe -NoProfile -Command "Import-Module Pester -MinimumVersion 5.5.0; $r = Invoke-Pester -Path tests/ -Output None -PassThru; Write-Host \"PASSED=$($r.PassedCount) FAILED=$($r.FailedCount)\"; Invoke-ScriptAnalyzer -Path . -Settings PSScriptAnalyzerSettings.psd1 -Recurse"
+```
+Expected: `FAILED=0` and no analyzer output.
+
+- [ ] **Step 8: Commit the mocked/TDD portion**
+
+```bash
+git add src/ReAgent.Servers.psm1 tests/ReAgent.Servers.Tests.ps1
+git commit -m "Wire ghidrasql's --ghidra flag and its LibGhidraHost extension install"
+```
+
+- [ ] **Step 9: LIVE - install, observe the real failure mode, and decide the bootstrap**
+
+**Host-mutating. Ask before running**, per this plan's own established gating (Task 9's
+ledger note 8: "stopped and asked before every host-mutating step").
+
+Run:
+```bash
+powershell.exe -NoProfile -Command ".\Install-REAgent.ps1 -Phases 0,3,6,7"
+```
+
+Two outcomes:
+
+| Outcome | Action |
+|---|---|
+| `ghidrasql` starts and answers `ghidrasql_help`, but `verify` reports `not-testable`/fails on the `funcs` count (empty project) | Expected. Continue below to investigate the bootstrap. |
+| `ghidrasql.exe` still fails to start | A gap this task's rulings missed. Do not guess further - record the exact error verbatim in the plan's ledger note and stop; this is the "plan so broken every path forward is a guess" case. |
+
+If it starts: run `ghidrasql --help` in full (already partially captured in Task 9's ledger
+note; capture the complete text this time) and identify the exact flag combination for
+importing and analyzing a binary into an existing `--project` non-interactively. Try it once
+by hand against `ntdll.dll` (mirrors pdbsql's own `ntdll` bootstrap choice in Task 7).
+
+- If a single, deterministic, non-interactive command imports and analyzes a binary and then
+  exits (success/failure observable from its exit code): codify it as a small
+  `Initialize-GhidrasqlProject` helper called from `Install-NativeSseServer` only when
+  `$Server.projectRoot` is empty of any prior project files, write a mocked test for it
+  (process-invocation mocked, same pattern as the rest of this task), and re-run Step 7's full
+  suite. Commit as its own step.
+- If it does not exit cleanly (blocks serving, needs a GUI, or the CLI's behavior is not
+  reliably scriptable) - **do not force it into the installer.** Record it as a known,
+  deferred gap the same way Task 9 recorded the original one: `ghidrasql` ships `enabled:
+  true` and starts correctly, but its `verify` check may report a zero `funcs` count on a
+  freshly-provisioned host until someone manually imports at least one binary through
+  `ghidrasql`'s own tooling. Say so in the ledger and in `MVP.md`.
+
+Then, regardless of which branch above applies, once `ghidrasql_query` answers at least one
+real query (even `SELECT COUNT(*) AS n FROM funcs` returning `0` is a real, connected answer -
+distinct from Task 9's `not-testable`):
+
+```bash
+powershell.exe -NoProfile -Command ".\Install-REAgent.ps1 -VerifyOnly"
+```
+
+Record the exact result in the ledger. If `funcs` is non-zero, `verify` passes outright and
+`ghidrasql`'s definition-of-done item 2 (Task 9) is now met. If `funcs` is zero because the
+bootstrap was deferred per the ruling above, flip `enabled: true` anyway - the server itself
+is correctly wired and connected, which is this task's own scope - and update `MVP.md`'s
+ghidrasql row to describe the narrower remaining gap precisely, replacing the current "ships
+disabled" line.
+
+Then confirm idempotency:
+```bash
+powershell.exe -NoProfile -Command ".\Install-REAgent.ps1 -Phases 3"
+```
+Expected: no launcher rewrite, no restart line, extension already current.
+
+- [ ] **Step 10: Update the docs that described this as a gap**
+
+- `docs/superpowers/specs/2026-09-09-sql-query-layer-design.md` SS4: the `launch-ghidrasql.cmd`
+  comment currently reads `<- generated; carries --readonly and the project`; add `--ghidra`.
+- `docs/mvp/MVP.md`: ghidrasql's row currently reads `installed, disabled` with the
+  `--ghidra` gap as its stated reason. Update to whatever Step 9 actually proved.
+
+- [ ] **Step 11: Commit the live outcome and doc updates**
+
+```bash
+git add re-agent.config.json docs/superpowers/plans/2026-09-09-sql-query-layer.md docs/superpowers/specs/2026-09-09-sql-query-layer-design.md docs/mvp/MVP.md
+git commit -m "Wire ghidrasql's connection mode; record its live outcome"
 ```
 
 ---
