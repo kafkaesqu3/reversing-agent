@@ -1702,8 +1702,7 @@ launcher command directly and by reading `ghidrasql --help` in full.
    outcome above) has never actually been installed into this host's real Ghidra distribution.
 
 A third, smaller gap surfaced investigating the above: even with `--ghidra` wired in, the
-project directory (`--project C:
-e\mcp\ghidrasql\projects`) starts empty - `SELECT COUNT(*)
+project directory (`--project C:\re\mcp\ghidrasql\projects`) starts empty - `SELECT COUNT(*)
 AS n FROM funcs` would return zero rows until at least one binary is imported and analyzed
 (`--binary <path>`) into it, the same bootstrapping problem Task 7 solved for pdbsql by warming
 `ntdll`'s PDB in the symbol cache ahead of time. No task specifies an equivalent bootstrap for
@@ -1738,8 +1737,7 @@ reports `pass` — the two share a Ghidra distribution and must both work.
 
 Done independently of Step 5's gap - Q0 (`Test-ReadOnlyLaunchCheck`) is a pure static-file check
 with no dependency on ghidrasql actually running. Stripped ` --readonly` from the real generated
-`C:
-e\mcp\ghidrasql\launch-ghidrasql.cmd`, called `Get-SqlCheck` directly:
+`C:\re\mcp\ghidrasql\launch-ghidrasql.cmd`, called `Get-SqlCheck` directly:
 
 ```
 Status: fail
@@ -1836,7 +1834,7 @@ open; recorded here so the implementer transcribes rather than invents):
 5. **`$Server.projectRoot` is created (`New-Item -Force`) if missing**, before the launcher is
    written - `ghidrasql --project <dir>` needs the directory to exist on first run.
 
-- [ ] **Step 1: Write the failing tests for `Get-NativeSseLaunchArgument`**
+- [x] **Step 1: Write the failing tests for `Get-NativeSseLaunchArgument`**
 
 Append to the existing `Describe 'Get-NativeSseLaunchArgument'` block in
 `tests/ReAgent.Servers.Tests.ps1` (it already has a `$script:Cfg` `BeforeAll`):
@@ -1874,7 +1872,7 @@ Update the block's three existing `It`s that call `Get-NativeSseLaunchArgument` 
 `-Inventory ([PSCustomObject]@{ GhidraRoot = $null })` (none of them are `projectRoot`
 servers, so `$null` is fine and exercises nothing new).
 
-- [ ] **Step 2: Write the failing tests for the extension wiring**
+- [x] **Step 2: Write the failing tests for the extension wiring**
 
 New `Describe` block in `tests/ReAgent.Servers.Tests.ps1`, after `Describe 'Install-NativeSseServer'`:
 
@@ -1962,7 +1960,7 @@ Describe 'Install-NativeSseServer, ghidrasql extension wiring' {
 }
 ```
 
-- [ ] **Step 3: Run to verify they fail**
+- [x] **Step 3: Run to verify they fail**
 
 Run:
 ```bash
@@ -1971,7 +1969,7 @@ powershell.exe -NoProfile -Command "Import-Module Pester -MinimumVersion 5.5.0; 
 Expected: FAIL - `Resolve-LibGhidraExtensionZip` not recognized; the `-Inventory`-less calls
 and the missing `--ghidra`/extension-install behavior fail the new assertions.
 
-- [ ] **Step 4: Implement `Resolve-LibGhidraExtensionZip`**
+- [x] **Step 4: Implement `Resolve-LibGhidraExtensionZip`**
 
 Add to `src/ReAgent.Servers.psm1` and its `Export-ModuleMember`:
 
@@ -2006,7 +2004,7 @@ function Resolve-LibGhidraExtensionZip {
 }
 ```
 
-- [ ] **Step 5: Wire `--ghidra` into `Get-NativeSseLaunchArgument`**
+- [x] **Step 5: Wire `--ghidra` into `Get-NativeSseLaunchArgument`**
 
 Add an `-Inventory` parameter and, inside the existing `projectRoot` branch (which already
 emits `--project`), emit `--ghidra` first. Keep the function under the 100-line/complexity-8
@@ -2035,7 +2033,7 @@ limits - this is a few lines, not a restructure:
 (Fold this into the existing `if ($Server.PSObject.Properties.Name -contains 'projectRoot')`
 block rather than adding a second one.)
 
-- [ ] **Step 6: Wire the extension install and project-dir creation into `Install-NativeSseServer`**
+- [x] **Step 6: Wire the extension install and project-dir creation into `Install-NativeSseServer`**
 
 Its `param()` block is unchanged (it already takes `-Inventory`); remove the
 `SuppressMessageAttribute('PSReviewUnusedParameter', ...)` on `$Inventory` now that it is used.
@@ -2068,7 +2066,7 @@ dot-source already does - `.vendor-cache` lives at the repo root, not under
 `Resolve-LibGhidraExtensionZip` directly, so this resolution line is not exercised by the unit
 suite; it only matters for real at Step 9's live run.
 
-- [ ] **Step 7: Run to verify they pass, then the full suite and the analyzer**
+- [x] **Step 7: Run to verify they pass, then the full suite and the analyzer**
 
 Run:
 ```bash
@@ -2077,7 +2075,7 @@ powershell.exe -NoProfile -Command "Import-Module Pester -MinimumVersion 5.5.0; 
 ```
 Expected: `FAILED=0` and no analyzer output.
 
-- [ ] **Step 8: Commit the mocked/TDD portion**
+- [x] **Step 8: Commit the mocked/TDD portion**
 
 ```bash
 git add src/ReAgent.Servers.psm1 tests/ReAgent.Servers.Tests.ps1

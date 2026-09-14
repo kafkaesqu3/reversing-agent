@@ -246,7 +246,7 @@ C:\re\mcp\
   ghidrasql\
     ghidrasql.exe
     launch-ghidrasql.cmd          <- generated; carries --readonly, --ghidra,
-                                    --project-name and --program
+                                    --project, --project-name and --program
     projects\                     <- ghidrasql's OWN project root, never pyghidra's
 ```
 
@@ -316,7 +316,7 @@ Three schema additions, each validated at load:
 - **`pdb.module`** — resolved against the symbol cache through the GUID directory (§3.4). A
   path that resolves to a directory is a schema error naming `0x806D0005`.
 
-`ghidrasql`'s entry adds `"readonly": true` and its own `projectRoot`.
+`ghidrasql`'s entry adds `"readonly": true`, its own `projectRoot`, `projectName`, and a `bootstrap` block (the binary imported once on first install).
 
 ---
 
