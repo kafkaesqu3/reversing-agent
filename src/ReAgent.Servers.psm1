@@ -799,6 +799,73 @@ function Install-LibGhidraExtension {
     return $true
 }
 
+function Resolve-LibGhidraExtensionZip {
+    <#
+    .SYNOPSIS
+        Finds the most recently built LibGhidraHost extension zip.
+    .DESCRIPTION
+        The build is a maintainer-only, network-requiring step
+        (tools\Build-LibGhidraExtension.ps1) that writes into .vendor-cache,
+        which is git-ignored (spec SQ6: never installed from a pinned release
+        zip). Install-NativeSseServer looks here rather than taking a config
+        path, because the artifact is host-specific and re-built on demand,
+        not a pinned asset with a hash to check against.
+    .PARAMETER VendorCacheRoot
+        The repo's .vendor-cache directory.
+    .OUTPUTS
+        [string] Full path to the newest zip, or $null if none was ever built.
+    .EXAMPLE
+        Resolve-LibGhidraExtensionZip -VendorCacheRoot (Join-Path $PSScriptRoot '..\.vendor-cache')
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$VendorCacheRoot)
+
+    $dist = Join-Path $VendorCacheRoot 'libghidra\ghidra-extension\dist'
+    if (-not (Test-Path -LiteralPath $dist)) { return $null }
+    $zip = Get-ChildItem -LiteralPath $dist -Filter '*.zip' -File |
+        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($null -eq $zip) { return $null }
+    return $zip.FullName
+}
+
+function Initialize-GhidraProjectDependency {
+    <#
+    .SYNOPSIS
+        Ensures a ghidrasql-style server's project directory and Ghidra extension exist.
+    .DESCRIPTION
+        Split out of Install-NativeSseServer to keep that function's cyclomatic
+        complexity within this repo's limit. ghidrasql --project needs its
+        directory to exist before first run, and its --ghidra connection mode
+        needs the LibGhidraHost extension installed into the host's Ghidra.
+    .PARAMETER Server
+        One entry from the config's mcpServers[]. Must carry projectRoot.
+    .PARAMETER Inventory
+        Host inventory from Get-HostInventory.
+    .OUTPUTS
+        [string] A not-installed reason when the extension was never built on
+        this host, or $null when the project directory and extension are ready.
+    .EXAMPLE
+        Initialize-GhidraProjectDependency -Server $srv -Inventory $inv
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Server,
+        [Parameter(Mandatory)][object]$Inventory
+    )
+
+    if (-not (Test-Path -LiteralPath $Server.projectRoot)) {
+        New-Item -ItemType Directory -Path $Server.projectRoot -Force | Out-Null
+    }
+    $vendorCache = Join-Path $PSScriptRoot '..\.vendor-cache'
+    $extZip = Resolve-LibGhidraExtensionZip -VendorCacheRoot $vendorCache
+    if (-not $extZip) {
+        return ('LibGhidraHost extension not built on this host. Run ' +
+            'tools\Build-LibGhidraExtension.ps1 first (maintainer path, needs Gradle).')
+    }
+    Install-LibGhidraExtension -ExtensionZip $extZip -GhidraRoot $Inventory.GhidraRoot | Out-Null
+    return $null
+}
+
 function Get-NativeSseLaunchArgument {
     <#
     .SYNOPSIS
@@ -817,15 +884,19 @@ function Get-NativeSseLaunchArgument {
         One entry from the config's mcpServers[].
     .PARAMETER Config
         The parsed configuration object.
+    .PARAMETER Inventory
+        Host inventory from Get-HostInventory. Supplies GhidraRoot for --ghidra,
+        which is host-detected and therefore not present in Config.
     .OUTPUTS
         [string[]] Arguments, in launcher order.
     .EXAMPLE
-        Get-NativeSseLaunchArgument -Server $srv -Config $cfg
+        Get-NativeSseLaunchArgument -Server $srv -Config $cfg -Inventory $inv
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][object]$Server,
-        [Parameter(Mandatory)][object]$Config
+        [Parameter(Mandatory)][object]$Config,
+        [Parameter(Mandatory)][object]$Inventory
     )
 
     $launchArgs = @()
@@ -846,6 +917,11 @@ function Get-NativeSseLaunchArgument {
         $launchArgs += '--readonly'
     }
     if ($Server.PSObject.Properties.Name -contains 'projectRoot') {
+        if (-not $Inventory.GhidraRoot) {
+            throw ("Cannot launch '$($Server.name)': no Ghidra installation was found on " +
+                'this host.')
+        }
+        $launchArgs += @('--ghidra', "$($Inventory.GhidraRoot)")
         $launchArgs += @('--project', "$($Server.projectRoot)")
     }
     $launchArgs += @('--mcp', "$($Server.port)")
@@ -886,10 +962,6 @@ function Install-NativeSseServer {
         Install-NativeSseServer -Server $srv -Config $cfg -Inventory $inv
     #>
     [CmdletBinding()]
-    # Inventory is part of the uniform handler signature the dispatcher calls with.
-    # This handler does not need it: a pinned native binary carries no host-detected
-    # dependency the way mcp-windbg needs cdb.exe or pyghidra-mcp needs Ghidra.
-    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '')]
     param(
         [Parameter(Mandatory)][object]$Server,
         [Parameter(Mandatory)][object]$Config,
@@ -907,6 +979,13 @@ function Install-NativeSseServer {
         }
     }
 
+    if ($Server.PSObject.Properties.Name -contains 'projectRoot') {
+        $reason = Initialize-GhidraProjectDependency -Server $Server -Inventory $Inventory
+        if ($reason) {
+            return New-ServerResult -Server $Server -Status 'not-installed' -Reason $reason
+        }
+    }
+
     $zip = Get-VerifiedRelease -Server $Server -Config $Config
     Expand-Archive -LiteralPath $zip -DestinationPath $installDir -Force
 
@@ -919,7 +998,8 @@ function Install-NativeSseServer {
 
     $launcher = Join-Path $installDir "launch-$($Server.name).cmd"
     Write-ServerLauncher -Path $launcher -Executable $exe.FullName `
-        -Arguments (Get-NativeSseLaunchArgument -Server $Server -Config $Config) | Out-Null
+        -Arguments (Get-NativeSseLaunchArgument -Server $Server -Config $Config `
+            -Inventory $Inventory) | Out-Null
     Register-ServerScheduledTask -Name $Server.scheduledTask -LauncherPath $launcher | Out-Null
 
     if (Restart-StaleServerTask -Name $Server.scheduledTask -LauncherPath $launcher `
@@ -1636,4 +1716,4 @@ Export-ModuleMember -Function New-ServerResult, Get-VenvPython, Get-VenvPackageV
     Install-GuiPluginHttpServer, Install-PluginInprocServer, Get-VerifiedRelease, `
     Expand-X64dbgPlugin, Invoke-Download, Copy-PluginFile, Get-TreeHash, `
     Get-VerifiedGitHubArchive, Expand-SkillPack, Get-NativeSseLaunchArgument, `
-    Install-NativeSseServer, Install-LibGhidraExtension
+    Install-NativeSseServer, Install-LibGhidraExtension, Resolve-LibGhidraExtensionZip

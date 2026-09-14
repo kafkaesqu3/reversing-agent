@@ -1026,7 +1026,8 @@ Describe 'Get-NativeSseLaunchArgument' {
         }
         $srv = [PSCustomObject]@{ name = 'pdbsql'; port = 8770
             pdb = [PSCustomObject]@{ module = 'ntdll'; warmTables = @('publics', 'udts') } }
-        $a = Get-NativeSseLaunchArgument -Server $srv -Config $script:Cfg
+        $a = Get-NativeSseLaunchArgument -Server $srv -Config $script:Cfg `
+            -Inventory ([PSCustomObject]@{ GhidraRoot = $null })
         $a[0] | Should -Be 'C:\re\symbols\ntdll.pdb\GUID\ntdll.pdb'
         $a | Should -Contain '--mcp'
         $a | Should -Contain '8770'
@@ -1037,7 +1038,8 @@ Describe 'Get-NativeSseLaunchArgument' {
         Mock -ModuleName ReAgent.Servers Resolve-PdbPath { 'C:\pdb\ntdll.pdb' }
         $srv = [PSCustomObject]@{ name = 'pdbsql'; port = 8770; bind = '127.0.0.1'
             pdb = [PSCustomObject]@{ module = 'ntdll' } }
-        (Get-NativeSseLaunchArgument -Server $srv -Config $script:Cfg) |
+        (Get-NativeSseLaunchArgument -Server $srv -Config $script:Cfg `
+            -Inventory ([PSCustomObject]@{ GhidraRoot = $null })) |
             Should -Contain '127.0.0.1'
     }
 
@@ -1046,7 +1048,8 @@ Describe 'Get-NativeSseLaunchArgument' {
         # but the flag has to be here for Q0 to find.
         $srv = [PSCustomObject]@{ name = 'ghidrasql'; port = 8771; bind = '127.0.0.1'
             readonly = $true; projectRoot = 'C:\re\mcp\ghidrasql\projects' }
-        (Get-NativeSseLaunchArgument -Server $srv -Config $script:Cfg) |
+        (Get-NativeSseLaunchArgument -Server $srv -Config $script:Cfg `
+            -Inventory ([PSCustomObject]@{ GhidraRoot = 'C:\ghidra_12.1.2_PUBLIC' })) |
             Should -Contain '--readonly'
     }
 
@@ -1054,8 +1057,36 @@ Describe 'Get-NativeSseLaunchArgument' {
         Mock -ModuleName ReAgent.Servers Resolve-PdbPath { $null }
         $srv = [PSCustomObject]@{ name = 'pdbsql'; port = 8770
             pdb = [PSCustomObject]@{ module = 'nosuch' } }
-        { Get-NativeSseLaunchArgument -Server $srv -Config $script:Cfg } |
+        { Get-NativeSseLaunchArgument -Server $srv -Config $script:Cfg `
+            -Inventory ([PSCustomObject]@{ GhidraRoot = $null }) } |
             Should -Throw '*nosuch*'
+    }
+
+    It 'adds --ghidra for a projectRoot server, from Inventory not Config' {
+        $srv = [PSCustomObject]@{ name = 'ghidrasql'; port = 8771; bind = '127.0.0.1'
+            readonly = $true; projectRoot = 'C:\re\mcp\ghidrasql\projects' }
+        $inv = [PSCustomObject]@{ GhidraRoot = 'C:\ghidra_12.1.2_PUBLIC' }
+        $a = Get-NativeSseLaunchArgument -Server $srv -Config $script:Cfg -Inventory $inv
+        $i = [array]::IndexOf($a, '--ghidra')
+        $i | Should -BeGreaterOrEqual 0
+        $a[$i + 1] | Should -Be 'C:\ghidra_12.1.2_PUBLIC'
+    }
+
+    It 'never adds --ghidra for a server with no projectRoot' {
+        Mock -ModuleName ReAgent.Servers Resolve-PdbPath { 'C:\pdb\ntdll.pdb' }
+        $srv = [PSCustomObject]@{ name = 'pdbsql'; port = 8770
+            pdb = [PSCustomObject]@{ module = 'ntdll' } }
+        $inv = [PSCustomObject]@{ GhidraRoot = 'C:\ghidra_12.1.2_PUBLIC' }
+        (Get-NativeSseLaunchArgument -Server $srv -Config $script:Cfg -Inventory $inv) |
+            Should -Not -Contain '--ghidra'
+    }
+
+    It 'throws when a projectRoot server has no Ghidra on this host' {
+        $srv = [PSCustomObject]@{ name = 'ghidrasql'; port = 8771
+            readonly = $true; projectRoot = 'C:\re\mcp\ghidrasql\projects' }
+        $inv = [PSCustomObject]@{ GhidraRoot = $null }
+        { Get-NativeSseLaunchArgument -Server $srv -Config $script:Cfg -Inventory $inv } |
+            Should -Throw '*Ghidra*'
     }
 }
 
@@ -1298,6 +1329,88 @@ Describe 'Install-NativeSseServer' {
 
         $r.Status | Should -Be 'installed'
         Should -Invoke -ModuleName ReAgent.Servers Wait-ServerListening -Times 0
+    }
+}
+
+Describe 'Resolve-LibGhidraExtensionZip' {
+    It 'returns the newest zip under the vendor-cache dist directory' {
+        $root = Join-Path $TestDrive 'vc1'
+        $dist = Join-Path $root 'libghidra\ghidra-extension\dist'
+        New-Item -ItemType Directory -Path $dist -Force | Out-Null
+        $old = Join-Path $dist 'old.zip'
+        $new = Join-Path $dist 'new.zip'
+        Set-Content -LiteralPath $old -Value 'x'
+        Start-Sleep -Milliseconds 50
+        Set-Content -LiteralPath $new -Value 'y'
+        Resolve-LibGhidraExtensionZip -VendorCacheRoot $root | Should -Be $new
+    }
+
+    It 'returns $null when no build has ever run' {
+        $root = Join-Path $TestDrive 'vc2'
+        Resolve-LibGhidraExtensionZip -VendorCacheRoot $root | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Install-NativeSseServer, ghidrasql extension wiring' {
+    BeforeAll {
+        $script:GhSrv = [PSCustomObject]@{
+            name = 'ghidrasql'; kind = 'native-sse'; enabled = $true
+            transport = 'sse'; bind = '127.0.0.1'; port = 8771; path = '/sse'
+            auth = 'none'; scheduledTask = 'ReLab-ghidrasql'
+            readonly = $true; projectRoot = ''
+            source = [PSCustomObject]@{ repo = 'x/ghidrasql'; pin = 'v0.0.6'
+                sha256 = [PSCustomObject]@{ 'ghidrasql-win64.zip' = 'deadbeef' } }
+        }
+    }
+
+    It 'installs the extension before writing the launcher, then extracts and registers' {
+        $toolRoot = Join-Path $TestDrive 'case-gh1'
+        $script:GhSrv.projectRoot = Join-Path $toolRoot 'mcp\ghidrasql\projects'
+
+        Mock -ModuleName ReAgent.Servers Write-ServerLauncher {
+            'C:\re\mcp\ghidrasql\launch-ghidrasql.cmd'
+        }
+        Mock -ModuleName ReAgent.Servers Register-ServerScheduledTask { $true }
+        Mock -ModuleName ReAgent.Servers Restart-StaleServerTask { $false }
+        Mock -ModuleName ReAgent.Servers Install-LibGhidraExtension { $true }
+
+        $staging = Join-Path $TestDrive 'ghidrasql-release'
+        New-Item -ItemType Directory -Path $staging -Force | Out-Null
+        New-Item -ItemType File -Path (Join-Path $staging 'ghidrasql.exe') -Force | Out-Null
+        $zip = Join-Path $TestDrive 'ghidrasql.zip'
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [IO.Compression.ZipFile]::CreateFromDirectory($staging, $zip)
+        Mock -ModuleName ReAgent.Servers Get-VerifiedRelease { $zip }
+
+        $vendorCache = Join-Path $TestDrive 'vc-installed'
+        $dist = Join-Path $vendorCache 'libghidra\ghidra-extension\dist'
+        New-Item -ItemType Directory -Path $dist -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $dist 'ext.zip') -Value 'x'
+        Mock -ModuleName ReAgent.Servers Resolve-LibGhidraExtensionZip {
+            Join-Path $dist 'ext.zip'
+        }
+
+        $cfg = [PSCustomObject]@{ paths = [PSCustomObject]@{ toolRoot = $toolRoot } }
+        $inv = [PSCustomObject]@{ GhidraRoot = 'C:\ghidra_12.1.2_PUBLIC' }
+        $r = Install-NativeSseServer -Server $script:GhSrv -Config $cfg -Inventory $inv
+
+        $r.Status | Should -Be 'installed'
+        Test-Path $script:GhSrv.projectRoot | Should -BeTrue
+        Should -Invoke -ModuleName ReAgent.Servers Install-LibGhidraExtension -Times 1 -Exactly `
+            -ParameterFilter { $GhidraRoot -eq 'C:\ghidra_12.1.2_PUBLIC' }
+    }
+
+    It 'reports not-installed, not failed, when the extension was never built' {
+        $toolRoot = Join-Path $TestDrive 'case-gh2'
+        $script:GhSrv.projectRoot = Join-Path $toolRoot 'mcp\ghidrasql\projects'
+        Mock -ModuleName ReAgent.Servers Resolve-LibGhidraExtensionZip { $null }
+
+        $cfg = [PSCustomObject]@{ paths = [PSCustomObject]@{ toolRoot = $toolRoot } }
+        $inv = [PSCustomObject]@{ GhidraRoot = 'C:\ghidra_12.1.2_PUBLIC' }
+        $r = Install-NativeSseServer -Server $script:GhSrv -Config $cfg -Inventory $inv
+
+        $r.Status | Should -Be 'not-installed'
+        $r.Reason | Should -BeLike '*Build-LibGhidraExtension*'
     }
 }
 
