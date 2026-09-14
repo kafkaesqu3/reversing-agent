@@ -66,6 +66,18 @@
         ]
       }
     },
+    "pdbsql": {
+      "pin": "v0.0.7",
+      "toolCount": 2,
+      "tools": ["pdbsql_help", "pdbsql_query"],
+      "classification": {
+        "classifiedBy": "david",
+        "classifiedAt": "2026-09-09",
+        "classifiedTools": ["pdbsql_help", "pdbsql_query"],
+        "write": [],
+        "destructive": []
+      }
+    },
     "mcp-windbg": {
       "pin": "1.2.1",
       "toolCount": 10,

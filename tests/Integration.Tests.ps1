@@ -312,3 +312,40 @@ Describe 'agent topology end to end' {
         "$($d.disabledReason)".Trim() | Should -Not -BeNullOrEmpty
     }
 }
+
+Describe 'the SQL layer, stage 1' {
+    BeforeAll {
+        $script:Cfg = Get-ReAgentConfig -Path (Join-Path $PSScriptRoot '../re-agent.config.json')
+        $script:Cat = Get-ToolCatalog
+    }
+
+    It 'declares pdbsql as an unattended sse server with a recorded auth exemption' {
+        $s = @($script:Cfg.mcpServers | Where-Object { $_.name -eq 'pdbsql' })[0]
+        $s.transport | Should -Be 'sse'
+        $s.verifyTier | Should -Be 'unattended'
+        "$($s.authExemptReason)".Trim() | Should -Not -BeNullOrEmpty
+    }
+
+    It 'classifies every pdbsql tool, so A4 passes' {
+        Test-AgentClassificationCheck -Catalog $script:Cat -Server 'pdbsql' |
+            Should -BeNullOrEmpty
+    }
+
+    It 'grants the verifier pdbsql and still passes A0-A4' {
+        $v = @($script:Cfg.agents | Where-Object { $_.name -eq 'verifier' })[0]
+        $v.targetServers | Should -Contain 'pdbsql'
+        Invoke-AgentGate -Agent $v -Catalog $script:Cat `
+            -Frontmatter @{ name = 'verifier' } -FileBaseName 'verifier' |
+            Should -BeNullOrEmpty
+    }
+
+    It 'grants the verifier no pdbsql tool classified write or destructive' {
+        $v = @($script:Cfg.agents | Where-Object { $_.name -eq 'verifier' })[0]
+        $g = Get-AgentToolGrant -Agent $v -Catalog $script:Cat
+        $c = Get-ToolClassification -Catalog $script:Cat -Server 'pdbsql'
+        foreach ($t in @($g.Tools | Where-Object { $_ -like 'mcp__pdbsql__*' })) {
+            $bare = $t -replace '^mcp__pdbsql__', ''
+            Get-ToolLevel -Classification $c -Tool $bare | Should -Be 'read'
+        }
+    }
+}
