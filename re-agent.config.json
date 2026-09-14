@@ -160,7 +160,7 @@
     },
     {
       "name": "ghidrasql",
-      "enabled": true,
+      "enabled": false,
       "kind": "native-sse",
       "source": {
         "type": "github-release",
@@ -185,7 +185,7 @@
       "verify": {
         "tool": "ghidrasql_query",
         "args": { "query": "SELECT COUNT(*) AS n FROM funcs" },
-        "expect": "\"n\":\\s*[1-9]"
+        "expect": "\"rows\":\\s*\\[\\s*\\[\\s*\\\"[1-9]"
       }
     },
     {

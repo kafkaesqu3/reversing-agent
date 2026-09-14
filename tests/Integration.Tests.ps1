@@ -127,7 +127,8 @@ Describe 'the shipped config drives the real modules' {
     It 'generates a settings file disabling exactly the disabled servers' {
         $s = New-ClaudeSettingsObject -Config $Script:Cfg
         $s.disabledMcpjsonServers | Should -Contain 'ghidramcp'
-        $s.disabledMcpjsonServers.Count | Should -Be 1
+        $s.disabledMcpjsonServers | Should -Contain 'ghidrasql'
+        $s.disabledMcpjsonServers.Count | Should -Be 2
     }
 }
 
