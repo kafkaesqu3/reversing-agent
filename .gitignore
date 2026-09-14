@@ -17,6 +17,9 @@ tokens/
 install.log
 *.bak-*
 
+# Test run output
+testResults.xml
+
 # Python venvs — one per MCP server, rebuilt from pinned versions
 .venv/
 venvs/
