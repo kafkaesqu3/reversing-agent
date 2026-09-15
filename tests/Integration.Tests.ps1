@@ -1,9 +1,17 @@
 BeforeAll {
     $Script:Root = Join-Path $PSScriptRoot '..'
     foreach ($m in @('Common', 'Config', 'Discovery', 'Prereqs', 'Symbols',
-            'Tokens', 'Json', 'Servers', 'Generate', 'Skills', 'Verify', 'Manifest', 'Agents')) {
+            'Tokens', 'Json', 'Servers', 'Generate', 'Skills', 'Verify', 'Manifest', 'Agents',
+            'Codex')) {
         Import-Module (Join-Path $Script:Root "src\ReAgent.$m.psm1") -Force
     }
+}
+
+AfterAll {
+    # This file imports through Join-Path while the focused module suites use
+    # forward-slash paths. Pester 6 treats those as separate module instances
+    # on UNC shares unless the first set is removed between test files.
+    Get-Module 'ReAgent.*' | Remove-Module -Force
 }
 
 Describe 'the entry point script' {
@@ -59,8 +67,10 @@ Describe 'the entry point script' {
         $text = Get-Content (Join-Path $Script:Root 'Install-REAgent.ps1') -Raw
         foreach ($fn in @('Get-HostInventory', 'Assert-Preflight', 'Test-PrereqSatisfied',
                 'Install-Prereq', 'Test-SymbolsReady', 'Install-Symbols',
-                'Install-AllMcpServer', 'Write-AgentConfiguration', 'Install-AllSkill',
-                'Invoke-Verification', 'Write-Manifest')) {
+                'Install-AllMcpServer', 'Write-AgentConfiguration', 'Write-CodexConfiguration',
+                'Install-AllSkill', 'Get-CodexRegistrationCheck', 'Invoke-Verification',
+                'Assert-VerificationPassed',
+                'Write-Manifest')) {
             $text | Should -BeLike "*$fn*"
             Get-Command $fn -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
         }

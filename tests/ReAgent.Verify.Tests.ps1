@@ -53,6 +53,24 @@ Describe 'New-CheckResult' {
     }
 }
 
+Describe 'Assert-VerificationPassed' {
+    It 'accepts passing and not-testable checks' {
+        $checks = @(
+            (New-CheckResult -Name 'healthy' -Status pass),
+            (New-CheckResult -Name 'manual' -Status not-testable)
+        )
+        { Assert-VerificationPassed -Checks $checks } | Should -Not -Throw
+    }
+
+    It 'throws with the names of failed checks' {
+        $checks = @(
+            (New-CheckResult -Name 'codex registration' -Status fail),
+            (New-CheckResult -Name 'healthy' -Status pass)
+        )
+        { Assert-VerificationPassed -Checks $checks } | Should -Throw '*codex registration*'
+    }
+}
+
 Describe 'Invoke-McpProbe' {
     It 'parses the JSON report the probe prints' {
         Mock -ModuleName ReAgent.Verify Invoke-CommandLine {

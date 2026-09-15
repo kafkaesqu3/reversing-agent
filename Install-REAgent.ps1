@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Wires Claude Code to x64dbg, Ghidra, Binary Ninja, and WinDbg via MCP on an existing FLARE VM.
+    Wires Claude Code and Codex to RE tools via MCP on an existing FLARE VM.
 .DESCRIPTION
     Adopt-and-reconcile: inventories the host, installs only what is missing, and
     generates all agent configuration from re-agent.config.json. Idempotent - a
@@ -14,6 +14,8 @@
     Resolved in the body, not as a parameter default: $PSScriptRoot is empty
     inside the param block of an advanced script, so a default built from it
     silently becomes '\re-agent.config.json'.
+.PARAMETER CodexHome
+    Codex configuration directory. Defaults to CODEX_HOME or ~/.codex.
 .PARAMETER Phases
     Run only these phase ids. Default runs all of them.
 .PARAMETER Force
@@ -39,6 +41,7 @@
 [CmdletBinding(SupportsShouldProcess)]
 param(
     [string]$ConfigPath,
+    [string]$CodexHome,
     [int[]] $Phases,
     [switch]$Force,
     [switch]$VerifyOnly,
@@ -50,9 +53,13 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 if (-not $ConfigPath) { $ConfigPath = Join-Path $PSScriptRoot 're-agent.config.json' }
+if (-not $CodexHome) {
+    $CodexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USERPROFILE '.codex' }
+}
+$CodexHome = [IO.Path]::GetFullPath($CodexHome)
 
 $moduleNames = @('Common', 'Config', 'Discovery', 'Prereqs', 'Symbols',
-    'Tokens', 'Json', 'Servers', 'Generate', 'Skills', 'Verify', 'Manifest')
+    'Tokens', 'Json', 'Servers', 'Generate', 'Skills', 'Verify', 'Manifest', 'Codex')
 foreach ($m in $moduleNames) {
     $modulePath = "$PSScriptRoot\src\ReAgent.$m.psm1"
     if (-not (Test-Path -LiteralPath $modulePath)) {
@@ -63,8 +70,10 @@ foreach ($m in $moduleNames) {
 }
 
 $config = Get-ReAgentConfig -Path $ConfigPath
+$codexCommand = Get-Command codex -ErrorAction SilentlyContinue
+$codexPath = if ($codexCommand) { $codexCommand.Source } else { '' }
 
-if (-not $PSCmdlet.ShouldProcess($env:COMPUTERNAME, 'Wire Claude Code to the RE tools via MCP')) {
+if (-not $PSCmdlet.ShouldProcess($env:COMPUTERNAME, 'Wire Claude Code and Codex to the RE tools via MCP')) {
     return
 }
 
@@ -94,13 +103,17 @@ $context = @{
     SkillResults  = @()
     AgentResults  = @()
     VerifyResults = @()
+    CodexHome     = $CodexHome
+    CodexPath     = $codexPath
 }
 
 $phaseTable = @(
     @{ Id   = 0; Name = 'Preflight'
         Test = { $false }
         Fn   = { param($c) $c.Inventory = Get-HostInventory
-            Assert-Preflight -Inventory $c.Inventory -VerifyOnly:$c.VerifyOnly }
+            Assert-Preflight -Inventory $c.Inventory -VerifyOnly:$c.VerifyOnly
+            Assert-Preflight -Inventory $c.Inventory -VerifyOnly:$c.VerifyOnly `
+                -Agent Codex -CodexPath $c.CodexPath }
     }
     @{ Id   = 1; Name = 'Prerequisites'
         Test = { param($c) Test-PrereqSatisfied -Inventory $c.Inventory }
@@ -116,8 +129,13 @@ $phaseTable = @(
     }
     @{ Id   = 4; Name = 'AgentConfig'
         Test = { $false }
-        Fn   = { param($c) $c.AgentResults = @(Write-AgentConfiguration -Config $c.Config `
-                    -ServerResults $c.ServerResults) }
+        Fn   = { param($c)
+            $c.AgentResults = @(Write-AgentConfiguration -Config $c.Config `
+                    -ServerResults $c.ServerResults)
+            Write-CodexConfiguration -CodexPath $c.CodexPath -CodexHome $c.CodexHome `
+                -ServerResults $c.ServerResults -ManagedNames @($c.Config.mcpServers.name) `
+                -TokenRoot (Join-Path $c.Config.paths.toolRoot 'mcp\tokens')
+        }
     }
     @{ Id   = 5; Name = 'Skills'
         Test = { $false }
@@ -139,10 +157,15 @@ $phaseTable = @(
             if (-not $c.AgentResults -or $c.AgentResults.Count -eq 0) {
                 $c.AgentResults = @(Get-RecordedAgentResult -Config $c.Config)
             }
+            $codexChecks = @(Get-CodexRegistrationCheck -Config $c.Config `
+                    -ServerResults $c.ServerResults -CodexPath $c.CodexPath `
+                    -CodexHome $c.CodexHome)
             $c.VerifyResults = Invoke-Verification -Config $c.Config `
                 -ServerResults $c.ServerResults -SkillResults $c.SkillResults `
                 -AgentResults $c.AgentResults `
-                -Inventory $c.Inventory -RepoRoot $PSScriptRoot -Attended:$c.Attended
+                -Inventory $c.Inventory -RepoRoot $PSScriptRoot -Attended:$c.Attended `
+                -AdditionalChecks $codexChecks
+            Assert-VerificationPassed -Checks $c.VerifyResults
         }
     }
     @{ Id   = 7; Name = 'Manifest'

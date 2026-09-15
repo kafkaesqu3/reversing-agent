@@ -55,9 +55,6 @@ try {
     $inventory = Get-HostInventory
     Assert-Preflight -Inventory $inventory -Agent Codex -CodexPath $codexPath `
         -VerifyOnly:($VerifyOnly -or $ConfigureOnly)
-    if (@($config.mcpServers | Where-Object { $_.enabled -and $_.transport -eq 'sse' }).Count) {
-        throw 'Codex does not support the legacy GhidraMCP SSE endpoint directly. Keep ghidramcp disabled and use pyghidra-mcp.'
-    }
 } catch {
     Write-ReAgentLog -Level ERROR -Message $_.Exception.Message
     exit 2
