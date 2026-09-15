@@ -155,6 +155,50 @@ TodoWrite /windbg-crash
             Should -BeExactly $text
     }
 
+    It 'preserves mixed markers in <CaseName> history' -ForEach @(
+        @{
+            CaseName = 'backtick-fenced'
+            SourceText = @'
+```text
+History uses TodoWrite.
+~~~
+Still history uses /windbg-crash.
+```
+Use TodoWrite and /windbg-crash.
+'@
+            ExpectedText = @'
+```text
+History uses TodoWrite.
+~~~
+Still history uses /windbg-crash.
+```
+Use a concise Codex task or plan list and $windbg-crash.
+'@
+        }
+        @{
+            CaseName = 'tilde-fenced'
+            SourceText = @'
+~~~text
+History uses TodoWrite.
+```
+Still history uses /windbg-crash.
+~~~
+Use TodoWrite and /windbg-crash.
+'@
+            ExpectedText = @'
+~~~text
+History uses TodoWrite.
+```
+Still history uses /windbg-crash.
+~~~
+Use a concise Codex task or plan list and $windbg-crash.
+'@
+        }
+    ) {
+        ConvertTo-CodexWorkflowText -Text $SourceText -SkillNames @('windbg-crash') |
+            Should -BeExactly $ExpectedText
+    }
+
     It 'does not reinterpret generated skills discovery as a skill invocation' {
         ConvertTo-CodexWorkflowText -Text 'Use the Skill tool.' -SkillNames @('skills') |
             Should -BeExactly 'Use the /skills discovery.'

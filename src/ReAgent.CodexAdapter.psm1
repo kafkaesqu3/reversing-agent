@@ -227,6 +227,20 @@ function ConvertTo-CodexWorkflowLine {
     return $converted -join ''
 }
 
+function Test-CodexFenceClosingMarker {
+    param(
+        [Parameter(Mandatory)][string]$Line,
+        [Parameter(Mandatory)][string]$OpeningMarker
+    )
+
+    $match = [regex]::Match($Line, '^\s*(`{3,}|~{3,})(.*)$')
+    if (-not $match.Success) { return $false }
+    $candidate = $match.Groups[1].Value
+    if ($candidate[0] -cne $OpeningMarker[0]) { return $false }
+    if ($candidate.Length -lt $OpeningMarker.Length) { return $false }
+    return $match.Groups[2].Value -match '^\s*$'
+}
+
 function ConvertTo-CodexWorkflowText {
     <#
     .SYNOPSIS
@@ -246,12 +260,19 @@ function ConvertTo-CodexWorkflowText {
 
     $newLine = if ($Text.Contains("`r`n")) { "`r`n" } else { "`n" }
     $lines = [regex]::Split($Text, '\r?\n')
-    $inFence = $false
+    $fenceMarker = ''
     $converted = foreach ($line in $lines) {
-        if ($line -cmatch '^\s*(?:```|~~~)') {
-            $inFence = -not $inFence
+        $fenceMatch = [regex]::Match($line, '^\s*(`{3,}|~{3,})')
+        if ($fenceMarker) {
             $line
-        } elseif ($inFence -or $line -cmatch '^\s*>') {
+            if (Test-CodexFenceClosingMarker -Line $line `
+                    -OpeningMarker $fenceMarker) {
+                $fenceMarker = ''
+            }
+        } elseif ($fenceMatch.Success) {
+            $fenceMarker = $fenceMatch.Groups[1].Value
+            $line
+        } elseif ($line -cmatch '^\s*>') {
             $line
         } else {
             ConvertTo-CodexWorkflowLine -Line $line -SkillNames $SkillNames
