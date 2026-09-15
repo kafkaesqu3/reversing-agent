@@ -387,7 +387,8 @@ Describe 'Install-SkillPack' {
             [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
                 'PSUseShouldProcessForStateChangingFunctions', '')]
             param($AgentRoot)
-            [PSCustomObject]@{ paths = [PSCustomObject]@{ agentRoot = $AgentRoot } }
+            [PSCustomObject]@{ paths = [PSCustomObject]@{ agentRoot = $AgentRoot }
+                mcpServers = @([pscustomobject]@{ name = 'mcp-windbg'; transport = 'http' }) }
         }
     }
 
@@ -398,6 +399,110 @@ Describe 'Install-SkillPack' {
             -Config (New-InstallCfg -AgentRoot $agent) -RepoRoot $repo -Catalog $Script:Cat
         $r.Status | Should -Be 'not-installed'
         Test-Path -LiteralPath (Join-Path $agent '.claude\skills') | Should -BeFalse
+    }
+
+    It 'installs both views with exact Claude and binary bytes and converted references' {
+        $repo = Join-Path $TestDrive 'dual'
+        $src = New-VendoredPack -Root $repo -Body 'Use TodoWrite and /windbg-crash.' `
+            -ReferenceBody 'mcp__mcp-windbg__list_dumps; mcp-windbg stays.'
+        [IO.File]::WriteAllBytes((Join-Path $src 'helper.ps1'), [byte[]]@(0, 255, 10, 128))
+        $cfg = New-InstallCfg -AgentRoot (Join-Path $repo 'agent')
+        $codex = Join-Path $cfg.paths.agentRoot '.agents\skills'
+        $result = Install-SkillPack -Pack (New-PackCfg) -Config $cfg -RepoRoot $repo `
+            -Catalog $Script:Cat -CodexSkillRoot $codex
+        $result.Status | Should -Be 'installed'
+        $result.CodexSkillNames | Should -Contain 'windbg-crash'
+        foreach ($file in Get-ChildItem -LiteralPath $src -Recurse -File) {
+            $rel = $file.FullName.Substring($src.Length).TrimStart('\')
+            $dst = Join-Path $cfg.paths.agentRoot ".claude\skills\windbg-crash\$rel"
+            (Get-FileHash $dst).Hash | Should -Be (Get-FileHash $file.FullName).Hash
+        }
+        $dest = Join-Path $codex 'windbg-crash'
+        (Get-FileHash (Join-Path $dest 'helper.ps1')).Hash |
+            Should -Be (Get-FileHash (Join-Path $src 'helper.ps1')).Hash
+        Get-Content (Join-Path $dest 'SKILL.md') -Raw | Should -Not -Match 'allowed-tools'
+        Get-Content (Join-Path $dest 'references\deep-dive.md') -Raw |
+            Should -Match 'mcp__mcp_windbg__list_dumps; mcp-windbg stays'
+    }
+
+    It 'retains both complete views when a later candidate references SSE' {
+        $repo = Join-Path $TestDrive 'dual-sse'
+        $src = New-VendoredPack -Root $repo
+        $cfg = New-InstallCfg -AgentRoot (Join-Path $repo 'agent')
+        $cfg.mcpServers += [pscustomobject]@{ name = 'pdbsql'; transport = 'sse' }
+        $pack = New-PackCfg
+        $cfg | Add-Member skills @($pack)
+        $null = Install-AllSkill -Config $cfg -RepoRoot $repo
+        $paths = @('.claude\skills', '.agents\skills') | ForEach-Object {
+            Join-Path $cfg.paths.agentRoot "$_\windbg-crash\SKILL.md"
+        }
+        $hashes = @($paths | ForEach-Object { (Get-FileHash $_).Hash })
+        'mcp__pdbsql__pdb_query' | Set-Content (Join-Path $src 'reference.md')
+        $result = Install-AllSkill -Config $cfg -RepoRoot $repo
+        $result.Status | Should -Be 'failed'
+        $result.Reason | Should -Match 'unsupported'
+        @($paths | ForEach-Object { (Get-FileHash $_).Hash }) -join ',' |
+            Should -Be ($hashes -join ',')
+    }
+
+    It 'matches enabled names in both roots and preserves an unmanaged Codex orphan' {
+        $repo = Join-Path $TestDrive 'dual-orphans'
+        $null = New-VendoredPack -Root $repo
+        $cfg = New-InstallCfg -AgentRoot (Join-Path $repo 'agent')
+        $cfg | Add-Member skills @((New-PackCfg))
+        $root = Join-Path $cfg.paths.agentRoot '.agents\skills'
+        $null = New-Item -ItemType Directory (Join-Path $root 'personal') -Force
+        'operator' | Set-Content (Join-Path $root 'personal\SKILL.md')
+        $null = New-Item -ItemType Directory (Join-Path $root 'obsolete') -Force
+        'codex:windbg/old' | Set-Content (Join-Path $root 'obsolete\.re-agent-managed')
+        $null = Install-AllSkill -Config $cfg -RepoRoot $repo -CodexSkillRoot $root
+        foreach ($client in @('.claude\skills', '.agents\skills')) {
+            $names = @(Get-ChildItem (Join-Path $cfg.paths.agentRoot $client) -Directory |
+                Where-Object { Test-Path (Join-Path $_.FullName '.re-agent-managed') } |
+                ForEach-Object Name)
+            $names -join ',' | Should -Be 'windbg-crash'
+        }
+        Get-Content (Join-Path $root 'personal\SKILL.md') | Should -Be 'operator'
+    }
+
+    It 'validates WhatIf without creating either client root' {
+        $repo = Join-Path $TestDrive 'dual-whatif'
+        $null = New-VendoredPack -Root $repo
+        $cfg = New-InstallCfg -AgentRoot (Join-Path $repo 'agent')
+        $cfg | Add-Member skills @((New-PackCfg))
+        $null = Install-AllSkill -Config $cfg -RepoRoot $repo -WhatIf
+        Test-Path $cfg.paths.agentRoot | Should -BeFalse
+    }
+
+    It 'preserves an interrupted Codex previous tree after a candidate failure' {
+        $repo = Join-Path $TestDrive 'dual-previous-failure'
+        $src = New-VendoredPack -Root $repo
+        $cfg = New-InstallCfg -AgentRoot (Join-Path $repo 'agent')
+        $cfg | Add-Member skills @((New-PackCfg))
+        $null = Install-AllSkill -Config $cfg -RepoRoot $repo
+        $root = Join-Path $cfg.paths.agentRoot '.agents\skills'
+        $previous = Join-Path $root (
+            '.re-agent-previous-windbg-crash-0123456789abcdef0123456789abcdef')
+        Move-Item (Join-Path $root 'windbg-crash') $previous
+        '> TodoWrite' | Set-Content (Join-Path $src 'reference.md')
+        $result = Install-AllSkill -Config $cfg -RepoRoot $repo
+        $result.Status | Should -Be 'failed'
+        Test-Path (Join-Path $previous 'SKILL.md') | Should -BeTrue
+    }
+
+    It 'preserves complete client trees when Codex staging fails during the pack install' {
+        $repo = Join-Path $TestDrive 'dual-stage-failure'
+        $null = New-VendoredPack -Root $repo
+        $cfg = New-InstallCfg -AgentRoot (Join-Path $repo 'agent')
+        $cfg | Add-Member skills @((New-PackCfg))
+        $null = Install-AllSkill -Config $cfg -RepoRoot $repo
+        Mock Install-CodexSkillDirectory -ModuleName ReAgent.Skills { throw 'stage failed' }
+        $result = Install-AllSkill -Config $cfg -RepoRoot $repo
+        $result.Status | Should -Be 'failed'
+        foreach ($client in @('.claude\skills', '.agents\skills')) {
+            Test-Path (Join-Path $cfg.paths.agentRoot "$client\windbg-crash\SKILL.md") |
+                Should -BeTrue
+        }
     }
 
     It 'removes only its own skills when the pack is turned off' {

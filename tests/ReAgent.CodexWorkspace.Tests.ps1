@@ -1,7 +1,9 @@
 BeforeAll {
+    # Earlier suites can retain nested instances under different UNC path spellings.
+    Get-Module ReAgent.CodexWorkspace -All | Remove-Module -Force
     Import-Module "$PSScriptRoot/../src/ReAgent.Common.psm1" -Force
     Import-Module "$PSScriptRoot/../src/ReAgent.CodexAdapter.psm1" -Force
-    Import-Module "$PSScriptRoot/../src/ReAgent.CodexWorkspace.psm1" -Force
+    Import-Module "$PSScriptRoot/../src/ReAgent.CodexWorkspace.psm1"
 
     $script:ManagedMarker = '<!-- re-agent-managed: codex-operating-contract v1 -->'
 
@@ -20,6 +22,189 @@ BeforeAll {
         $leaf = Split-Path -Leaf $Path
         return @(Get-ChildItem -LiteralPath $parent -File |
             Where-Object { $_.Name -like "$leaf.*.$Kind" })
+    }
+}
+
+Describe 'Install-CodexSkillDirectory' {
+    BeforeEach {
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $candidate = [pscustomobject]@{
+            Name = 'crash'; Destination = (Join-Path $root 'crash'); Marker = 'codex:windbg/crash'
+            Files = @(
+                [pscustomobject]@{ RelativePath = 'SKILL.md'; Bytes = [byte[]]@(65, 10) }
+                [pscustomobject]@{ RelativePath = '.re-agent-managed'
+                    Bytes = [Text.Encoding]::UTF8.GetBytes('codex:windbg/crash') }
+            )
+        }
+    }
+
+    It 'preserves unchanged tree timestamps and removes stale files on replacement' {
+        $first = Install-CodexSkillDirectory -Candidate $candidate -SkillRoot $root
+        $before = (Get-Item $candidate.Destination).LastWriteTimeUtc
+        $again = Install-CodexSkillDirectory -Candidate $candidate -SkillRoot $root
+        $again.Changed | Should -BeFalse
+        $again.Sha256 | Should -Be $first.Sha256
+        (Get-Item $candidate.Destination).LastWriteTimeUtc | Should -Be $before
+        'old' | Set-Content (Join-Path $candidate.Destination 'obsolete.md')
+        $changed = Install-CodexSkillDirectory -Candidate $candidate -SkillRoot $root
+        $changed.Changed | Should -BeTrue
+        Test-Path (Join-Path $candidate.Destination 'obsolete.md') | Should -BeFalse
+        @(Get-ChildItem $root -Directory).Count | Should -Be 1
+    }
+
+    It 'recovers a lone previous tree before comparing an unchanged candidate' {
+        $null = Install-CodexSkillDirectory -Candidate $candidate -SkillRoot $root
+        $previous = Join-Path $root '.re-agent-previous-crash-0123456789abcdef0123456789abcdef'
+        Move-Item $candidate.Destination $previous
+        $result = Install-CodexSkillDirectory -Candidate $candidate -SkillRoot $root
+        $result.Changed | Should -BeFalse
+        Test-Path $candidate.Destination | Should -BeTrue
+        Test-Path $previous | Should -BeFalse
+    }
+
+    It 'restores the prior tree when publishing the staged directory throws' {
+        $null = Install-CodexSkillDirectory -Candidate $candidate -SkillRoot $root
+        $candidate.Files[0].Bytes = [byte[]]@(66, 10)
+        Mock Move-Item -ModuleName ReAgent.CodexWorkspace {
+            Microsoft.PowerShell.Management\Move-Item -LiteralPath $LiteralPath `
+                -Destination $Destination -ErrorAction Stop
+        }
+        Mock Move-Item -ModuleName ReAgent.CodexWorkspace {
+            throw 'injected publish failure'
+        } -ParameterFilter { $LiteralPath -like '*\.re-agent-stage-*' }
+        { Install-CodexSkillDirectory -Candidate $candidate -SkillRoot $root } |
+            Should -Throw '*injected*'
+        [IO.File]::ReadAllBytes((Join-Path $candidate.Destination 'SKILL.md')) -join ',' |
+            Should -Be '65,10'
+        @(Get-ChildItem $root -Directory).Count | Should -Be 1
+    }
+
+    It 'refuses an unmanaged collision and creates no stage' {
+        $null = New-Item -ItemType Directory $candidate.Destination -Force
+        'personal' | Set-Content (Join-Path $candidate.Destination 'SKILL.md')
+        { Install-CodexSkillDirectory -Candidate $candidate -SkillRoot $root } |
+            Should -Throw '*unmanaged*'
+        @(Get-ChildItem $root -Directory).Count | Should -Be 1
+    }
+
+    It 'does not create roots or recovery artifacts for WhatIf' {
+        $result = Install-CodexSkillDirectory -Candidate $candidate -SkillRoot $root -WhatIf
+        $result.Status | Should -Be 'what-if'
+        Test-Path $root | Should -BeFalse
+    }
+
+    It 'rejects file paths that escape the candidate directory' {
+        $candidate.Files[0].RelativePath = '..\outside.txt'
+        { Install-CodexSkillDirectory -Candidate $candidate -SkillRoot $root } |
+            Should -Throw '*Unsafe*path*'
+        Test-Path $root | Should -BeFalse
+    }
+
+    It 'refuses replacement when an existing tree contains an empty directory junction' {
+        $null = Install-CodexSkillDirectory -Candidate $candidate -SkillRoot $root
+        $outside = Join-Path $TestDrive 'junction-target'
+        $null = New-Item -ItemType Directory $outside -Force
+        $link = Join-Path $candidate.Destination 'linked'
+        $null = New-Item -ItemType Junction -Path $link -Target $outside
+        $candidate.Files[0].Bytes = [byte[]]@(66, 10)
+        try {
+            { Install-CodexSkillDirectory -Candidate $candidate -SkillRoot $root } |
+                Should -Throw '*reparse point*'
+            [IO.File]::ReadAllBytes((Join-Path $candidate.Destination 'SKILL.md')) -join ',' |
+                Should -Be '65,10'
+        } finally {
+            if (Test-Path -LiteralPath $link) { [IO.Directory]::Delete($link) }
+        }
+    }
+}
+
+Describe 'New-CodexSkillCandidate validation' {
+    BeforeAll {
+        Import-Module "$PSScriptRoot/../src/ReAgent.Skills.psm1" -Force
+    }
+    BeforeEach {
+        $repo = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $source = Join-Path $repo 'vendor\skills\windbg\crash'
+        $null = New-Item -ItemType Directory $source -Force
+        "---`nname: crash`n---`nUse the debugger." | Set-Content (Join-Path $source 'SKILL.md')
+        $skill = [pscustomobject]@{ name = 'crash'; upstream = 'upstream'; enabled = $true }
+        $pack = [pscustomobject]@{ namespace = 'windbg'; skills = @($skill)
+            scanExceptions = @(); codexScanExceptions = @() }
+        $params = @{ Source = $source; Destination = (Join-Path $repo '.agents\skills\crash')
+            Pack = $pack; Skill = $skill; Catalog = Get-ToolCatalog
+            Config = [pscustomobject]@{ mcpServers = @(
+                [pscustomobject]@{ name = 'mcp-windbg'; transport = 'http' },
+                [pscustomobject]@{ name = 'pdbsql'; transport = 'sse' }) } }
+    }
+
+    It 'rejects unwaived Claude residue in quoted history' {
+        '> TodoWrite' | Set-Content (Join-Path $source 'reference.md')
+        { New-CodexSkillCandidate @params } | Should -Throw '*C4-TODOWRITE*reference.md*'
+        Test-Path (Split-Path $params.Destination) | Should -BeFalse
+    }
+
+    It 'uses the exact configured exception for real upstream dispatch history' {
+        $repoRoot = Split-Path -Parent $PSScriptRoot
+        $config = Get-Content (Join-Path $repoRoot 're-agent.config.json') -Raw |
+            ConvertFrom-Json
+        $realPack = $config.skills | Where-Object namespace -EQ 'arch'
+        $realSkill = $realPack.skills | Where-Object enabled
+        $sourcePath = Join-Path $repoRoot 'vendor\skills\arch\arch-architectural-analysis'
+        $arguments = @{ Source = $sourcePath
+            Destination = (Join-Path $TestDrive 'real\.agents\skills\arch-architectural-analysis')
+            Pack = $realPack; Skill = $realSkill; Config = $config; Catalog = Get-ToolCatalog }
+        { New-CodexSkillCandidate @arguments } | Should -Not -Throw
+        $realPack.codexScanExceptions = @()
+        { New-CodexSkillCandidate @arguments } |
+            Should -Throw '*C4-AGENT-TOOL*references/subagent-dispatch.md*'
+    }
+
+    It 'does not mistake sub-agent tool access prose for the Claude Agent tool' {
+        'Sub-agent tool access depends on configuration.' |
+            Set-Content (Join-Path $source 'reference.md')
+        { New-CodexSkillCandidate @params } | Should -Not -Throw
+    }
+
+    It 'waives only an exact skill file rule triple' {
+        '> TodoWrite' | Set-Content (Join-Path $source 'reference.md')
+        $exception = [pscustomobject]@{ skill = 'upstream'; file = 'reference.md'
+            ruleId = 'C4-TODOWRITE'; justification = 'Quoted upstream history.' }
+        $pack.codexScanExceptions = @($exception)
+        { New-CodexSkillCandidate @params } | Should -Not -Throw
+        foreach ($field in @('skill', 'file', 'ruleId')) {
+            $old = $exception.$field
+            $exception.$field = 'wrong'
+            { New-CodexSkillCandidate @params } | Should -Throw '*C4-TODOWRITE*'
+            $exception.$field = $old
+        }
+    }
+
+    It 'rejects SSE references even when allowed-tools would be removed' {
+        "---`nname: crash`nallowed-tools: mcp__pdbsql__pdb_query`n---`nBody" |
+            Set-Content (Join-Path $source 'SKILL.md')
+        { New-CodexSkillCandidate @params } | Should -Throw '*unsupported*'
+    }
+
+    It 'rejects unknown MCP references in supporting text' {
+        'mcp__missing__read' | Set-Content (Join-Path $source 'reference.json')
+        { New-CodexSkillCandidate @params } | Should -Throw '*unknown*'
+    }
+
+    It 'rejects a mismatched frontmatter name before creating a destination' {
+        "---`nname: other`n---`nBody" | Set-Content (Join-Path $source 'SKILL.md')
+        { New-CodexSkillCandidate @params } | Should -Throw '*frontmatter name*'
+        Test-Path (Split-Path $params.Destination) | Should -BeFalse
+    }
+
+    It 'rejects a source outside the reviewed vendor tree' {
+        $params.Source = $repo
+        { New-CodexSkillCandidate @params } | Should -Throw '*vendor/skills*'
+    }
+
+    It 'refuses unmanaged Codex collisions while preparing the candidate' {
+        $null = New-Item -ItemType Directory $params.Destination -Force
+        'personal' | Set-Content (Join-Path $params.Destination 'SKILL.md')
+        { New-CodexSkillCandidate @params } | Should -Throw '*unmanaged*'
     }
 }
 

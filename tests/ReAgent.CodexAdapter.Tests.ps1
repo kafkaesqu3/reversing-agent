@@ -2,6 +2,47 @@ BeforeAll {
     Import-Module "$PSScriptRoot/../src/ReAgent.CodexAdapter.psm1" -Force
 }
 
+Describe 'ConvertTo-CodexSkillText' {
+    It 'normalizes documented namespace prefixes and wildcard references' {
+        $catalog = [pscustomobject]@{ servers = [pscustomobject]@{
+            'mcp-windbg' = [pscustomobject]@{ tools = @('list_dumps') } } }
+        ConvertTo-CodexMcpReference -Text 'Use `mcp__mcp-windbg__` or mcp__mcp-windbg__*.' `
+            -NamespaceMap @{ 'mcp-windbg' = 'mcp_windbg' } -Catalog $catalog `
+            -CompatibleServers @('mcp-windbg') |
+            Should -BeExactly 'Use `mcp__mcp_windbg__` or mcp__mcp_windbg__*.'
+    }
+
+    It 'rejects a documented prefix for an incompatible server' {
+        $catalog = [pscustomobject]@{ servers = [pscustomobject]@{
+            pdbsql = [pscustomobject]@{ tools = @('pdb_query') } } }
+        { ConvertTo-CodexMcpReference -Text 'mcp__pdbsql__*' `
+            -NamespaceMap @{ pdbsql = 'pdbsql' } -Catalog $catalog -CompatibleServers @() } |
+            Should -Throw '*unsupported*'
+    }
+
+    It 'preserves blank lines inside fenced reference code' {
+        $text = '```text' + "`n`n" + 'example' + "`n" + '```'
+        ConvertTo-CodexWorkflowText -Text $text -SkillNames @() | Should -BeExactly $text
+    }
+
+    It 'composes frontmatter, workflow and exact MCP conversion' {
+        $text = "---`nname: crash`nallowed-tools: Read`n---`n" +
+            'Use `Bash` tool, `Read` tool, `Glob` tool, `Grep` tool, `Write` tool, ' +
+            '`Edit` tool, `Agent` tool, `Task` tool, TodoWrite, /crash, .claude/skills, ' +
+            'CLAUDE.md wins. mcp__mcp-windbg__list_dumps; mcp-windbg stays.'
+        $catalog = [pscustomobject]@{ servers = [pscustomobject]@{
+            'mcp-windbg' = [pscustomobject]@{ tools = @('list_dumps') } } }
+        $result = ConvertTo-CodexSkillText -Text $text -SkillNames @('crash') `
+            -NamespaceMap @{ 'mcp-windbg' = 'mcp_windbg' } -Catalog $catalog `
+            -CompatibleServers @('mcp-windbg')
+        $result | Should -Match 'name: crash'
+        $result | Should -Not -Match 'allowed-tools|TodoWrite|\.claude|CLAUDE.md'
+        $result | Should -Match 'mcp__mcp_windbg__list_dumps; mcp-windbg stays'
+        $result | Should -Match '\$crash'
+        $result | Should -Match 'PowerShell.*rg.*apply_patch.*subagent'
+    }
+}
+
 Describe 'ConvertTo-CodexMcpNamespace' {
     It 'normalizes <ServerName> to <Expected>' -ForEach @(
         @{ ServerName = 'pyghidra-mcp'; Expected = 'pyghidra_mcp' }

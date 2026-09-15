@@ -72,8 +72,8 @@ function ConvertTo-CodexMcpReference {
     $referenceMap = $NamespaceMap
     $referenceCatalog = $Catalog
     $supportedServers = $CompatibleServers
-    $pattern = '(?<![A-Za-z0-9_])mcp__([A-Za-z0-9][A-Za-z0-9_-]*)__' +
-        '([A-Za-z0-9][A-Za-z0-9_-]*)(?![A-Za-z0-9_-])'
+    $pattern = '(?<![A-Za-z0-9_])mcp__([A-Za-z0-9][A-Za-z0-9_-]*?)__' +
+        '([A-Za-z0-9][A-Za-z0-9_-]*|\*)?(?![A-Za-z0-9_-])'
     $evaluator = [Text.RegularExpressions.MatchEvaluator]{
         param($match)
         $server = $match.Groups[1].Value
@@ -85,7 +85,8 @@ function ConvertTo-CodexMcpReference {
             throw "MCP server '$server' is unsupported by Codex."
         }
         $property = $referenceCatalog.servers.PSObject.Properties[$server]
-        if ($null -eq $property -or @($property.Value.tools) -notcontains $tool) {
+        if ($null -eq $property) { throw "MCP server '$server' has no catalog entry." }
+        if ($tool -and $tool -ne '*' -and @($property.Value.tools) -notcontains $tool) {
             throw "MCP tool '$tool' for server '$server' is unknown."
         }
         return 'mcp__' + $referenceMap[$server] + '__' + $tool
@@ -229,7 +230,7 @@ function ConvertTo-CodexWorkflowLine {
 
 function Test-CodexFenceClosingMarker {
     param(
-        [Parameter(Mandatory)][string]$Line,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Line,
         [Parameter(Mandatory)][string]$OpeningMarker
     )
 
@@ -279,6 +280,40 @@ function ConvertTo-CodexWorkflowText {
         }
     }
     return $converted -join $newLine
+}
+
+function ConvertTo-CodexSkillText {
+    <#
+    .SYNOPSIS
+        Converts reviewed skill text using the shared Codex adapters.
+    .PARAMETER Text
+        Original reviewed text, including any opening frontmatter.
+    .PARAMETER NamespaceMap
+        Configured MCP server names mapped to Codex namespaces.
+    .PARAMETER Catalog
+        Pinned MCP tool catalog.
+    .PARAMETER CompatibleServers
+        Servers with a supported Codex transport.
+    .PARAMETER SkillNames
+        Configured names eligible for slash invocation conversion.
+    .EXAMPLE
+        ConvertTo-CodexSkillText -Text $text -NamespaceMap $map -Catalog $catalog `
+            -CompatibleServers @('mcp-windbg') -SkillNames @('windbg-crash')
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Text,
+        [Parameter(Mandatory)][hashtable]$NamespaceMap,
+        [Parameter(Mandatory)][object]$Catalog,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$CompatibleServers,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$SkillNames
+    )
+
+    # Validate references before removing allowed-tools, including permissions-only references.
+    $converted = ConvertTo-CodexMcpReference -Text $Text -NamespaceMap $NamespaceMap `
+        -Catalog $Catalog -CompatibleServers $CompatibleServers
+    $converted = ConvertTo-CodexFrontmatter -Text $converted
+    return ConvertTo-CodexWorkflowText -Text $converted -SkillNames $SkillNames
 }
 
 function Get-CodexStdioTableLine {
@@ -366,4 +401,5 @@ function New-CodexAgentServerTable {
 
 Export-ModuleMember -Function ConvertTo-CodexMcpNamespace, Get-CodexMcpNamespaceMap, `
     ConvertTo-CodexMcpReference, ConvertTo-CodexFrontmatter, ConvertTo-CodexWorkflowText, `
-    ConvertTo-CodexTomlValue, ConvertTo-CodexTomlArray, New-CodexAgentServerTable
+    ConvertTo-CodexTomlValue, ConvertTo-CodexTomlArray, New-CodexAgentServerTable, `
+    ConvertTo-CodexSkillText
