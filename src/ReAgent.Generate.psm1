@@ -1,6 +1,7 @@
 Set-StrictMode -Version Latest
 
 Import-Module (Join-Path $PSScriptRoot 'ReAgent.Agents.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'ReAgent.CodexWorkspace.psm1') -Force
 
 # Depends on functions exported by sibling modules, which Install-REAgent.ps1
 # imports into the session before this one: Write-ReAgentLog (Common),
@@ -175,7 +176,7 @@ function Write-AgentConfiguration {
     .PARAMETER ServerResults
         Results from Install-AllMcpServer.
     .PARAMETER TemplateRoot
-        Directory holding CLAUDE.md.template.
+        Directory holding the shared client instruction templates.
     .OUTPUTS
         [array] One record per declared agent, from Write-AgentDefinition. Empty
         when the config declares no agents.
@@ -199,14 +200,11 @@ function Write-AgentConfiguration {
     $written += Write-JsonFile -Path (Join-Path $agentRoot '.claude\settings.json') `
         -Object (New-ClaudeSettingsObject -Config $Config)
 
-    $template = Join-Path $TemplateRoot 'CLAUDE.md.template'
-    if (-not (Test-Path -LiteralPath $template)) {
-        throw ("CLAUDE.md template not found at '$template'. It carries the trust-boundary " +
-            'contract and is not optional.')
-    }
     $claudeMd = Join-Path $agentRoot 'CLAUDE.md'
-    Copy-Item -LiteralPath $template -Destination $claudeMd -Force
-    $written += $claudeMd
+    $claudeText = New-ClientInstructionText -TemplateRoot $TemplateRoot -Client Claude
+    if (Write-FileIfChanged -Path $claudeMd -Text $claudeText) {
+        $written += $claudeMd
+    }
 
     $null = New-Item -ItemType Directory -Path (Join-Path $agentRoot 'cases') -Force
 
@@ -354,7 +352,8 @@ function Get-AgentLimitationProse {
             'Report this rather than working around it.')
     }
     $lines += ('- A tool you expect and cannot see is your grant, not a broken server. ' +
-        "The remedy is a config change plus an installer re-run $([char]0x2014) never a workaround.")
+        'The remedy is a config change plus an installer re-run ' +
+        "$([char]0x2014) never a workaround.")
     return ($lines -join "`n")
 }
 

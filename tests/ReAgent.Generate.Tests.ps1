@@ -3,6 +3,8 @@ BeforeAll {
     Import-Module "$PSScriptRoot/../src/ReAgent.Tokens.psm1" -Force
     Import-Module "$PSScriptRoot/../src/ReAgent.Agents.psm1" -Force
     Import-Module "$PSScriptRoot/../src/ReAgent.Skills.psm1" -Force
+    Import-Module "$PSScriptRoot/../src/ReAgent.CodexAdapter.psm1" -Force
+    Import-Module "$PSScriptRoot/../src/ReAgent.CodexWorkspace.psm1" -Force
     Import-Module "$PSScriptRoot/../src/ReAgent.Generate.psm1" -Force
 
     function Get-TestResult {
@@ -130,8 +132,11 @@ Describe 'New-ClaudeSettingsObject' {
 Describe 'Write-AgentConfiguration' {
     BeforeAll {
         $Script:TplRoot = Join-Path $TestDrive 'templates'
-        $null = New-Item -ItemType Directory -Path $Script:TplRoot -Force
-        '# RE Lab - Operating Contract' | Set-Content (Join-Path $Script:TplRoot 'CLAUDE.md.template')
+        $instructionRoot = Join-Path $Script:TplRoot 'instructions'
+        $null = New-Item -ItemType Directory -Path $instructionRoot -Force
+        '# RE Lab - Operating Contract' |
+            Set-Content (Join-Path $instructionRoot 'common.md.template')
+        '## Claude' | Set-Content (Join-Path $instructionRoot 'claude.md.template')
 
         $Script:GenCfg = [PSCustomObject]@{
             paths      = [PSCustomObject]@{
@@ -182,7 +187,7 @@ Describe 'Write-AgentConfiguration' {
         $j.mcpServers.'pyghidra-mcp'.url | Should -Be 'http://127.0.0.1:8762/mcp'
     }
 
-    It 'fails loudly when the CLAUDE.md template is missing' {
+    It 'fails loudly when the instruction templates are missing' {
         # The template carries the trust-boundary contract; silently skipping it
         # would ship an agent with no instruction that binary output is data.
         { Write-AgentConfiguration -Config $Script:GenCfg -ServerResults $Script:GenResults `
@@ -210,15 +215,17 @@ Describe 'Write-AgentConfiguration' {
 
         Write-AgentConfiguration -Config $agentCfg -ServerResults $Script:GenResults `
             -TemplateRoot (Split-Path $agentTplDir) | Out-Null
-        Test-Path (Join-Path $agentCfg.paths.agentRoot '.claude\agents\verifier.md') | Should -BeTrue
+        Test-Path (Join-Path $agentCfg.paths.agentRoot '.claude\agents\verifier.md') |
+            Should -BeTrue
     }
 
 }
 
-Describe 'the shipped CLAUDE.md template' {
+Describe 'the shipped Claude instruction render' {
     BeforeAll {
-        $Script:Tpl = Get-Content `
-            (Join-Path (Join-Path $PSScriptRoot '..') 'templates\CLAUDE.md.template') -Raw
+        $Script:TemplateRoot = Join-Path (Join-Path $PSScriptRoot '..') 'templates'
+        $Script:Tpl = New-ClientInstructionText -TemplateRoot $Script:TemplateRoot `
+            -Client Claude
     }
 
     It 'states the trust boundary' {
@@ -347,10 +354,10 @@ Describe 'Write-AgentDefinition' {
         Test-Path (Join-Path $script:Dir 'verifier.md') | Should -BeFalse
     }
 }
-Describe 'CLAUDE.md agents section' {
+Describe 'Claude instruction agents section' {
     BeforeAll {
-        $script:Tpl = Get-Content -LiteralPath (
-            Join-Path $PSScriptRoot '../templates/CLAUDE.md.template') -Raw
+        $templateRoot = Join-Path (Join-Path $PSScriptRoot '..') 'templates'
+        $script:Tpl = New-ClientInstructionText -TemplateRoot $templateRoot -Client Claude
     }
 
     It 'has an Agents section' {
@@ -375,3 +382,62 @@ Describe 'CLAUDE.md agents section' {
     }
 }
 
+Describe 'Claude instruction byte compatibility' {
+    It 'matches the monolithic template after the repository newline convention' {
+        $root = Join-Path (Join-Path $PSScriptRoot '..') 'templates'
+        # Gzip-compressed bytes from the retired LF/UTF-8 monolithic template.
+        $baseline = @'
+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
+'@ -replace '\s', ''
+        $inputBytes = [Convert]::FromBase64String($baseline)
+        $inputStream = New-Object IO.MemoryStream(, $inputBytes)
+        $outputStream = New-Object IO.MemoryStream
+        $gzip = New-Object IO.Compression.GzipStream(
+            $inputStream, [IO.Compression.CompressionMode]::Decompress)
+        $gzip.CopyTo($outputStream)
+        $gzip.Dispose()
+        $inputStream.Dispose()
+        $expectedBytes = $outputStream.ToArray()
+        $outputStream.Dispose()
+        $actual = New-ClientInstructionText -TemplateRoot $root -Client Claude
+        $encoding = New-Object Text.UTF8Encoding($false)
+        $actualBytes = $encoding.GetBytes($actual)
+
+        ($actualBytes -join ',') | Should -Be ($expectedBytes -join ',')
+    }
+}
