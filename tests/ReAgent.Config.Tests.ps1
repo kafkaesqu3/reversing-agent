@@ -1,4 +1,5 @@
 BeforeAll {
+    Import-Module "$PSScriptRoot/../src/ReAgent.Common.psm1" -Force
     Import-Module "$PSScriptRoot/../src/ReAgent.Config.psm1" -Force
 
     $Script:GoodConfig = [PSCustomObject]@{
@@ -194,6 +195,87 @@ Describe 'Test-ReAgentConfigSchema skills validation' {
         { Test-ReAgentConfigSchema -Config (New-CfgWith -Packs @($p)) } |
             Should -Throw '*justification*'
     }
+
+    It 'accepts a complete Codex scan exception with a known rule' {
+        $p = New-SkillPack
+        $p | Add-Member -NotePropertyName codexScanExceptions -NotePropertyValue @(
+            [PSCustomObject]@{ skill = 'windbg-crash'; file = 'references/notes.md'
+                ruleId = 'C4-TODOWRITE'; justification = 'Quoted upstream history.' })
+        { Test-ReAgentConfigSchema -Config (New-CfgWith -Packs @($p)) } |
+            Should -Not -Throw
+    }
+
+    It 'accepts every reviewed Codex scan exception rule ID' {
+        $ruleIds = @(
+            'C4-CLAUDE-SKILL-PATH', 'C4-CLAUDE-AGENT-PATH',
+            'C4-CLAUDE-PRECEDENCE', 'C4-TODOWRITE', 'C4-TASK-TOOL',
+            'C4-AGENT-TOOL', 'C4-SKILL-TOOL', 'C4-HYPHENATED-MCP'
+        )
+        $p = New-SkillPack
+        $p | Add-Member -NotePropertyName codexScanExceptions -NotePropertyValue @(
+            $ruleIds | ForEach-Object { [PSCustomObject]@{
+                    skill = 'windbg-crash'; file = 'SKILL.md'; ruleId = $_
+                    justification = 'Reviewed compatibility exception.' } })
+        { Test-ReAgentConfigSchema -Config (New-CfgWith -Packs @($p)) } |
+            Should -Not -Throw
+    }
+
+    It 'rejects a Codex exception missing the required <Field>' -ForEach @(
+        @{ Field = 'skill' }
+        @{ Field = 'file' }
+        @{ Field = 'ruleId' }
+        @{ Field = 'justification' }
+    ) {
+        $x = [ordered]@{ skill = 'windbg-crash'; file = 'SKILL.md'
+            ruleId = 'C4-TODOWRITE'; justification = 'Reviewed history.' }
+        $x.Remove($Field)
+        $p = New-SkillPack
+        $p | Add-Member -NotePropertyName codexScanExceptions `
+            -NotePropertyValue @([PSCustomObject]$x)
+        { Test-ReAgentConfigSchema -Config (New-CfgWith -Packs @($p)) } |
+            Should -Throw "*$Field*"
+    }
+
+    It 'rejects an empty Codex exception <Field>' -ForEach @(
+        @{ Field = 'skill' }
+        @{ Field = 'file' }
+        @{ Field = 'justification' }
+    ) {
+        $x = [ordered]@{ skill = 'windbg-crash'; file = 'SKILL.md'
+            ruleId = 'C4-TODOWRITE'; justification = 'Reviewed history.' }
+        $x[$Field] = '   '
+        $p = New-SkillPack
+        $p | Add-Member -NotePropertyName codexScanExceptions `
+            -NotePropertyValue @([PSCustomObject]$x)
+        { Test-ReAgentConfigSchema -Config (New-CfgWith -Packs @($p)) } |
+            Should -Throw "*$Field*"
+    }
+
+    It 'rejects unknown Codex exception rule IDs' {
+        $p = New-SkillPack
+        $p | Add-Member -NotePropertyName codexScanExceptions -NotePropertyValue @(
+            [PSCustomObject]@{ skill = 'windbg-crash'; file = 'SKILL.md'
+                ruleId = 'C4-NOT-REAL'; justification = 'No.' })
+        { Test-ReAgentConfigSchema -Config (New-CfgWith -Packs @($p)) } |
+            Should -Throw '*C4-NOT-REAL*'
+    }
+
+    It 'rejects unsafe Codex exception file <File>' -ForEach @(
+        @{ File = 'C:\absolute\SKILL.md' }
+        @{ File = '/absolute/SKILL.md' }
+        @{ File = '../escape.md' }
+        @{ File = 'references/*.md' }
+        @{ File = 'references\\notes.md' }
+        @{ File = 'references//notes.md' }
+        @{ File = './references/notes.md' }
+    ) {
+        $p = New-SkillPack
+        $p | Add-Member -NotePropertyName codexScanExceptions -NotePropertyValue @(
+            [PSCustomObject]@{ skill = 'windbg-crash'; file = $File
+                ruleId = 'C4-TODOWRITE'; justification = 'No.' })
+        { Test-ReAgentConfigSchema -Config (New-CfgWith -Packs @($p)) } |
+            Should -Throw '*file*'
+    }
 }
 
 Describe 'the shipped re-agent.config.json' {
@@ -313,7 +395,7 @@ Describe 'Test-AgentSchema' {
         { Test-AgentSchema -Config $c } | Should -Throw '*Task*'
     }
 
-    It 'rejects a parameterized builtin like Bash(python:*), which an exact-match denylist would miss' {
+    It 'rejects a parameterized builtin that an exact-match denylist would miss' {
         # The allowlist closes the bypass a denylist could not: Bash(python:*) is not
         # equal to the string 'Bash', so an exact-match denylist would have let it through.
         $c = Get-TestAgentConfig @(Get-TestAgent -Builtins @('Read', 'Bash(python:*)'))
@@ -388,4 +470,3 @@ Describe 'Test-McpServerTransport' {
                     Get-TestServer -Pdb $pdb)) } | Should -Throw '*module*'
     }
 }
-
