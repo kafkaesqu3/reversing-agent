@@ -478,6 +478,9 @@ function Assert-CodexSkillDestination {
     }
     $seen = @{}
     foreach ($file in $Candidate.Files) {
+        if ($file.RelativePath -eq '.re-agent-stage-owner') {
+            throw 'Reserved candidate path .re-agent-stage-owner.'
+        }
         if ($file.RelativePath -match '(^|[/\\])\.\.([/\\]|$)|[:*?]') {
             throw "Unsafe candidate relative path '$($file.RelativePath)'."
         }
@@ -486,6 +489,49 @@ function Assert-CodexSkillDestination {
         $seen[$target] = $true
     }
     return $path
+}
+
+function Get-OwnedCodexSkillArtifact {
+    param(
+        [Parameter(Mandatory)][object]$Candidate,
+        [Parameter(Mandatory)][string]$SkillRoot,
+        [ValidateSet('stage', 'previous')][string]$Kind
+    )
+
+    if (-not (Test-Path -LiteralPath $SkillRoot)) { return }
+    $pattern = '^\.re-agent-' + $Kind + '-' + [regex]::Escape($Candidate.Name) +
+        '-[a-f0-9]{32}$'
+    foreach ($item in Get-ChildItem -LiteralPath $SkillRoot -Directory -Force) {
+        if ($item.Name -cnotmatch $pattern) { continue }
+        $path = Assert-SkillTreePath -Root $SkillRoot -Path $item.FullName
+        $markers = @('.re-agent-managed')
+        if ($Kind -eq 'stage') { $markers += '.re-agent-stage-owner' }
+        foreach ($name in $markers) {
+            $marker = Assert-SkillTreePath -Root $SkillRoot -Path (Join-Path $path $name)
+            if (Test-ReAgentOwnershipMarker -Path $marker -Marker $Candidate.Marker) {
+                $item
+                break
+            }
+        }
+    }
+}
+
+function Remove-ObsoleteCodexSkillArtifact {
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)][object]$Candidate,
+        [Parameter(Mandatory)][string]$SkillRoot
+    )
+
+    # Called only after the installed tree matches the candidate or a publish succeeds.
+    foreach ($kind in @('previous', 'stage')) {
+        foreach ($item in Get-OwnedCodexSkillArtifact -Candidate $Candidate `
+                -SkillRoot $SkillRoot -Kind $kind) {
+            if ($PSCmdlet.ShouldProcess($item.FullName, 'Remove obsolete owned skill artifact')) {
+                Remove-CodexSkillStage -Path $item.FullName -SkillRoot $SkillRoot -Confirm:$false
+            }
+        }
+    }
 }
 
 function Restore-CodexSkillDirectory {
@@ -497,16 +543,15 @@ function Restore-CodexSkillDirectory {
 
     if (-not (Test-Path -LiteralPath $SkillRoot)) { return }
     if (Test-Path -LiteralPath $Candidate.Destination) { return }
-    $pattern = '^\.re-agent-previous-' + [regex]::Escape($Candidate.Name) + '-[a-f0-9]{32}$'
-    $previous = @(Get-ChildItem -LiteralPath $SkillRoot -Directory -Force |
-        Where-Object { $_.Name -cmatch $pattern })
-    if ($previous.Count -gt 1) { throw "Multiple previous directories for '$($Candidate.Name)'." }
+    $previous = @(Get-OwnedCodexSkillArtifact -Candidate $Candidate -SkillRoot $SkillRoot `
+        -Kind previous | Sort-Object LastWriteTimeUtc, Name -Descending)
     if ($previous.Count -eq 0) { return }
     $path = Assert-SkillTreePath -Root $SkillRoot -Path $previous[0].FullName
     $marker = Assert-SkillTreePath -Root $SkillRoot -Path (Join-Path $path '.re-agent-managed')
     if (-not (Test-ReAgentOwnershipMarker -Path $marker -Marker $Candidate.Marker)) {
         throw "Refusing unmanaged previous skill '$path'."
     }
+    $null = @(Get-CodexInstalledFileRecord -Path $path)
     if ($PSCmdlet.ShouldProcess($path, 'Recover previous Codex skill')) {
         Move-Item -LiteralPath $path -Destination $Candidate.Destination -ErrorAction Stop
     }
@@ -588,21 +633,28 @@ function Install-CodexSkillDirectory {
     $stage = Assert-SkillTreePath -Root $SkillRoot -Path $stage
     try {
         $null = New-Item -ItemType Directory -Path $stage -Force -ErrorAction Stop
+        $owner = Join-Path $stage '.re-agent-stage-owner'
+        [IO.File]::WriteAllBytes($owner, [Text.Encoding]::UTF8.GetBytes($Candidate.Marker))
         foreach ($file in $Candidate.Files) {
             $target = Assert-SkillTreePath -Root $stage -Path (Join-Path $stage $file.RelativePath)
             $null = New-Item -ItemType Directory -Path (Split-Path $target) -Force -ErrorAction Stop
             [IO.File]::WriteAllBytes($target, $file.Bytes)
         }
+        Remove-Item -LiteralPath $owner -Force -ErrorAction Stop
         $currentHash = ''
         if (Test-Path -LiteralPath $path) {
             $currentHash = Get-CodexSkillDigest -Files @(Get-CodexInstalledFileRecord -Path $path)
         }
         if ($currentHash -eq $hash) {
+            Remove-ObsoleteCodexSkillArtifact -Candidate $Candidate -SkillRoot $SkillRoot `
+                -Confirm:$false
             $result.Status = 'unchanged'; $result.Changed = $false
             return $result
         }
         Publish-CodexSkillStage -Stage $stage -Destination $path -Previous $previous `
             -SkillRoot $SkillRoot
+        Remove-ObsoleteCodexSkillArtifact -Candidate $Candidate -SkillRoot $SkillRoot `
+            -Confirm:$false
         $result.Status = 'installed'
         return $result
     } finally {

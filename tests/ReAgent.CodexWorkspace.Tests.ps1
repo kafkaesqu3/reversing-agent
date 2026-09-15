@@ -62,6 +62,56 @@ Describe 'Install-CodexSkillDirectory' {
         Test-Path $previous | Should -BeFalse
     }
 
+    It 'recovers before-publication interruption and removes owned abandoned stages' {
+        $null = Install-CodexSkillDirectory -Candidate $candidate -SkillRoot $root
+        $previous = Join-Path $root ('.re-agent-previous-crash-' + ('a' * 32))
+        $stage = Join-Path $root ('.re-agent-stage-crash-' + ('b' * 32))
+        Move-Item $candidate.Destination $previous
+        $null = New-Item -ItemType Directory $stage
+        $candidate.Marker | Set-Content (Join-Path $stage '.re-agent-stage-owner')
+        'partial copy' | Set-Content (Join-Path $stage 'unfinished.md')
+        $result = Install-CodexSkillDirectory -Candidate $candidate -SkillRoot $root
+        $result.Changed | Should -BeFalse
+        Test-Path (Join-Path $candidate.Destination 'SKILL.md') | Should -BeTrue
+        Test-Path $previous | Should -BeFalse
+        Test-Path $stage | Should -BeFalse
+    }
+
+    It 'cleans owned after-publication artifacts but preserves unowned siblings' {
+        $null = Install-CodexSkillDirectory -Candidate $candidate -SkillRoot $root
+        $before = (Get-Item $candidate.Destination).LastWriteTimeUtc
+        $owned = @('previous-a', 'previous-b', 'stage-c') | ForEach-Object {
+            $kind, $id = $_ -split '-'
+            $path = Join-Path $root (".re-agent-$kind-crash-" + ($id * 32))
+            Copy-Item $candidate.Destination $path -Recurse
+            $path
+        }
+        $unowned = @('previous-d', 'stage-e') | ForEach-Object {
+            $kind, $id = $_ -split '-'
+            $path = Join-Path $root (".re-agent-$kind-crash-" + ($id * 32))
+            $null = New-Item -ItemType Directory $path
+            'codex:someone/else' | Set-Content (Join-Path $path '.re-agent-managed')
+            'personal' | Set-Content (Join-Path $path '.re-agent-stage-owner')
+            $path
+        }
+        $result = Install-CodexSkillDirectory -Candidate $candidate -SkillRoot $root
+        $result.Changed | Should -BeFalse
+        (Get-Item $candidate.Destination).LastWriteTimeUtc | Should -Be $before
+        foreach ($path in $owned) { Test-Path $path | Should -BeFalse }
+        foreach ($path in $unowned) { Test-Path $path | Should -BeTrue }
+    }
+
+    It 'converges after repeated interruptions leave multiple owned previous trees' {
+        $null = Install-CodexSkillDirectory -Candidate $candidate -SkillRoot $root
+        $older = Join-Path $root ('.re-agent-previous-crash-' + ('a' * 32))
+        $newer = Join-Path $root ('.re-agent-previous-crash-' + ('b' * 32))
+        Copy-Item $candidate.Destination $older -Recurse
+        Move-Item $candidate.Destination $newer
+        $result = Install-CodexSkillDirectory -Candidate $candidate -SkillRoot $root
+        $result.Changed | Should -BeFalse
+        @(Get-ChildItem $root -Directory).Name | Should -Be 'crash'
+    }
+
     It 'restores the prior tree when publishing the staged directory throws' {
         $null = Install-CodexSkillDirectory -Candidate $candidate -SkillRoot $root
         $candidate.Files[0].Bytes = [byte[]]@(66, 10)

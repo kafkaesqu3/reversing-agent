@@ -531,6 +531,25 @@ Describe 'Install-SkillPack' {
         Test-Path -LiteralPath $sibling | Should -BeTrue
     }
 
+    It 'preserves wrong-pack marker collisions when disabling and sweeping both clients' {
+        $repo = Join-Path $TestDrive 'disabled-wrong-marker'
+        $cfg = New-InstallCfg -AgentRoot (Join-Path $repo 'agent')
+        $cfg | Add-Member skills @((New-PackCfg -Enabled $false))
+        foreach ($client in @('.claude\skills', '.agents\skills')) {
+            $path = Join-Path $cfg.paths.agentRoot "$client\windbg-crash"
+            $null = New-Item -ItemType Directory $path -Force
+            $marker = if ($client -eq '.agents\skills') { 'codex:other/crash' }
+                else { 'other/crash' }
+            $marker | Set-Content (Join-Path $path '.re-agent-managed')
+            'personal' | Set-Content (Join-Path $path 'SKILL.md')
+        }
+        $null = Install-AllSkill -Config $cfg -RepoRoot $repo
+        foreach ($client in @('.claude\skills', '.agents\skills')) {
+            Get-Content (Join-Path $cfg.paths.agentRoot "$client\windbg-crash\SKILL.md") |
+                Should -Be 'personal'
+        }
+    }
+
     It 'fails a pack whose reference file still names an upstream tool' {
         # G2 is the sharpest check available and a half-adaptation hides in the reference
         # files a skill loads at runtime, not only in its SKILL.md.
@@ -752,11 +771,31 @@ Describe 'Test-SkillPackGate scans the skills that ship disabled' {
 }
 
 Describe 'Remove-OrphanedSkill' {
+    It 'leaves invalid and wrong-client markers while removing actual owned orphans' {
+        foreach ($client in @('Claude', 'Codex')) {
+            $root = Join-Path $TestDrive "ownership-$client"
+            $markers = @{ foreign = 'personal'; wrong = 'codex:test/old'; owned = 'test/old' }
+            if ($client -eq 'Codex') {
+                $markers.wrong = 'test/old'; $markers.owned = 'codex:test/old'
+            }
+            foreach ($name in $markers.Keys) {
+                $path = Join-Path $root $name
+                $null = New-Item -ItemType Directory $path -Force
+                $markers[$name] | Set-Content (Join-Path $path '.re-agent-managed')
+            }
+            $removed = Remove-OrphanedSkill -SkillRoot $root -Wanted @() -Client $client
+            $removed | Should -Be 1
+            Test-Path (Join-Path $root 'foreign') | Should -BeTrue
+            Test-Path (Join-Path $root 'wrong') | Should -BeTrue
+            Test-Path (Join-Path $root 'owned') | Should -BeFalse
+        }
+    }
+
     It 'removes only directories carrying our marker' {
         $root = Join-Path $TestDrive 'ros\skills'
         foreach ($n in @('ours-a', 'ours-b')) {
             $null = New-Item -ItemType Directory -Path (Join-Path $root $n) -Force
-            'managed' | Set-Content -LiteralPath (Join-Path $root "$n\.re-agent-managed")
+            "test/$n" | Set-Content -LiteralPath (Join-Path $root "$n\.re-agent-managed")
         }
         $null = New-Item -ItemType Directory -Path (Join-Path $root 'operators-own') -Force
         'hand written' | Set-Content -LiteralPath (Join-Path $root 'operators-own\SKILL.md')
