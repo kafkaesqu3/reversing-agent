@@ -136,8 +136,10 @@ function Test-ReAgentOwnershipMarker {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
     $text = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
     if ($null -eq $text) { return $false }
-    return $text -eq $Marker -or $text.StartsWith($Marker + "`n") -or
-        $text.StartsWith($Marker + "`r`n")
+    $comparison = [StringComparison]::Ordinal
+    return [string]::Equals($text, $Marker, $comparison) -or
+        $text.StartsWith($Marker + "`n", $comparison) -or
+        $text.StartsWith($Marker + "`r`n", $comparison)
 }
 
 function Set-ManagedTextFile {

@@ -4,6 +4,9 @@
 - AGENTS.md wins over a conflicting skill or specialist instruction.
 - If a skill names an MCP tool that does not exist, STOP and report it.
   Never substitute a similar-sounding tool.
+- A skill you expect and cannot find was disabled deliberately, for a reason recorded as
+  disabledReason in re-agent.config.json. Do not reimplement it by hand and do not work
+  around its absence silently: say which capability is missing and why you stopped.
 - Ghidra provenance: pyghidra-mcp has no SourceType. Every name YOU propose is written with an
   `ai_` prefix. When harvesting evidence, EXCLUDE `ai_*` names — a second pass that reads its
   own output is self-corroboration, not confirmation.

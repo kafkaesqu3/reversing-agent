@@ -43,6 +43,18 @@ Describe 'New-ClientInstructionText' {
         $text | Should -BeLike '*x64dbg/x32dbg*target loaded*'
         $text | Should -BeLike '*Plugins > MCP > Start Server*application session*'
     }
+
+    It 'stops rather than recreating a deliberately disabled expected skill' {
+        $root = Join-Path (Join-Path $PSScriptRoot '..') 'templates'
+        $text = New-ClientInstructionText -TemplateRoot $root -Client Codex
+
+        $text | Should -Match (
+            '(?s)skill you expect and cannot find.*disabled deliberately.*' +
+            'disabledReason in re-agent\.config\.json')
+        $text | Should -BeLike '*Do not reimplement it by hand*'
+        $text | Should -Match '(?s)do not work\s+around its absence silently'
+        $text | Should -BeLike '*say which capability is missing and why you stopped*'
+    }
 }
 
 Describe 'Set-ManagedTextFile' {
@@ -57,6 +69,44 @@ Describe 'Set-ManagedTextFile' {
 
         { Set-ManagedTextFile -Path $path -Text $candidate `
                 -Marker $script:ManagedMarker -BackupOnChange $true } |
+            Should -Throw '*unmanaged*'
+
+        (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash | Should -Be $beforeHash
+        ([IO.File]::ReadAllBytes($path) -join ',') | Should -Be ($beforeBytes -join ',')
+        @(Get-TestManagedSibling -Path $path -Kind pending).Count | Should -Be 0
+        @(Get-TestManagedSibling -Path $path -Kind bak).Count | Should -Be 0
+    }
+
+    It 'rejects a case-changed marker-only collision without changing it' {
+        $root = Join-Path $TestDrive 'case-changed'
+        $null = New-Item -ItemType Directory -Path $root
+        $path = Join-Path $root 'AGENTS.md'
+        Write-TestUtf8File -Path $path -Text $script:ManagedMarker.ToUpperInvariant()
+        $beforeHash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+        $beforeBytes = [IO.File]::ReadAllBytes($path)
+        $candidate = "$script:ManagedMarker`n# replacement`n"
+
+        { Set-ManagedTextFile -Path $path -Text $candidate `
+                -Marker $script:ManagedMarker -BackupOnChange $true } |
+            Should -Throw '*unmanaged*'
+
+        (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash | Should -Be $beforeHash
+        ([IO.File]::ReadAllBytes($path) -join ',') | Should -Be ($beforeBytes -join ',')
+        @(Get-TestManagedSibling -Path $path -Kind pending).Count | Should -Be 0
+        @(Get-TestManagedSibling -Path $path -Kind bak).Count | Should -Be 0
+    }
+
+    It 'rejects a case-changed marker before WhatIf can bypass ownership' {
+        $root = Join-Path $TestDrive 'case-changed-what-if'
+        $null = New-Item -ItemType Directory -Path $root
+        $path = Join-Path $root 'AGENTS.md'
+        Write-TestUtf8File -Path $path -Text $script:ManagedMarker.ToUpperInvariant()
+        $beforeHash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+        $beforeBytes = [IO.File]::ReadAllBytes($path)
+        $candidate = "$script:ManagedMarker`n# replacement`n"
+
+        { Set-ManagedTextFile -Path $path -Text $candidate `
+                -Marker $script:ManagedMarker -BackupOnChange $true -WhatIf } |
             Should -Throw '*unmanaged*'
 
         (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash | Should -Be $beforeHash
