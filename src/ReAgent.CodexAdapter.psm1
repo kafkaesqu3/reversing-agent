@@ -210,6 +210,23 @@ function ConvertTo-CodexActiveWorkflowLine {
     return $converted
 }
 
+function ConvertTo-CodexWorkflowLine {
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Line,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$SkillNames
+    )
+
+    $parts = [regex]::Split($Line, '("[^"]*")')
+    $converted = foreach ($part in $parts) {
+        if ($part -cmatch '^"[^"]*"$') {
+            $part
+        } else {
+            ConvertTo-CodexActiveWorkflowLine -Line $part -SkillNames $SkillNames
+        }
+    }
+    return $converted -join ''
+}
+
 function ConvertTo-CodexWorkflowText {
     <#
     .SYNOPSIS
@@ -231,13 +248,13 @@ function ConvertTo-CodexWorkflowText {
     $lines = [regex]::Split($Text, '\r?\n')
     $inFence = $false
     $converted = foreach ($line in $lines) {
-        if ($line -cmatch '^\s*```') {
+        if ($line -cmatch '^\s*(?:```|~~~)') {
             $inFence = -not $inFence
             $line
         } elseif ($inFence -or $line -cmatch '^\s*>') {
             $line
         } else {
-            ConvertTo-CodexActiveWorkflowLine -Line $line -SkillNames $SkillNames
+            ConvertTo-CodexWorkflowLine -Line $line -SkillNames $SkillNames
         }
     }
     return $converted -join $newLine
@@ -302,12 +319,16 @@ function New-CodexAgentServerTable {
     $auth = if ($ConfigServer.PSObject.Properties.Name -contains 'auth') {
         [string]$ConfigServer.auth
     } else { 'none' }
-    if ($transport -eq 'http' -and $Enabled -and $auth -ne 'none') {
-        throw "Authenticated HTTP server '$($ConfigServer.name)' cannot be enabled."
+    if ($transport -in @('http', 'stdio') -and $Enabled -and $auth -ne 'none') {
+        throw "Authenticated server '$($ConfigServer.name)' cannot be enabled."
     }
 
     $table = 'mcp_servers.' + (ConvertTo-CodexTomlValue -Value $ConfigServer.name)
-    $lines = @("[$table]")
+    $lines = @(
+        "[$table]"
+        'enabled = ' + ([string]$Enabled).ToLowerInvariant()
+        'enabled_tools = ' + (ConvertTo-CodexTomlArray -Values $EnabledTools)
+    )
     if ($transport -eq 'http') {
         $url = "http://$($ServerResult.Bind):$($ServerResult.Port)$($ServerResult.Path)"
         $lines += 'url = ' + (ConvertTo-CodexTomlValue -Value $url)
@@ -319,8 +340,6 @@ function New-CodexAgentServerTable {
     } else {
         throw "Unsupported transport '$transport'."
     }
-    $lines += 'enabled = ' + ([string]$Enabled).ToLowerInvariant()
-    $lines += 'enabled_tools = ' + (ConvertTo-CodexTomlArray -Values $EnabledTools)
     return $lines -join "`n"
 }
 

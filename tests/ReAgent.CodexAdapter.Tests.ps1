@@ -142,6 +142,19 @@ TodoWrite /windbg-crash
             Should -BeExactly $text
     }
 
+    It 'preserves inline quoted history while converting active prose' {
+        $text = 'History says "Use TodoWrite"; use TodoWrite now.'
+        $expected = 'History says "Use TodoWrite"; use a concise Codex task or plan list now.'
+        ConvertTo-CodexWorkflowText -Text $text -SkillNames @() |
+            Should -BeExactly $expected
+    }
+
+    It 'preserves tilde-fenced historical content' {
+        $text = "~~~text`nUse TodoWrite and /windbg-crash.`n~~~"
+        ConvertTo-CodexWorkflowText -Text $text -SkillNames @('windbg-crash') |
+            Should -BeExactly $text
+    }
+
     It 'does not reinterpret generated skills discovery as a skill invocation' {
         ConvertTo-CodexWorkflowText -Text 'Use the Skill tool.' -SkillNames @('skills') |
             Should -BeExactly 'Use the /skills discovery.'
@@ -181,6 +194,24 @@ Describe 'New-CodexAgentServerTable' {
         $actual.IndexOf('RE_LABEL') | Should -BeLessThan $actual.IndexOf('RE_MODE')
     }
 
+    It 'parses stdio controls as server fields rather than environment entries' {
+        $actual = New-CodexAgentServerTable -ConfigServer $stdioConfig `
+            -ServerResult $stdioResult -Enabled $true -EnabledTools @('list_dumps')
+        $path = Join-Path $TestDrive 'agent-server.toml'
+        $utf8 = New-Object Text.UTF8Encoding($false)
+        [IO.File]::WriteAllText($path, $actual, $utf8)
+        $code = "import json,sys,tomllib; print(json.dumps(" +
+            "tomllib.load(open(sys.argv[1], 'rb'))))"
+        $json = & python -c $code $path
+        $LASTEXITCODE | Should -Be 0
+        $server = ($json | ConvertFrom-Json).mcp_servers.'mcp-windbg'
+        $server.enabled | Should -BeTrue
+        @($server.enabled_tools) | Should -BeExactly @('list_dumps')
+        $server.env.RE_MODE | Should -BeExactly 'analysis'
+        $server.env.PSObject.Properties.Name | Should -Not -Contain 'enabled'
+        $server.env.PSObject.Properties.Name | Should -Not -Contain 'enabled_tools'
+    }
+
     It 'emits cwd when the shared command record supplies it' {
         $stdioResult.Command | Add-Member -NotePropertyName WorkingDirectory `
             -NotePropertyValue 'C:\re\work'
@@ -193,6 +224,13 @@ Describe 'New-CodexAgentServerTable' {
         { New-CodexAgentServerTable -ConfigServer $httpConfig `
                 -ServerResult $httpResult -Enabled $true -EnabledTools @('read_mem') } |
             Should -Throw '*authenticated*enabled*'
+    }
+
+    It 'rejects an enabled authenticated stdio target' {
+        $stdioConfig.auth = 'bearer'
+        { New-CodexAgentServerTable -ConfigServer $stdioConfig `
+                -ServerResult $stdioResult -Enabled $true `
+                -EnabledTools @('list_dumps') } | Should -Throw '*authenticated*enabled*'
     }
 
     It 'rejects legacy SSE before rendering' {
