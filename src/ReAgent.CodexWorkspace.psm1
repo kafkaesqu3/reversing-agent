@@ -1,6 +1,7 @@
 Set-StrictMode -Version Latest
 
 Import-Module (Join-Path $PSScriptRoot 'ReAgent.CodexAdapter.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'ReAgent.Agents.psm1') -Force
 
 $script:CodexInstructionMarker =
     '<!-- re-agent-managed: codex-operating-contract v1 -->'
@@ -232,6 +233,235 @@ function Write-CodexInstruction {
     return Set-ManagedTextFile -Path $path -Text $text `
         -Marker $script:CodexInstructionMarker -BackupOnChange $true `
         -WhatIf:$WhatIfPreference
+}
+
+$script:CodexAgentMarker = '# re-agent-managed: codex-custom-agent v1'
+
+function Get-CodexAgentTemplatePart {
+    param([Parameter(Mandatory)][string]$Path)
+
+    $text = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
+    $match = [regex]::Match($text,
+        '\A---\r?\n(?<front>[\s\S]*?)\r?\n---\r?\n(?<body>[\s\S]*)\z')
+    if (-not $match.Success) { throw "Agent template '$Path' has no strict frontmatter." }
+    $description = [regex]::Match($match.Groups['front'].Value, '(?m)^description:\s*(?<v>.*)$')
+    if (-not $description.Success) { throw "Agent template '$Path' has no description." }
+    return [pscustomobject]@{
+        Description = $description.Groups['v'].Value
+        Body = $match.Groups['body'].Value
+    }
+}
+
+function Get-CodexAgentToolsByServer {
+    param(
+        [Parameter(Mandatory)][object]$Agent,
+        [Parameter(Mandatory)][object]$Grant,
+        [Parameter(Mandatory)][string]$Server
+    )
+
+    if (@($Agent.targetServers) -notcontains $Server) { return @() }
+    $prefix = "mcp__${Server}__"
+    return @($Grant.Tools | Where-Object {
+            $_.StartsWith($prefix, [StringComparison]::Ordinal)
+        } | ForEach-Object { $_.Substring($prefix.Length) } | Sort-Object)
+}
+
+function Get-CodexAgentServerProse {
+    param([Parameter(Mandatory)][object]$Agent, [Parameter(Mandatory)][object]$Grant)
+
+    $lines = foreach ($server in @($Agent.targetServers)) {
+        $count = @(Get-CodexAgentToolsByServer -Agent $Agent -Grant $Grant -Server $server).Count
+        "- ``$server`` $([char]0x2014) $count tool(s) at level ``$($Agent.level)``."
+    }
+    if (-not $lines) { return '- None. This agent has no MCP reach.' }
+    return $lines -join "`n"
+}
+
+function Get-CodexAgentLimitation {
+    param([Parameter(Mandatory)][object]$Agent, [Parameter(Mandatory)][object]$Catalog)
+
+    $lines = foreach ($server in @($Agent.targetServers)) {
+        if ((Get-ToolClassification -Catalog $Catalog -Server $server).Known) { continue }
+        "- ``$server`` is declared but not captured, so you hold no tools for it."
+    }
+    $lines += ('- A missing tool is your grant, not a broken server. ' +
+        'Report it; do not work around it.')
+    return $lines -join "`n"
+}
+
+function Get-CodexAgentClientLimitation {
+    param([Parameter(Mandatory)][object]$Agent, [Parameter(Mandatory)][object]$Config)
+
+    $sse = @($Config.mcpServers | Where-Object {
+            $_.name -in @($Agent.targetServers) -and $_.transport -eq 'sse'
+        } | ForEach-Object { $_.name })
+    $lines = @()
+    if ($sse.Count) {
+        $lines += ('- Legacy SSE is unsupported by Codex; unavailable targets: ' +
+            ($sse -join ', ') + '.')
+    }
+    $lines += ('- If a GUI-hosted tool is unavailable, the host application is normally closed. ' +
+        'Ask the main session or operator to start it; do not work around the missing grant.')
+    return $lines -join "`n"
+}
+
+function Get-CodexAgentOmittedServer {
+    param([Parameter(Mandatory)][object]$Agent, [Parameter(Mandatory)][array]$ServerResults)
+
+    return @($ServerResults | Where-Object {
+            $_.Installed -and $_.Transport -eq 'sse' -and $_.Name -in @($Agent.targetServers)
+        } | Sort-Object Name | ForEach-Object {
+            [pscustomobject]@{ Agent = $Agent.name; Name = $_.Name
+                Reason = 'legacy SSE is unsupported by Codex' }
+        })
+}
+
+function Assert-CodexAgentAuthentication {
+    param(
+        [Parameter(Mandatory)][object]$Agent,
+        [Parameter(Mandatory)][object]$Config,
+        [Parameter(Mandatory)][array]$ServerResults
+    )
+
+    foreach ($server in @($Config.mcpServers | Where-Object {
+                $_.name -in @($Agent.targetServers) -and $_.auth -ne 'none'
+            })) {
+        $result = @($ServerResults | Where-Object {
+                $_.Installed -and $_.Name -eq $server.name -and
+                $_.Transport -in @('http', 'stdio')
+            })[0]
+        if ($result) {
+            throw "Authenticated server '$($server.name)' cannot be enabled for Codex agents."
+        }
+    }
+}
+
+function New-CodexAgentToml {
+    <#
+    .SYNOPSIS
+        Renders a complete, token-free Codex custom-agent TOML document.
+    #>
+    [CmdletBinding()]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+        'PSUseShouldProcessForStateChangingFunctions', '')]
+    param(
+        [Parameter(Mandatory)][object]$Agent,
+        [Parameter(Mandatory)][object]$Catalog,
+        [Parameter(Mandatory)][object]$Config,
+        [Parameter(Mandatory)][AllowEmptyCollection()][array]$ServerResults,
+        [Parameter(Mandatory)][string]$TemplateRoot
+    )
+
+    Assert-CodexAgentAuthentication -Agent $Agent -Config $Config -ServerResults $ServerResults
+    $templatePath = Join-Path $TemplateRoot "agents\$($Agent.name).md.template"
+    $template = Get-CodexAgentTemplatePart -Path $templatePath
+    $grant = Get-AgentToolGrant -Agent $Agent -Catalog $Catalog
+    $serverProse = Get-CodexAgentServerProse -Agent $Agent -Grant $grant
+    $body = $template.Body.Replace('{{SERVERS}}', $serverProse)
+    $limitation = Get-CodexAgentLimitation -Agent $Agent -Catalog $Catalog
+    $body = $body.Replace('{{LIMITATIONS}}', $limitation)
+    $body = $body.Replace('{{CLIENT_LIMITATIONS}}',
+        (Get-CodexAgentClientLimitation -Agent $Agent -Config $Config))
+    $sandbox = if ($Agent.level -eq 'write') { 'workspace-write' } else { 'read-only' }
+    $lines = @($script:CodexAgentMarker,
+        ('name = ' + (ConvertTo-CodexTomlValue -Value ([string]$Agent.name))),
+        ('description = ' + (ConvertTo-CodexTomlValue -Value ([string]$template.Description))),
+        ('developer_instructions = ' + (ConvertTo-CodexTomlValue -Value $body)),
+        ('sandbox_mode = ' + (ConvertTo-CodexTomlValue -Value $sandbox)))
+    foreach ($result in @($ServerResults | Where-Object {
+                $_.Installed -and $_.Transport -in @('http', 'stdio')
+            } | Sort-Object Name)) {
+        $server = @($Config.mcpServers | Where-Object { $_.name -eq $result.Name })[0]
+        if (-not $server) { throw "Installed server '$($result.Name)' is absent from config." }
+        $tools = @(Get-CodexAgentToolsByServer -Agent $Agent -Grant $grant -Server $result.Name)
+        $lines += ''
+        $lines += New-CodexAgentServerTable -ConfigServer $server -ServerResult $result `
+            -Enabled ($tools.Count -gt 0) -EnabledTools $tools
+    }
+    return $lines -join "`n"
+}
+
+function Remove-DisabledCodexAgentDefinition {
+    [CmdletBinding(SupportsShouldProcess)]
+    param([Parameter(Mandatory)][object]$Agent, [Parameter(Mandatory)][string]$AgentDir)
+
+    $path = Join-Path $AgentDir "$($Agent.name).toml"
+    if (-not (Test-Path -LiteralPath $path)) {
+        return [pscustomobject]@{
+            Name = $Agent.name; Enabled = $false; Path = $path; Changed = $false
+        }
+    }
+    if (-not (Test-ReAgentOwnershipMarker -Path $path -Marker $script:CodexAgentMarker)) {
+        throw "Refusing to remove unmanaged Codex agent '$path'."
+    }
+    if ($PSCmdlet.ShouldProcess($path, 'Remove disabled Codex custom agent')) {
+        Remove-Item -LiteralPath $path -Force
+        return [pscustomobject]@{
+            Name = $Agent.name; Enabled = $false; Path = $path; Changed = $true
+        }
+    }
+    return [pscustomobject]@{
+        Name = $Agent.name; Enabled = $false; Path = $path; Changed = $true
+    }
+}
+
+function Write-CodexAgentDefinition {
+    <#
+    .SYNOPSIS
+        Reconciles one marked Codex TOML file per declared custom agent.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)][object]$Config,
+        [Parameter(Mandatory)][object]$Catalog,
+        [Parameter(Mandatory)][AllowEmptyCollection()][array]$ServerResults,
+        [Parameter(Mandatory)][string]$TemplateRoot
+    )
+
+    $agentDir = Join-Path $Config.paths.agentRoot '.codex\agents'
+    $enabled = @($Config.agents | Where-Object enabled)
+    $candidates = @{}
+    foreach ($agent in $enabled) {
+        $candidates[$agent.name] = New-CodexAgentToml -Agent $agent -Catalog $Catalog `
+            -Config $Config `
+            -ServerResults $ServerResults -TemplateRoot $TemplateRoot
+    }
+    $results = @()
+    foreach ($agent in @($Config.agents | Where-Object { -not $_.enabled })) {
+        $results += Remove-DisabledCodexAgentDefinition -Agent $agent -AgentDir $agentDir `
+            -WhatIf:$WhatIfPreference
+    }
+    foreach ($agent in $enabled) {
+        $path = Join-Path $agentDir "$($agent.name).toml"
+        $record = Set-ManagedTextFile -Path $path -Text $candidates[$agent.name] `
+            -Marker $script:CodexAgentMarker -BackupOnChange:$false -WhatIf:$WhatIfPreference
+        $results += [pscustomobject]@{ Name = $agent.name; Enabled = $true; Path = $path
+            Changed = $record.Changed; Status = $record.Status
+            OmittedServers = @(Get-CodexAgentOmittedServer -Agent $agent `
+                    -ServerResults $ServerResults) }
+    }
+    return $results
+}
+
+function Write-CodexWorkspaceConfiguration {
+    <#
+    .SYNOPSIS
+        Reconciles Codex instructions and custom agents below the project root.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)][object]$Config,
+        [Parameter(Mandatory)][object]$Catalog,
+        [Parameter(Mandatory)][AllowEmptyCollection()][array]$ServerResults,
+        [Parameter(Mandatory)][string]$TemplateRoot
+    )
+
+    $instruction = Write-CodexInstruction -Config $Config -TemplateRoot $TemplateRoot `
+        -WhatIf:$WhatIfPreference
+    $agents = @(Write-CodexAgentDefinition -Config $Config -Catalog $Catalog `
+            -ServerResults $ServerResults -TemplateRoot $TemplateRoot -WhatIf:$WhatIfPreference)
+    return [pscustomobject]@{ Instruction = $instruction; Agents = $agents
+        OmittedServers = @($agents | ForEach-Object { $_.OmittedServers }) }
 }
 
 function Assert-SkillTreePath {
@@ -664,4 +894,5 @@ function Install-CodexSkillDirectory {
 
 Export-ModuleMember -Function New-ClientInstructionText, Write-CodexInstruction, `
     Test-ReAgentOwnershipMarker, Set-ManagedTextFile, New-CodexSkillCandidate, `
-    Install-CodexSkillDirectory, Assert-SkillTreePath
+    Install-CodexSkillDirectory, Assert-SkillTreePath, New-CodexAgentToml, `
+    Write-CodexAgentDefinition, Write-CodexWorkspaceConfiguration

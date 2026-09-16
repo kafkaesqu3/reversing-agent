@@ -29,3 +29,5 @@ Stamp every finding with `dynamic-analyst` and the tool calls behind it.
 ## Limitations
 
 {{LIMITATIONS}}
+
+{{CLIENT_LIMITATIONS}}
