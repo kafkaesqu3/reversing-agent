@@ -323,6 +323,19 @@ Describe 'Codex custom-agent verification C5-C8' {
         { Read-CodexAgentToml -Path $path } | Should -Throw
     }
 
+    It 'rejects scalar and null values for generator string-array fields: <Value>' -ForEach @(
+        @{ Value = '"read_binary"' }, @{ Value = 'null' }
+    ) {
+        $fixture = New-CodexAgentVerificationFixture
+        $path = Join-Path $fixture.Root '.codex/agents/static-analyst.toml'
+        $text = [IO.File]::ReadAllText($path, [Text.Encoding]::UTF8)
+        $text = [regex]::Replace($text,
+            '(?m)^enabled_tools = .+$', ('enabled_tools = ' + $Value))
+        Write-TestUtf8File -Path $path -Text $text
+
+        { Read-CodexAgentToml -Path $path } | Should -Throw
+    }
+
     It 'C5 rejects an agent whose parsed name disagrees with its file and config name' {
         $fixture = New-CodexAgentVerificationFixture
         $path = Join-Path $fixture.Root '.codex/agents/verifier.toml'
@@ -372,6 +385,26 @@ Describe 'Codex custom-agent verification C5-C8' {
         $check.Detail | Should -Match 'grant|enabled'
     }
 
+    It 'C6 rejects a newly cataloged tool whose classification is incomplete' {
+        $fixture = New-CodexAgentVerificationFixture
+        $fixture.Catalog.servers.'pyghidra-mcp'.tools += 'newly_cataloged'
+        foreach ($name in @('static-analyst', 'verifier')) {
+            $path = Join-Path $fixture.Root ('.codex/agents/' + $name + '.toml')
+            $text = [IO.File]::ReadAllText($path, [Text.Encoding]::UTF8)
+            $oldGrant = if ($name -eq 'static-analyst') {
+                'enabled_tools = ["read_binary","rename_function"]'
+            } else { 'enabled_tools = ["read_binary"]' }
+            $newGrant = $oldGrant.Replace(']', ',"newly_cataloged"]')
+            $text = $text.Replace($oldGrant, $newGrant)
+            Write-TestUtf8File -Path $path -Text $text
+        }
+
+        $check = Get-CodexAgentGrantCheck -Config $fixture.Config -Catalog $fixture.Catalog
+
+        $check.Status | Should -Be 'fail'
+        $check.Detail | Should -Match 'captured but unclassified|classification'
+    }
+
     It 'C7 rejects literal secret leakage, sensitive environment keys and transport drift' `
         -ForEach @(
         @{ Case = 'Bearer text'; Edit = 'developer_instructions = "Bearer leaked"' },
@@ -390,6 +423,22 @@ Describe 'Codex custom-agent verification C5-C8' {
 
         $check.Status | Should -Be 'fail'
         $check.Detail | Should -Not -Match 'fixture-token|leaked'
+    }
+
+    It 'C7 rejects a configured token after TOML string decoding' {
+        $fixture = New-CodexAgentVerificationFixture
+        $fixture.Config | Add-Member -NotePropertyName token -NotePropertyValue 'fixture-token'
+        $path = Join-Path $fixture.Root '.codex/agents/verifier.toml'
+        $text = [IO.File]::ReadAllText($path, [Text.Encoding]::UTF8)
+        $text = [regex]::Replace($text, '(?m)^developer_instructions = .+$',
+            'developer_instructions = "fixture\u002dtoken"')
+        Write-TestUtf8File -Path $path -Text $text
+
+        $check = Get-CodexSecretIsolationCheck -Config $fixture.Config `
+            -ServerResults $fixture.ServerResults
+
+        $check.Status | Should -Be 'fail'
+        $check.Detail | Should -Not -Match 'fixture-token'
     }
 
     It 'C8 rejects changed marked bytes and unowned reconciliation actions' {

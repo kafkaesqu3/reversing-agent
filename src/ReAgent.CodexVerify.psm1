@@ -312,9 +312,10 @@ function ConvertFrom-CodexTomlString {
 function ConvertFrom-CodexTomlArray {
     param([Parameter(Mandatory)][string]$Value)
 
+    if ($Value.Trim() -notmatch '^\[.*\]$') { throw 'Expected a TOML string array.' }
     try { $decoded = ConvertFrom-Json -InputObject $Value -ErrorAction Stop }
     catch { throw 'Malformed TOML string array.' }
-    if ($null -eq $decoded) { return [string[]]@() }
+    if ($null -eq $decoded) { throw 'TOML string array cannot be null.' }
     $items = if ($decoded -is [string]) { @($decoded) } else { @($decoded) }
     foreach ($item in $items) {
         if ($item -isnot [string]) { throw 'TOML array values must be strings.' }
@@ -531,6 +532,9 @@ function Get-CodexAgentGrantCheck {
                 $findings += "Agent '$($agent.name)' target '$name' has a stale catalog."
                 continue
             }
+            foreach ($finding in @(Test-AgentClassificationCheck -Catalog $Catalog -Server $name)) {
+                $findings += "Agent '$($agent.name)' target '$name': $($finding.Message)"
+            }
             $server = @($parsed.Servers | Where-Object { $_.Name -ceq $name })[0]
             $wanted = Get-CodexExpectedAgentTool -Agent $agent -Catalog $Catalog -Server $name
             if (-not $server -or -not (Test-CodexExactNameSetEqual -Left $wanted `
@@ -641,6 +645,12 @@ function Get-CodexSecretIsolationCheck {
                 })) {
             if ([string]$value -match '(?i)authorization|bearer') {
                 $findings += "$($file.Name) has decoded secret-like text."
+            }
+            foreach ($secret in $secrets) {
+                if ($secret -and [string]::Equals([string]$value, $secret,
+                        [StringComparison]::Ordinal)) {
+                    $findings += "$($file.Name) has a decoded configured secret value."
+                }
             }
         }
         $actual = @($parsed.Servers | ForEach-Object Name)
