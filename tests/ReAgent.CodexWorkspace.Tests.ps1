@@ -429,6 +429,10 @@ Describe 'Codex custom-agent generation' {
         $script:CodexAgentRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         $script:CodexAgentTemplates = Join-Path $script:CodexAgentRoot 'templates'
         $null = New-Item -ItemType Directory -Path (Join-Path $script:CodexAgentTemplates 'agents') -Force
+        $instructionDir = Join-Path $script:CodexAgentTemplates 'instructions'
+        $null = New-Item -ItemType Directory -Path $instructionDir -Force
+        '# fixture contract' | Set-Content (Join-Path $instructionDir 'common.md.template')
+        '# fixture Codex' | Set-Content (Join-Path $instructionDir 'codex.md.template')
         @(
             @{ Name = 'static-analyst'; Description = 'Static "analysis"'; Body = 'Static body with """ safely embedded.{{CLIENT_LIMITATIONS}}' }
             @{ Name = 'verifier'; Description = 'Independent verifier'; Body = 'Verifier body.{{CLIENT_LIMITATIONS}}' }
@@ -525,5 +529,35 @@ Describe 'Codex custom-agent generation' {
             Should -Throw '*Authenticated*cannot be enabled*'
 
         Test-Path (Join-Path $script:CodexAgentRoot '.codex\agents\static-analyst.toml') | Should -BeFalse
+    }
+
+    It 'composes omission records when the configuration includes a disabled agent' {
+        $workspace = Write-CodexWorkspaceConfiguration -Config $script:CodexAgentConfig `
+            -Catalog $script:CodexAgentCatalog -ServerResults $script:CodexAgentResults `
+            -TemplateRoot $script:CodexAgentTemplates
+
+        $workspace.Agents.Count | Should -Be 3
+        @($workspace.OmittedServers).Count | Should -Be 3
+        @(@($workspace.Agents | Where-Object { -not $_.Enabled })[0].OmittedServers).Count |
+            Should -Be 0
+    }
+
+    It 'enables a compatible target even when its derived catalog grant is empty' {
+        $script:CodexAgentConfig.mcpServers += [pscustomobject]@{
+            name = 'catalog-empty'; transport = 'http'; auth = 'none'
+        }
+        $script:CodexAgentConfig.agents[0].targetServers += 'catalog-empty'
+        $script:CodexAgentResults += [pscustomobject]@{
+            Name = 'catalog-empty'; Installed = $true; Transport = 'http'
+            Bind = '127.0.0.1'; Port = 9104; Path = '/mcp'; Auth = 'none'
+        }
+
+        $toml = New-CodexAgentToml -Agent $script:CodexAgentConfig.agents[0] `
+            -Catalog $script:CodexAgentCatalog -Config $script:CodexAgentConfig `
+            -ServerResults $script:CodexAgentResults -TemplateRoot $script:CodexAgentTemplates
+
+        $toml | Should -Match (
+            '(?m)^\[mcp_servers\."catalog-empty"\]\r?$\r?\n' +
+            'enabled = true\r?\nenabled_tools = \[\]')
     }
 }

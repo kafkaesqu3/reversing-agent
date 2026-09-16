@@ -374,9 +374,10 @@ function New-CodexAgentToml {
         $server = @($Config.mcpServers | Where-Object { $_.name -eq $result.Name })[0]
         if (-not $server) { throw "Installed server '$($result.Name)' is absent from config." }
         $tools = @(Get-CodexAgentToolsByServer -Agent $Agent -Grant $grant -Server $result.Name)
+        $isTarget = @($Agent.targetServers) -contains $result.Name
         $lines += ''
         $lines += New-CodexAgentServerTable -ConfigServer $server -ServerResult $result `
-            -Enabled ($tools.Count -gt 0) -EnabledTools $tools
+            -Enabled $isTarget -EnabledTools $tools
     }
     return $lines -join "`n"
 }
@@ -389,6 +390,7 @@ function Remove-DisabledCodexAgentDefinition {
     if (-not (Test-Path -LiteralPath $path)) {
         return [pscustomobject]@{
             Name = $Agent.name; Enabled = $false; Path = $path; Changed = $false
+            OmittedServers = @()
         }
     }
     if (-not (Test-ReAgentOwnershipMarker -Path $path -Marker $script:CodexAgentMarker)) {
@@ -398,10 +400,12 @@ function Remove-DisabledCodexAgentDefinition {
         Remove-Item -LiteralPath $path -Force
         return [pscustomobject]@{
             Name = $Agent.name; Enabled = $false; Path = $path; Changed = $true
+            OmittedServers = @()
         }
     }
     return [pscustomobject]@{
         Name = $Agent.name; Enabled = $false; Path = $path; Changed = $true
+        OmittedServers = @()
     }
 }
 
