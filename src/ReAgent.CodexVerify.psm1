@@ -33,6 +33,22 @@ function Format-CodexNameSet {
     return '[' + ((Get-CodexSortedName -Names $Names) -join ', ') + ']'
 }
 
+function Test-CodexNameSetEqual {
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Left,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Right
+    )
+
+    $leftSorted = @(Get-CodexSortedName -Names $Left)
+    $rightSorted = @(Get-CodexSortedName -Names $Right)
+    if ($leftSorted.Count -ne $rightSorted.Count) { return $false }
+    for ($index = 0; $index -lt $leftSorted.Count; $index++) {
+        if (-not [string]::Equals($leftSorted[$index], $rightSorted[$index],
+                [StringComparison]::Ordinal)) { return $false }
+    }
+    return $true
+}
+
 function Get-CodexMarkedSkill {
     param(
         [Parameter(Mandatory)][object]$Config,
@@ -139,9 +155,8 @@ function Get-CodexSkillSetCheck {
     $codex = @(Get-CodexMarkedSkill -Config $Config -Client Codex | ForEach-Object { $_.Name })
     $detail = 'expected ' + (Format-CodexNameSet -Names $expected) + '; Claude ' +
         (Format-CodexNameSet -Names $claude) + '; Codex ' + (Format-CodexNameSet -Names $codex) + '.'
-    $expectedSet = Format-CodexNameSet -Names $expected
-    if ($expectedSet -ne (Format-CodexNameSet -Names $claude) -or
-        $expectedSet -ne (Format-CodexNameSet -Names $codex)) {
+    if (-not (Test-CodexNameSetEqual -Left $expected -Right $claude) -or
+        -not (Test-CodexNameSetEqual -Left $expected -Right $codex)) {
         return New-CheckResult -Name 'C1 Codex skill set' -Status fail -Detail $detail
     }
     return New-CheckResult -Name 'C1 Codex skill set' -Status pass -Detail $detail
@@ -192,7 +207,8 @@ function Get-CodexSkillMcpCheck {
     )
 
     $map = Get-CodexMcpNamespaceMap -Servers @($Config.mcpServers)
-    $byNamespace = @{}
+    $byNamespace = [Collections.Generic.Dictionary[string, string]]::new(
+        [StringComparer]::Ordinal)
     foreach ($name in $map.Keys) { $byNamespace[$map[$name]] = $name }
     $findings = @()
     foreach ($record in Get-CodexTextRecord -Config $Config) {
@@ -205,7 +221,6 @@ function Get-CodexSkillMcpCheck {
             $server = @($Config.mcpServers | Where-Object { $_.name -ceq $name }) | Select-Object -First 1
             if ([string]$server.transport -notin @('http', 'stdio')) {
                 $findings += "$($record.File):$($reference.Line) $($reference.Reference): legacy SSE is unsupported by Codex"
-                continue
             }
             $entry = $Catalog.servers.PSObject.Properties[$name]
             if ($null -eq $entry) {
@@ -213,7 +228,7 @@ function Get-CodexSkillMcpCheck {
                 continue
             }
             if ($reference.Tool -and $reference.Tool -ne '*' -and
-                @($entry.Value.tools) -notcontains $reference.Tool) {
+                @($entry.Value.tools) -cnotcontains $reference.Tool) {
                 $findings += "$($record.File):$($reference.Line) $($reference.Reference): tool absent from catalog"
             }
         }

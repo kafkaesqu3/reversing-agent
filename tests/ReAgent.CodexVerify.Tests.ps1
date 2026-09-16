@@ -118,6 +118,17 @@ Describe 'Codex workspace verification C0-C4' {
         $check.Detail | Should -Match 'expected.*alpha.*Claude.*alpha.*Codex.*alpha, beta'
     }
 
+    It 'C1 treats a case-only configured skill-name drift as a mismatch' {
+        $fixture = New-CodexVerificationFixture
+        $fixture.Config.skills[0].skills[0].name = 'Alpha'
+
+        $check = Get-CodexSkillSetCheck -Config $fixture.Config
+
+        $check.Name | Should -Match '^C1'
+        $check.Status | Should -Be 'fail'
+        $check.Detail | Should -Match 'expected \[Alpha\].*Claude \[alpha\].*Codex \[alpha\]'
+    }
+
     It 'C2 reports the directory declared and configured identities when frontmatter drifts' {
         $fixture = New-CodexVerificationFixture
         Write-TestUtf8File -Path (Join-Path $fixture.Root '.agents/skills/alpha/SKILL.md') -Text (
@@ -151,6 +162,34 @@ Describe 'Codex workspace verification C0-C4' {
 
         $check.Name | Should -Match '^C3'
         $check.Status | Should -Be 'fail'
+        $check.Detail | Should -Match 'tool absent from catalog'
+    }
+
+    It 'C3 rejects a wrong-cased MCP <Part>' -ForEach @(
+        @{ Part = 'namespace'; Reference = 'mcp__Pyghidra_mcp__read_binary'; Detail = 'server absent from config' }
+        @{ Part = 'tool'; Reference = 'mcp__pyghidra_mcp__Read_Binary'; Detail = 'tool absent from catalog' }
+    ) {
+        $fixture = New-CodexVerificationFixture
+        Add-TestText -Path (Join-Path $fixture.Root '.agents/skills/alpha/references/guide.md') -Text (
+            "`n$Reference`n")
+
+        $check = Get-CodexSkillMcpCheck -Config $fixture.Config -Catalog $fixture.Catalog
+
+        $check.Name | Should -Match '^C3'
+        $check.Status | Should -Be 'fail'
+        $check.Detail | Should -Match $Detail
+    }
+
+    It 'C3 accumulates transport and absent-tool findings for one legacy SSE reference' {
+        $fixture = New-CodexVerificationFixture
+        Add-TestText -Path (Join-Path $fixture.Root '.agents/skills/alpha/references/guide.md') -Text (
+            "`nmcp__pdbsql__not_catalogued`n")
+
+        $check = Get-CodexSkillMcpCheck -Config $fixture.Config -Catalog $fixture.Catalog
+
+        $check.Name | Should -Match '^C3'
+        $check.Status | Should -Be 'fail'
+        $check.Detail | Should -Match 'legacy SSE is unsupported by Codex'
         $check.Detail | Should -Match 'tool absent from catalog'
     }
 
