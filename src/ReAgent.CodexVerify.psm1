@@ -647,8 +647,8 @@ function Get-CodexSecretIsolationCheck {
                 $findings += "$($file.Name) has decoded secret-like text."
             }
             foreach ($secret in $secrets) {
-                if ($secret -and [string]::Equals([string]$value, $secret,
-                        [StringComparison]::Ordinal)) {
+                if ($secret -and ([string]$value).IndexOf($secret,
+                        [StringComparison]::Ordinal) -ge 0) {
                     $findings += "$($file.Name) has a decoded configured secret value."
                 }
             }

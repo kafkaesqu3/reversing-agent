@@ -425,13 +425,16 @@ Describe 'Codex custom-agent verification C5-C8' {
         $check.Detail | Should -Not -Match 'fixture-token|leaked'
     }
 
-    It 'C7 rejects a configured token after TOML string decoding' {
+    It 'C7 rejects configured tokens inside decoded TOML text: <Encoded>' -ForEach @(
+        @{ Encoded = 'fixture\u002dtoken' },
+        @{ Encoded = 'prefix fixture\u002dtoken suffix' }
+    ) {
         $fixture = New-CodexAgentVerificationFixture
         $fixture.Config | Add-Member -NotePropertyName token -NotePropertyValue 'fixture-token'
         $path = Join-Path $fixture.Root '.codex/agents/verifier.toml'
         $text = [IO.File]::ReadAllText($path, [Text.Encoding]::UTF8)
         $text = [regex]::Replace($text, '(?m)^developer_instructions = .+$',
-            'developer_instructions = "fixture\u002dtoken"')
+            ('developer_instructions = "' + $Encoded + '"'))
         Write-TestUtf8File -Path $path -Text $text
 
         $check = Get-CodexSecretIsolationCheck -Config $fixture.Config `
