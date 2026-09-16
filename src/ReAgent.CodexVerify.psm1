@@ -4,6 +4,7 @@ Import-Module (Join-Path $PSScriptRoot 'ReAgent.CodexAdapter.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'ReAgent.CodexWorkspace.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'ReAgent.Skills.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'ReAgent.Verify.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'ReAgent.Agents.psm1') -Force
 
 function Get-CodexEnabledSkill {
     param([Parameter(Mandatory)][object]$Config)
@@ -298,5 +299,484 @@ function Get-CodexResidueCheck {
         -Detail 'No Claude-only residue appears in active generated Codex text.'
 }
 
+function ConvertFrom-CodexTomlString {
+    param([Parameter(Mandatory)][string]$Value)
+
+    if ($Value -notmatch '^"(?:[^"\\\x00-\x1F]|\\["\\bfnrt/]|\\u[0-9A-Fa-f]{4})*"$') {
+        throw 'Expected one TOML basic string.'
+    }
+    try { return [string](ConvertFrom-Json -InputObject $Value -ErrorAction Stop) }
+    catch { throw 'Malformed TOML basic string.' }
+}
+
+function ConvertFrom-CodexTomlArray {
+    param([Parameter(Mandatory)][string]$Value)
+
+    try { $decoded = ConvertFrom-Json -InputObject $Value -ErrorAction Stop }
+    catch { throw 'Malformed TOML string array.' }
+    if ($null -eq $decoded) { return [string[]]@() }
+    $items = if ($decoded -is [string]) { @($decoded) } else { @($decoded) }
+    foreach ($item in $items) {
+        if ($item -isnot [string]) { throw 'TOML array values must be strings.' }
+    }
+    return [string[]]$items
+}
+
+function Get-CodexTomlTableName {
+    param([Parameter(Mandatory)][string]$Value)
+
+    if ($Value.StartsWith('"')) { return ConvertFrom-CodexTomlString -Value $Value }
+    if ($Value -match "^'[^']+'$") { return $Value.Substring(1, $Value.Length - 2) }
+    throw 'Malformed MCP server table name.'
+}
+
+function Add-CodexTomlField {
+    param(
+        [Parameter(Mandatory)][hashtable]$Seen,
+        [Parameter(Mandatory)][string]$Name,
+        [AllowNull()][object]$Value
+    )
+
+    if ($Seen.ContainsKey($Name)) { throw "Duplicate TOML field '$Name'." }
+    $Seen[$Name] = $Value
+}
+
+function Read-CodexAgentToml {
+    <# .SYNOPSIS Reads the exact TOML subset emitted for Codex custom agents. #>
+    [CmdletBinding()]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseLiteralInitializerForHashtable', '')]
+    param([Parameter(Mandatory)][string]$Path)
+
+    $raw = [IO.File]::ReadAllText($Path, [Text.Encoding]::UTF8)
+    $lines = [regex]::Split($raw, "\r?\n")
+    if ($lines.Count -eq 0 -or $lines[0] -cne '# re-agent-managed: codex-custom-agent v1') {
+        throw "Custom agent '$Path' has no ownership marker."
+    }
+    $top = [Collections.Hashtable]::new([StringComparer]::Ordinal)
+    $servers = [Collections.Hashtable]::new([StringComparer]::Ordinal)
+    $current = $null
+    $inEnvironment = $false
+    for ($index = 1; $index -lt $lines.Count; $index++) {
+        $line = $lines[$index].Trim()
+        if (-not $line) { continue }
+        $table = [regex]::Match($line,
+            '^\[mcp_servers\.(?<name>"(?:[^"\\]|\\.)*"|''[^'']+'')(?<env>\.env)?\]$')
+        if ($table.Success) {
+            $name = Get-CodexTomlTableName -Value $table.Groups['name'].Value
+            if (-not $servers.ContainsKey($name)) {
+                $servers[$name] = [pscustomobject]@{ Name = $name; Seen = @{}; Env = @{} }
+            } elseif (-not $table.Groups['env'].Success) { throw "Duplicate server table '$name'." }
+            $current = $servers[$name]
+            $inEnvironment = $table.Groups['env'].Success
+            continue
+        }
+        $assignment = [regex]::Match($line,
+            '^(?<key>"(?:[^"\\]|\\.)*"|[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?<value>.*)$')
+        if (-not $assignment.Success) { throw "Unsupported TOML line $($index + 1)." }
+        $key = $assignment.Groups['key'].Value
+        $value = $assignment.Groups['value'].Value
+        if ($inEnvironment) {
+            if (-not $key.StartsWith('"')) { throw 'Environment keys must be TOML basic strings.' }
+            Add-CodexTomlField -Seen $current.Env -Name (ConvertFrom-CodexTomlString $key) `
+                -Value (ConvertFrom-CodexTomlString $value)
+            continue
+        }
+        if ($current) {
+            if ($key -notin @('enabled', 'enabled_tools', 'url', 'command', 'args', 'cwd')) {
+                throw "Unknown MCP field '$key'."
+            }
+            $parsed = if ($key -eq 'enabled') {
+                if ($value -notin @('true', 'false')) { throw 'enabled must be Boolean.' }
+                [bool]::Parse($value)
+            } elseif ($key -in @('enabled_tools', 'args')) {
+                @(ConvertFrom-CodexTomlArray $value)
+            } else { ConvertFrom-CodexTomlString $value }
+            Add-CodexTomlField -Seen $current.Seen -Name $key -Value $parsed
+            continue
+        }
+        if ($key -notin @('name', 'description', 'developer_instructions', 'sandbox_mode')) {
+            throw "Unknown role field '$key'."
+        }
+        Add-CodexTomlField -Seen $top -Name $key -Value (ConvertFrom-CodexTomlString $value)
+    }
+    foreach ($field in @('name', 'description', 'developer_instructions', 'sandbox_mode')) {
+        if (-not $top.ContainsKey($field)) { throw "Missing role field '$field'." }
+    }
+    $parsedServers = foreach ($server in $servers.Values) {
+        foreach ($field in @('enabled', 'enabled_tools')) {
+            if (-not $server.Seen.ContainsKey($field)) {
+                throw "Server '$($server.Name)' is incomplete."
+            }
+        }
+        $hasUrl = $server.Seen.ContainsKey('url')
+        $hasCommand = $server.Seen.ContainsKey('command')
+        if ($hasUrl -eq $hasCommand) { throw "Server '$($server.Name)' has invalid transport." }
+        if ($hasUrl -and @(@('args', 'cwd') | Where-Object {
+                    $server.Seen.ContainsKey($_) }).Count -gt 0) {
+            throw "HTTP server '$($server.Name)' has stdio fields."
+        }
+        if ($hasUrl -and $server.Env.Count -gt 0) {
+            throw "HTTP server '$($server.Name)' has environment values."
+        }
+        if ($hasCommand -and -not $server.Seen.ContainsKey('args')) {
+            throw "Stdio server '$($server.Name)' has no args array."
+        }
+        [pscustomobject]@{ Name = $server.Name; Enabled = $server.Seen['enabled']
+            EnabledTools = @($server.Seen['enabled_tools']); Url = $server.Seen['url']
+            Command = $server.Seen['command']; Args = @($server.Seen['args'])
+            Cwd = $server.Seen['cwd']; Env = $server.Env }
+    }
+    return [pscustomobject]@{ Path = $Path; RawText = $raw; Name = $top['name']
+        Description = $top['description']; DeveloperInstructions = $top['developer_instructions']
+        SandboxMode = $top['sandbox_mode']; Servers = @($parsedServers) }
+}
+
+function Get-CodexAgentPath {
+    param([Parameter(Mandatory)][object]$Config, [Parameter(Mandatory)][string]$Name)
+
+    return Join-Path $Config.paths.agentRoot ('.codex\agents\' + $Name + '.toml')
+}
+
+function Get-CodexMarkedAgentFile {
+    param([Parameter(Mandatory)][object]$Config)
+
+    $root = Join-Path $Config.paths.agentRoot '.codex\agents'
+    if (-not (Test-Path -LiteralPath $root -PathType Container)) { return @() }
+    return @(Get-ChildItem -LiteralPath $root -File -Filter '*.toml' -Force | Where-Object {
+            Test-ReAgentOwnershipMarker -Path $_.FullName `
+                -Marker '# re-agent-managed: codex-custom-agent v1'
+        })
+}
+
+function Get-CodexAgentIdentityCheck {
+    <# .SYNOPSIS Checks C5 custom-agent identities and strict TOML shape. #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][object]$Config)
+
+    $findings = @()
+    $enabled = @($Config.agents | Where-Object enabled)
+    foreach ($agent in $enabled) {
+        $path = Get-CodexAgentPath -Config $Config -Name $agent.name
+        if (-not (Test-ReAgentOwnershipMarker -Path $path `
+                -Marker '# re-agent-managed: codex-custom-agent v1')) {
+            $findings += "Agent '$($agent.name)' is missing or unmanaged."
+            continue
+        }
+        try { $parsed = Read-CodexAgentToml -Path $path }
+        catch { $findings += "Agent '$($agent.name)' TOML is invalid."; continue }
+        if ($parsed.Name -cne $agent.name) {
+            $findings += "Agent file '$($agent.name)' declares '$($parsed.Name)'."
+        }
+    }
+    foreach ($file in Get-CodexMarkedAgentFile -Config $Config) {
+        $name = [IO.Path]::GetFileNameWithoutExtension($file.Name)
+        if (@($enabled | Where-Object { $_.name -ceq $name }).Count -eq 0) {
+            $findings += "Marked agent '$name' is not enabled in config."
+        }
+    }
+    if ($findings.Count) {
+        return New-CheckResult -Name 'C5 Codex agent identity' -Status fail `
+            -Detail ($findings -join ' | ')
+    }
+    return New-CheckResult -Name 'C5 Codex agent identity' -Status pass `
+        -Detail "$($enabled.Count) custom agent(s) have valid identities."
+}
+
+function Get-CodexExpectedAgentTool {
+    param([Parameter(Mandatory)][object]$Agent, [Parameter(Mandatory)][object]$Catalog,
+        [Parameter(Mandatory)][string]$Server)
+
+    $prefix = 'mcp__' + $Server + '__'
+    return @((Get-AgentToolGrant -Agent $Agent -Catalog $Catalog).Tools | Where-Object {
+            $_.StartsWith($prefix, [StringComparison]::Ordinal)
+        } | ForEach-Object { $_.Substring($prefix.Length) })
+}
+
+function Test-CodexExactNameSetEqual {
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Left,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Right
+    )
+
+    if ($Left.Count -ne $Right.Count -or @($Left | Select-Object -Unique).Count -ne $Left.Count -or
+        @($Right | Select-Object -Unique).Count -ne $Right.Count) { return $false }
+    return Test-CodexNameSetEqual -Left $Left -Right $Right
+}
+
+function Get-CodexAgentGrantCheck {
+    <# .SYNOPSIS Checks C6 exact per-agent MCP grants against the catalog. #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][object]$Config, [Parameter(Mandatory)][object]$Catalog)
+
+    $findings = @()
+    foreach ($agent in @($Config.agents | Where-Object enabled)) {
+        $path = Get-CodexAgentPath -Config $Config -Name $agent.name
+        try { $parsed = Read-CodexAgentToml -Path $path }
+        catch { $findings += "Agent '$($agent.name)' cannot supply a grant."; continue }
+        $expected = @()
+        foreach ($target in @($agent.targetServers)) {
+            $configured = @($Config.mcpServers | Where-Object { $_.name -ceq $target })[0]
+            if ($configured -and $configured.transport -in @('http', 'stdio')) {
+                $expected += $target
+            }
+        }
+        $actual = @($parsed.Servers | Where-Object Enabled | ForEach-Object Name)
+        if (-not (Test-CodexExactNameSetEqual -Left $expected -Right $actual)) {
+            $findings += "Agent '$($agent.name)' enabled server grant differs."
+        }
+        foreach ($name in $expected) {
+            $entry = $Catalog.servers.PSObject.Properties[$name]
+            if ($null -eq $entry -or
+                -not (Get-ToolClassification -Catalog $Catalog -Server $name).Known) {
+                $findings += "Agent '$($agent.name)' target '$name' has a stale catalog."
+                continue
+            }
+            $server = @($parsed.Servers | Where-Object { $_.Name -ceq $name })[0]
+            $wanted = Get-CodexExpectedAgentTool -Agent $agent -Catalog $Catalog -Server $name
+            if (-not $server -or -not (Test-CodexExactNameSetEqual -Left $wanted `
+                        -Right @($server.EnabledTools))) {
+                $findings += "Agent '$($agent.name)' tool grant for '$name' differs."
+            }
+        }
+    }
+    if ($findings.Count) {
+        return New-CheckResult -Name 'C6 Codex agent grant' -Status fail `
+            -Detail ($findings -join ' | ')
+    }
+    return New-CheckResult -Name 'C6 Codex agent grant' -Status pass `
+        -Detail 'Every enabled MCP server and tool grant is catalog-derived.'
+}
+
+function Test-CodexStringMapEqual {
+    param([Parameter(Mandatory)][hashtable]$Left, [Parameter(Mandatory)][hashtable]$Right)
+
+    if (-not (Test-CodexNameSetEqual -Left @($Left.Keys) -Right @($Right.Keys))) { return $false }
+    foreach ($key in $Left.Keys) { if ($Left[$key] -cne $Right[$key]) { return $false } }
+    return $true
+}
+
+function Test-CodexStringArrayEqual {
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Left,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Right
+    )
+
+    if ($Left.Count -ne $Right.Count) { return $false }
+    for ($index = 0; $index -lt $Left.Count; $index++) {
+        if ($Left[$index] -cne $Right[$index]) { return $false }
+    }
+    return $true
+}
+
+function Get-CodexSensitiveConfigValue {
+    param([Parameter(Mandatory)][object]$Value, [int]$Depth = 0)
+
+    if ($Depth -gt 8 -or $null -eq $Value) { return @() }
+    if ($Value -is [string]) { return @() }
+    $values = @()
+    foreach ($property in @($Value.PSObject.Properties)) {
+        if ($property.Name -match '(?i)(token|secret|password|authorization|api.?key)' -and
+            $property.Value -is [string] -and $property.Value) { $values += $property.Value }
+        if ($property.Value -isnot [string]) {
+            foreach ($child in @($property.Value)) {
+                $values += Get-CodexSensitiveConfigValue -Value $child -Depth ($Depth + 1)
+            }
+        }
+    }
+    return $values
+}
+
+function Test-CodexServerTransport {
+    param([Parameter(Mandatory)][object]$Server, [Parameter(Mandatory)][object]$Result)
+
+    if ($Result.Transport -eq 'http') {
+        return $Server.Url -ceq "http://$($Result.Bind):$($Result.Port)$($Result.Path)"
+    }
+    if ($Result.Transport -ne 'stdio' -or -not $Result.Command) { return $false }
+    if ($Server.Command -cne $Result.Command.Executable -or
+        -not (Test-CodexStringArrayEqual -Left @($Server.Args) `
+                -Right @($Result.Command.Arguments))) {
+        return $false
+    }
+    $expectedCwd = if ($Result.Command.PSObject.Properties.Name -contains 'WorkingDirectory') {
+        [string]$Result.Command.WorkingDirectory
+    } else { $null }
+    if ($Server.Cwd -cne $expectedCwd) { return $false }
+    $expected = @{}
+    if ($Result.Command.Env) {
+        foreach ($key in $Result.Command.Env.Keys) { $expected[$key] = $Result.Command.Env[$key] }
+    }
+    return Test-CodexStringMapEqual -Left $expected -Right $Server.Env
+}
+
+function Get-CodexSecretIsolationCheck {
+    <# .SYNOPSIS Checks C7 secret exclusion and transport provenance. #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Config,
+        [Parameter(Mandatory)][AllowEmptyCollection()][array]$ServerResults
+    )
+
+    $findings = @()
+    $secrets = @(Get-CodexSensitiveConfigValue -Value $Config | Select-Object -Unique)
+    $expected = @($ServerResults | Where-Object {
+            $_.Installed -and $_.Transport -in @('http', 'stdio')
+        })
+    foreach ($record in Get-CodexTextRecord -Config $Config) {
+        if ($record.Text -match '(?i)authorization|bearer') {
+            $findings += "$($record.File) contains secret-like raw text."
+        }
+        foreach ($secret in $secrets) {
+            if ($secret -and $record.Text.IndexOf($secret, [StringComparison]::Ordinal) -ge 0) {
+                $findings += "$($record.File) contains a configured secret value."
+            }
+        }
+    }
+    foreach ($file in Get-CodexMarkedAgentFile -Config $Config) {
+        try { $parsed = Read-CodexAgentToml -Path $file.FullName }
+        catch { $findings += "$($file.Name) cannot be verified."; continue }
+        foreach ($value in @($parsed.Name, $parsed.Description, $parsed.DeveloperInstructions) +
+            @($parsed.Servers | ForEach-Object {
+                    @($_.Url, $_.Command, $_.Cwd) + $_.Args + $_.Env.Values
+                })) {
+            if ([string]$value -match '(?i)authorization|bearer') {
+                $findings += "$($file.Name) has decoded secret-like text."
+            }
+        }
+        $actual = @($parsed.Servers | ForEach-Object Name)
+        if (-not (Test-CodexNameSetEqual -Left @($expected.Name) -Right $actual)) {
+            $findings += "$($file.Name) has transport table drift."
+        }
+        foreach ($server in $parsed.Servers) {
+            if (@($server.Env.Keys | Where-Object {
+                        $_ -match '(?i)(token|secret|password|auth|key)'
+                    }).Count) {
+                $findings += "$($file.Name) has a sensitive environment name."
+            }
+            $result = @($expected | Where-Object { $_.Name -ceq $server.Name })[0]
+            $configServer = @($Config.mcpServers | Where-Object { $_.name -ceq $server.Name })[0]
+            if (-not $result -or -not $configServer -or
+                -not (Test-CodexServerTransport -Server $server -Result $result)) {
+                $findings += "$($file.Name) has transport provenance drift for '$($server.Name)'."
+            } elseif ($server.Enabled -and $configServer.auth -ne 'none') {
+                $findings += "$($file.Name) enables an authenticated target."
+            }
+        }
+    }
+    if ($findings.Count) {
+        return New-CheckResult -Name 'C7 Codex secret isolation' -Status fail `
+            -Detail ($findings -join ' | ')
+    }
+    return New-CheckResult -Name 'C7 Codex secret isolation' -Status pass `
+        -Detail 'Custom-agent files contain only token-free deterministic transports.'
+}
+
+function Get-CodexCandidateByte {
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Text)
+
+    $content = if ($Text.EndsWith("`n")) { $Text } else { $Text + "`r`n" }
+    return [Text.UTF8Encoding]::new($false).GetBytes($content)
+}
+
+function Get-CodexOwnershipCheck {
+    <# .SYNOPSIS Checks C8 deterministic bytes and reconciliation ownership. #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Config,
+        [Parameter(Mandatory)][object]$Catalog,
+        [Parameter(Mandatory)][AllowEmptyCollection()][array]$ServerResults,
+        [Parameter(Mandatory)][string]$TemplateRoot,
+        [AllowEmptyCollection()][array]$ReconciliationRecords = @()
+    )
+
+    $findings = @()
+    $candidates = @([pscustomobject]@{ Path = (Join-Path $Config.paths.agentRoot 'AGENTS.md')
+            Marker = '<!-- re-agent-managed: codex-operating-contract v1 -->'
+            Text = (New-ClientInstructionText -TemplateRoot $TemplateRoot -Client Codex) })
+    foreach ($agent in @($Config.agents | Where-Object enabled)) {
+        $path = Get-CodexAgentPath -Config $Config -Name $agent.name
+        $toml = New-CodexAgentToml -Agent $agent -Catalog $Catalog -Config $Config `
+            -ServerResults $ServerResults -TemplateRoot $TemplateRoot
+        $candidates += [pscustomobject]@{ Path = $path
+            Marker = '# re-agent-managed: codex-custom-agent v1'; Text = $toml }
+    }
+    foreach ($candidate in $candidates) {
+        if (-not (Test-ReAgentOwnershipMarker -Path $candidate.Path -Marker $candidate.Marker)) {
+            $findings += "Managed candidate '$($candidate.Path)' is missing or unmanaged."
+        } elseif (-not [Collections.StructuralComparisons]::StructuralEqualityComparer.Equals(
+                [IO.File]::ReadAllBytes($candidate.Path),
+                (Get-CodexCandidateByte -Text $candidate.Text))) {
+            $findings += "Managed candidate '$($candidate.Path)' has a byte mismatch."
+        }
+    }
+    $expectedNames = @($Config.agents | Where-Object enabled | ForEach-Object name)
+    foreach ($file in Get-CodexMarkedAgentFile -Config $Config) {
+        if ($expectedNames -cnotcontains [IO.Path]::GetFileNameWithoutExtension($file.Name)) {
+            $findings += "Marked agent '$($file.Name)' has no managed candidate."
+        }
+    }
+    foreach ($record in $ReconciliationRecords) {
+        if ($record.PSObject.Properties.Name -contains 'Action' -and
+            $record.Action -in @('create', 'update', 'remove') -and
+            $record.PSObject.Properties.Name -contains 'OwnedBefore' -and
+            -not $record.OwnedBefore) {
+            $findings += "Reconciliation attempted an unowned $($record.Action)."
+        }
+    }
+    if ($findings.Count) {
+        return New-CheckResult -Name 'C8 Codex ownership' -Status fail `
+            -Detail ($findings -join ' | ')
+    }
+    return New-CheckResult -Name 'C8 Codex ownership' -Status pass `
+        -Detail 'Managed Codex candidates are byte-idempotent and ownership-safe.'
+}
+
+function Get-CodexWorkspaceCheck {
+    <# .SYNOPSIS Returns deterministic Codex workspace checks C0 through C8 in order. #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Config,
+        [Parameter(Mandatory)][object]$Catalog,
+        [Parameter(Mandatory)][AllowEmptyCollection()][array]$ServerResults,
+        [Parameter(Mandatory)][string]$TemplateRoot,
+        [AllowEmptyCollection()][array]$ReconciliationRecords = @()
+    )
+
+    return @(Get-CodexInstructionCheck -Config $Config -TemplateRoot $TemplateRoot
+        Get-CodexSkillSetCheck -Config $Config
+        Get-CodexSkillIdentityCheck -Config $Config
+        Get-CodexSkillMcpCheck -Config $Config -Catalog $Catalog
+        Get-CodexResidueCheck -Config $Config
+        Get-CodexAgentIdentityCheck -Config $Config
+        Get-CodexAgentGrantCheck -Config $Config -Catalog $Catalog
+        Get-CodexSecretIsolationCheck -Config $Config -ServerResults $ServerResults
+        Get-CodexOwnershipCheck -Config $Config -Catalog $Catalog -ServerResults $ServerResults `
+            -TemplateRoot $TemplateRoot -ReconciliationRecords $ReconciliationRecords)
+}
+
+function Write-CodexVerificationReport {
+    <# .SYNOPSIS Writes the standalone deterministic Codex verification report. #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Config,
+        [Parameter(Mandatory)][AllowEmptyCollection()][array]$Checks,
+        [Parameter(Mandatory)][AllowEmptyCollection()][array]$Observations
+    )
+
+    $version = if ($Config.PSObject.Properties.Name -contains 'codexVersion') {
+        [string]$Config.codexVersion
+    } else { 'codex-cli 0.153.4' }
+    $report = [ordered]@{ generatedAt = (Get-Date -Format 'o'); codexVersion = $version
+        checks = @($Checks); attendedObservations = @($Observations) }
+    $path = Join-Path $Config.paths.stateRoot 'codex-verify-report.json'
+    $null = New-Item -ItemType Directory -Path $Config.paths.stateRoot -Force
+    [IO.File]::WriteAllText($path, ($report | ConvertTo-Json -Depth 12),
+        [Text.UTF8Encoding]::new($false))
+    return $path
+}
+
 Export-ModuleMember -Function Get-CodexInstructionCheck, Get-CodexSkillSetCheck, `
-    Get-CodexSkillIdentityCheck, Get-CodexSkillMcpCheck, Get-CodexResidueCheck
+    Get-CodexSkillIdentityCheck, Get-CodexSkillMcpCheck, Get-CodexResidueCheck, `
+    Read-CodexAgentToml, Get-CodexAgentIdentityCheck, Get-CodexAgentGrantCheck, `
+    Get-CodexSecretIsolationCheck, Get-CodexOwnershipCheck, Get-CodexWorkspaceCheck, `
+    Write-CodexVerificationReport

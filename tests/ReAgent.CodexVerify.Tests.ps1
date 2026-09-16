@@ -1,4 +1,5 @@
 BeforeAll {
+    Import-Module "$PSScriptRoot/../src/ReAgent.CodexWorkspace.psm1" -Force
     Import-Module "$PSScriptRoot/../src/ReAgent.CodexVerify.psm1" -Force
 
 function Write-TestUtf8File {
@@ -50,6 +51,60 @@ function Add-TestText {
 
     $current = [IO.File]::ReadAllText($Path, [Text.Encoding]::UTF8)
     Write-TestUtf8File -Path $Path -Text ($current + $Text)
+}
+
+function New-CodexAgentVerificationFixture {
+    $fixture = New-CodexVerificationFixture
+    $fixture.Config.paths | Add-Member -NotePropertyName stateRoot -NotePropertyValue $fixture.Root
+    $fixture.Config.mcpServers = @(
+        [pscustomobject]@{ name = 'pyghidra-mcp'; enabled = $true
+            transport = 'http'; auth = 'none' }
+        [pscustomobject]@{ name = 'mcp-windbg'; enabled = $true
+            transport = 'stdio'; auth = 'none' }
+        [pscustomobject]@{ name = 'x64dbg-x64'; enabled = $true; transport = 'http'; auth = 'none' }
+    )
+    $fixture.Config | Add-Member -NotePropertyName agents -NotePropertyValue @(
+        [pscustomobject]@{ name = 'static-analyst'; enabled = $true; level = 'write'
+            targetServers = @('pyghidra-mcp'); builtinTools = @('Read') }
+        [pscustomobject]@{ name = 'verifier'; enabled = $true; level = 'read'
+            targetServers = @('pyghidra-mcp', 'mcp-windbg'); builtinTools = @('Read') }
+    )
+    $fixture.Catalog.servers | Add-Member -NotePropertyName 'mcp-windbg' -NotePropertyValue (
+        [pscustomobject]@{ tools = @('list_dumps', 'write_memory')
+            classification = [pscustomobject]@{
+                classifiedTools = @('list_dumps', 'write_memory')
+                write = @('write_memory'); destructive = @()
+            } })
+    $fixture.Catalog.servers.'pyghidra-mcp' = [pscustomobject]@{
+        tools = @('read_binary', 'rename_function', 'delete_binary')
+        classification = [pscustomobject]@{
+            classifiedTools = @('read_binary', 'rename_function', 'delete_binary')
+            write = @('rename_function'); destructive = @('delete_binary')
+        }
+    }
+    $agentTemplates = Join-Path $fixture.Templates 'agents'
+    $unicode = 'caf' + [char]0x00e9
+    Write-TestUtf8File -Path (Join-Path $agentTemplates 'static-analyst.md.template') -Text (
+        "---`nname: static-analyst`ndescription: Static 'analysis'`n---`n" +
+        "Use C:\tools\agent.exe, $unicode, a quote `" and `"`"`".`nLine two." +
+        '{{SERVERS}}{{LIMITATIONS}}{{CLIENT_LIMITATIONS}}')
+    Write-TestUtf8File -Path (Join-Path $agentTemplates 'verifier.md.template') -Text (
+        "---`nname: verifier`ndescription: Verifier`n---`nVerify independently." +
+        '{{SERVERS}}{{LIMITATIONS}}{{CLIENT_LIMITATIONS}}')
+    $command = [pscustomobject]@{ Executable = 'C:\tools\windbg.exe'
+        Arguments = @('--mcp', "O'Hara"); Env = @{} }
+    $serverResults = @(
+        [pscustomobject]@{ Name = 'pyghidra-mcp'; Installed = $true; Transport = 'http'
+            Bind = '127.0.0.1'; Port = 9103; Path = '/mcp'; Auth = 'none' }
+        [pscustomobject]@{ Name = 'mcp-windbg'; Installed = $true; Transport = 'stdio'
+            Command = $command; Auth = 'none' }
+        [pscustomobject]@{ Name = 'x64dbg-x64'; Installed = $true; Transport = 'http'
+            Bind = '127.0.0.1'; Port = 9100; Path = '/mcp'; Auth = 'none' }
+    )
+    $null = Write-CodexAgentDefinition -Config $fixture.Config -Catalog $fixture.Catalog `
+        -ServerResults $serverResults -TemplateRoot $fixture.Templates
+    $fixture | Add-Member -NotePropertyName ServerResults -NotePropertyValue $serverResults
+    return $fixture
 }
 }
 
@@ -230,5 +285,153 @@ Describe 'Codex workspace verification C0-C4' {
         $check.Name | Should -Match '^C4'
         $check.Status | Should -Be $Expected
         if ($Expected -eq 'fail') { $check.Detail | Should -Match 'C4-TODOWRITE' }
+    }
+}
+
+Describe 'Codex custom-agent verification C5-C8' {
+    It 'reads generator-subset TOML with escaped strings, paths, Unicode and arrays' {
+        $fixture = New-CodexAgentVerificationFixture
+        $path = Join-Path $fixture.Root '.codex/agents/static-analyst.toml'
+
+        $parsed = Read-CodexAgentToml -Path $path
+
+        $parsed.Name | Should -BeExactly 'static-analyst'
+        $parsed.Description | Should -BeExactly "Static 'analysis'"
+        $parsed.DeveloperInstructions | Should -Match 'C:\\tools\\agent\.exe'
+        $parsed.DeveloperInstructions | Should -Match ('caf' + [char]0x00e9)
+        $parsed.DeveloperInstructions | Should -Match 'Line two'
+        $parsed.DeveloperInstructions | Should -Match '"""'
+        @($parsed.Servers | Where-Object Name -eq 'mcp-windbg')[0].Args |
+            Should -Be @('--mcp', "O'Hara")
+    }
+
+    It 'rejects malformed generator-subset TOML: <Case>' -ForEach @(
+        @{ Case = 'missing scalar'; Text = '# re-agent-managed: codex-custom-agent v1' +
+            "`nname = `"x`"" },
+        @{ Case = 'duplicate field'; Text = '# re-agent-managed: codex-custom-agent v1' +
+            "`nname = `"x`"`nname = `"y`"" },
+        @{ Case = 'unknown field'; Text = '# re-agent-managed: codex-custom-agent v1' +
+            "`nname = `"x`"`nunknown = `"y`"" },
+        @{ Case = 'malformed string'; Text = '# re-agent-managed: codex-custom-agent v1' +
+            "`nname = `"unterminated" },
+        @{ Case = 'malformed array'; Text = '# re-agent-managed: codex-custom-agent v1' +
+            "`nname = [`"x`"]" }
+    ) {
+        $path = Join-Path $TestDrive ($Case + '.toml')
+        Write-TestUtf8File -Path $path -Text $Text
+
+        { Read-CodexAgentToml -Path $path } | Should -Throw
+    }
+
+    It 'C5 rejects an agent whose parsed name disagrees with its file and config name' {
+        $fixture = New-CodexAgentVerificationFixture
+        $path = Join-Path $fixture.Root '.codex/agents/verifier.toml'
+        $text = [IO.File]::ReadAllText($path, [Text.Encoding]::UTF8).Replace(
+            'name = "verifier"', 'name = "renamed"')
+        Write-TestUtf8File -Path $path -Text $text
+
+        $check = Get-CodexAgentIdentityCheck -Config $fixture.Config
+
+        $check.Status | Should -Be 'fail'
+        $check.Detail | Should -Match 'renamed'
+    }
+
+    It 'C5 rejects a custom agent with an incomplete transport table' {
+        $fixture = New-CodexAgentVerificationFixture
+        $path = Join-Path $fixture.Root '.codex/agents/static-analyst.toml'
+        $text = [IO.File]::ReadAllText($path, [Text.Encoding]::UTF8) `
+            -replace '(?m)^url = .+\r?\n', ''
+        Write-TestUtf8File -Path $path -Text $text
+
+        (Get-CodexAgentIdentityCheck -Config $fixture.Config).Status | Should -Be 'fail'
+    }
+
+    It 'C6 rejects unintended enabled servers and verifier write or destructive grants' -ForEach @(
+        @{ Case = 'unintended server'; Name = 'static-analyst'; Find = 'x64dbg-x64'
+            Tools = $null },
+        @{ Case = 'write tool'; Name = 'verifier'; Find = 'pyghidra-mcp'
+            Tools = '["read_binary","rename_function"]' },
+        @{ Case = 'destructive tool'; Name = 'verifier'; Find = 'pyghidra-mcp'
+            Tools = '["read_binary","delete_binary"]' }
+    ) {
+        $fixture = New-CodexAgentVerificationFixture
+        $path = Join-Path $fixture.Root ('.codex/agents/' + $Name + '.toml')
+        $text = [IO.File]::ReadAllText($path, [Text.Encoding]::UTF8)
+        if ($null -eq $Tools) {
+            $text = [regex]::Replace($text, '(?ms)(\[mcp_servers\."' +
+                [regex]::Escape($Find) + '"\]\r?\n)enabled = false', '$1enabled = true')
+        } else {
+            $text = [regex]::Replace($text, '(?ms)(\[mcp_servers\."' +
+                [regex]::Escape($Find) + '"\][\s\S]*?enabled_tools = )\[[^\]]*\]', '$1' + $Tools)
+        }
+        Write-TestUtf8File -Path $path -Text $text
+
+        $check = Get-CodexAgentGrantCheck -Config $fixture.Config -Catalog $fixture.Catalog
+
+        $check.Status | Should -Be 'fail'
+        $check.Detail | Should -Match 'grant|enabled'
+    }
+
+    It 'C7 rejects literal secret leakage, sensitive environment keys and transport drift' `
+        -ForEach @(
+        @{ Case = 'Bearer text'; Edit = 'developer_instructions = "Bearer leaked"' },
+        @{ Case = 'configured token'; Edit = '# fixture-token' },
+        @{ Case = 'sensitive environment key'; Edit = '[mcp_servers."mcp-windbg".env]' +
+            "`n`"API_TOKEN`" = `"value`"" },
+        @{ Case = 'transport drift'; Edit = 'url = "http://127.0.0.1:1/mcp"' }
+    ) {
+        $fixture = New-CodexAgentVerificationFixture
+        $fixture.Config | Add-Member -NotePropertyName token -NotePropertyValue 'fixture-token'
+        $path = Join-Path $fixture.Root '.codex/agents/verifier.toml'
+        Add-TestText -Path $path -Text ("`n" + $Edit + "`n")
+
+        $check = Get-CodexSecretIsolationCheck -Config $fixture.Config `
+            -ServerResults $fixture.ServerResults
+
+        $check.Status | Should -Be 'fail'
+        $check.Detail | Should -Not -Match 'fixture-token|leaked'
+    }
+
+    It 'C8 rejects changed marked bytes and unowned reconciliation actions' {
+        $fixture = New-CodexAgentVerificationFixture
+        Add-TestText -Path (Join-Path $fixture.Root '.codex/agents/verifier.toml') `
+            -Text "`n# drift`n"
+
+        $check = Get-CodexOwnershipCheck -Config $fixture.Config -Catalog $fixture.Catalog `
+            -ServerResults $fixture.ServerResults -TemplateRoot $fixture.Templates `
+            -ReconciliationRecords @(
+                [pscustomobject]@{ Action = 'update'; Path = 'operator-file'
+                    OwnedBefore = $false })
+
+        $check.Status | Should -Be 'fail'
+        $check.Detail | Should -Match 'byte mismatch|unowned'
+    }
+
+    It 'C8 ignores an unmarked sibling instead of treating it as a managed artifact' {
+        $fixture = New-CodexAgentVerificationFixture
+        Write-TestUtf8File -Path (Join-Path $fixture.Root '.codex/agents/operator.toml') `
+            -Text 'operator owned'
+
+        (Get-CodexOwnershipCheck -Config $fixture.Config -Catalog $fixture.Catalog `
+            -ServerResults $fixture.ServerResults -TemplateRoot $fixture.Templates).Status |
+            Should -Be 'pass'
+    }
+
+    It 'composes ordered C0-C8 checks and serializes the standalone Codex report' {
+        $fixture = New-CodexAgentVerificationFixture
+        $checks = @(Get-CodexWorkspaceCheck -Config $fixture.Config -Catalog $fixture.Catalog `
+            -ServerResults $fixture.ServerResults -TemplateRoot $fixture.Templates)
+        $path = Write-CodexVerificationReport -Config $fixture.Config -Checks $checks `
+            -Observations @()
+        $report = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+
+        $checks.Status | Should -Be @('pass', 'pass', 'pass', 'pass', 'pass', 'pass',
+            'pass', 'pass', 'pass')
+        $checks.Name | Should -Be @('C0 Codex instructions', 'C1 Codex skill set',
+            'C2 Codex skill identity', 'C3 Codex MCP references', 'C4 Codex residue',
+            'C5 Codex agent identity', 'C6 Codex agent grant', 'C7 Codex secret isolation',
+            'C8 Codex ownership')
+        $report.codexVersion | Should -BeExactly 'codex-cli 0.153.4'
+        @($report.attendedObservations).Count | Should -Be 0
     }
 }
