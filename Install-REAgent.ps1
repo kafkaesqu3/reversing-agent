@@ -149,7 +149,7 @@ $phaseTable = @(
                     elseif ($_.Status -eq 'updated') { 'update' }
                     else { 'none' }
                     [pscustomobject]@{ Action = $action; Path = $_.Path
-                        OwnedBefore = $true; Changed = [bool]$_.Changed }
+                        OwnedBefore = ($action -ne 'create'); Changed = [bool]$_.Changed }
                 }
         }
     }
@@ -160,6 +160,9 @@ $phaseTable = @(
                     -CodexSkillRoot (Join-Path $c.Config.paths.agentRoot '.agents\skills') `
                     -WhatIf:$WhatIfPreference)
             $c.CodexSkillResults = @($c.SkillResults)
+            $c.CodexReconciliationRecords += @($c.CodexSkillResults | ForEach-Object {
+                    @($_.CodexSkillRecords) + @($_.CodexReconciliationRecords)
+                })
         }
     }
     @{ Id   = 6; Name = 'Verify'

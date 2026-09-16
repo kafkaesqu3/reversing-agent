@@ -469,6 +469,17 @@ Describe 'Codex custom-agent verification C5-C8' {
             Should -Be 'pass'
     }
 
+    It 'C8 permits a recorded creation while still rejecting unowned updates' {
+        $fixture = New-CodexAgentVerificationFixture
+        $check = Get-CodexOwnershipCheck -Config $fixture.Config -Catalog $fixture.Catalog `
+            -ServerResults $fixture.ServerResults -TemplateRoot $fixture.Templates `
+            -ReconciliationRecords @(
+                [pscustomobject]@{ Action = 'create'; Path = 'new-skill'
+                    OwnedBefore = $false; Changed = $true })
+
+        $check.Status | Should -Be 'pass'
+    }
+
     It 'composes ordered C0-C8 checks and serializes the standalone Codex report' {
         $fixture = New-CodexAgentVerificationFixture
         $checks = @(Get-CodexWorkspaceCheck -Config $fixture.Config -Catalog $fixture.Catalog `

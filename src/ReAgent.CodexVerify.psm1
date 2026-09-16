@@ -727,7 +727,7 @@ function Get-CodexOwnershipCheck {
     }
     foreach ($record in $ReconciliationRecords) {
         if ($record.PSObject.Properties.Name -contains 'Action' -and
-            $record.Action -in @('create', 'update', 'remove') -and
+            $record.Action -in @('update', 'remove') -and
             $record.PSObject.Properties.Name -contains 'OwnedBefore' -and
             -not $record.OwnedBefore) {
             $findings += "Reconciliation attempted an unowned $($record.Action)."

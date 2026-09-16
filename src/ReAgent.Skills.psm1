@@ -91,6 +91,7 @@ function New-SkillResult {
         SkillNames = @($SkillNames)
         CodexSkillNames = @()
         CodexSkillRecords = @()
+        CodexReconciliationRecords = @()
         PreserveSkillNames = @()
         SkillEntries = @(Get-SkillEntry -Pack $Pack)
         Repo       = $Pack.source.repo
@@ -753,12 +754,13 @@ function Remove-OrphanedSkill {
         [Parameter(Mandatory)][string]$SkillRoot,
         [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Wanted,
         [ValidateSet('Claude', 'Codex')][string]$Client = 'Claude',
-        [hashtable]$ExpectedMarkers = @{}
+        [hashtable]$ExpectedMarkers = @{},
+        [switch]$ReturnRecords
     )
 
-    if (-not (Test-Path -LiteralPath $SkillRoot)) { return 0 }
+    if (-not (Test-Path -LiteralPath $SkillRoot)) { return @() }
 
-    $removed = 0
+    $removed = @()
     foreach ($d in (Get-ChildItem -LiteralPath $SkillRoot -Directory)) {
         if ($d.Name -match '^\.re-agent-(stage|previous)-.+-[a-f0-9]{32}$') { continue }
         if ($Wanted -contains $d.Name) { continue }
@@ -775,10 +777,12 @@ function Remove-OrphanedSkill {
             Assert-SkillCleanupTree -Directory $safe -SkillRoot $SkillRoot
             Remove-Item -LiteralPath $safe -Recurse -Force
             Write-ReAgentLog -Level INFO -Message "Removed orphaned skill '$($d.Name)'."
-            $removed++
+            $removed += [pscustomobject]@{ Action = 'remove'; Path = $safe
+                OwnedBefore = $true; Changed = $true }
         }
     }
-    return $removed
+    if ($ReturnRecords) { return $removed }
+    return @($removed).Count
 }
 
 function Remove-PackSkill {
@@ -1354,9 +1358,11 @@ function Install-AllSkill {
         -ExpectedMarkers (Get-SkillOwnershipMap -Packs @($Config.skills))
     $codexWanted = @($Config.skills | Where-Object enabled | ForEach-Object { $_.skills } |
         Where-Object enabled | ForEach-Object { $_.name })
-    $null = Remove-OrphanedSkill -SkillRoot $CodexSkillRoot -Wanted $codexWanted `
+    $codexOrphanRecords = @(Remove-OrphanedSkill -SkillRoot $CodexSkillRoot -Wanted $codexWanted `
         -Confirm:$false -WhatIf:$WhatIfPreference -Client Codex `
-        -ExpectedMarkers (Get-SkillOwnershipMap -Packs @($Config.skills) -Client Codex)
+        -ExpectedMarkers (Get-SkillOwnershipMap -Packs @($Config.skills) -Client Codex) `
+        -ReturnRecords)
+    if ($results.Count -gt 0) { $results[0].CodexReconciliationRecords = $codexOrphanRecords }
 
     foreach ($r in $results) {
         $level = if ($r.Status -eq 'failed') { 'ERROR' }

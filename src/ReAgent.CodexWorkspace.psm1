@@ -855,11 +855,14 @@ function Install-CodexSkillDirectory {
     )
 
     $path = Assert-CodexSkillDestination -Candidate $Candidate -SkillRoot $SkillRoot
+    $ownedBefore = Test-Path -LiteralPath $path
     Restore-CodexSkillDirectory -Candidate $Candidate -SkillRoot $SkillRoot `
         -WhatIf:$WhatIfPreference -Confirm:$false
     $hash = Get-CodexSkillDigest -Files $Candidate.Files
     $result = [pscustomobject]@{ Name = $Candidate.Name; Path = $path
-        Status = 'what-if'; Sha256 = $hash; Changed = $true }
+        Status = 'what-if'; Sha256 = $hash; Changed = $true
+        Action = $(if ($ownedBefore) { 'update' } else { 'create' })
+        OwnedBefore = $ownedBefore }
     if (-not $PSCmdlet.ShouldProcess($path, 'Install complete Codex skill tree')) { return $result }
     $id = [guid]::NewGuid().ToString('N')
     $stage = Join-Path $SkillRoot ".re-agent-stage-$($Candidate.Name)-$id"
@@ -883,6 +886,7 @@ function Install-CodexSkillDirectory {
             Remove-ObsoleteCodexSkillArtifact -Candidate $Candidate -SkillRoot $SkillRoot `
                 -Confirm:$false
             $result.Status = 'unchanged'; $result.Changed = $false
+            $result.Action = 'none'
             return $result
         }
         Publish-CodexSkillStage -Stage $stage -Destination $path -Previous $previous `
