@@ -59,7 +59,8 @@ if (-not $CodexHome) {
 $CodexHome = [IO.Path]::GetFullPath($CodexHome)
 
 $moduleNames = @('Common', 'Config', 'Discovery', 'Prereqs', 'Symbols',
-    'Tokens', 'Json', 'Servers', 'Generate', 'Skills', 'Verify', 'Manifest', 'Codex')
+    'Tokens', 'Json', 'Servers', 'Generate', 'Skills', 'Verify', 'Manifest',
+    'CodexAdapter', 'CodexWorkspace', 'CodexVerify', 'Codex')
 foreach ($m in $moduleNames) {
     $modulePath = "$PSScriptRoot\src\ReAgent.$m.psm1"
     if (-not (Test-Path -LiteralPath $modulePath)) {
@@ -102,6 +103,9 @@ $context = @{
     ServerResults = @()
     SkillResults  = @()
     AgentResults  = @()
+    CodexWorkspaceConfiguration = $null
+    CodexSkillResults = @()
+    CodexReconciliationRecords = @()
     VerifyResults = @()
     CodexHome     = $CodexHome
     CodexPath     = $codexPath
@@ -135,12 +139,28 @@ $phaseTable = @(
             Write-CodexConfiguration -CodexPath $c.CodexPath -CodexHome $c.CodexHome `
                 -ServerResults $c.ServerResults -ManagedNames @($c.Config.mcpServers.name) `
                 -TokenRoot (Join-Path $c.Config.paths.toolRoot 'mcp\tokens')
+            $c.CodexWorkspaceConfiguration = Write-CodexWorkspaceConfiguration `
+                -Config $c.Config -Catalog (Get-ToolCatalog) -ServerResults $c.ServerResults `
+                -TemplateRoot (Join-Path $PSScriptRoot 'templates') -WhatIf:$WhatIfPreference
+            $c.CodexReconciliationRecords = @($c.CodexWorkspaceConfiguration.Instruction) +
+                @($c.CodexWorkspaceConfiguration.Agents) | ForEach-Object {
+                    $action = if ($_.Enabled -eq $false -and $_.Changed) { 'remove' }
+                    elseif ($_.Status -eq 'created') { 'create' }
+                    elseif ($_.Status -eq 'updated') { 'update' }
+                    else { 'none' }
+                    [pscustomobject]@{ Action = $action; Path = $_.Path
+                        OwnedBefore = $true; Changed = [bool]$_.Changed }
+                }
         }
     }
     @{ Id   = 5; Name = 'Skills'
         Test = { $false }
-        Fn   = { param($c) $c.SkillResults = @(Install-AllSkill -Config $c.Config `
-                    -RepoRoot $PSScriptRoot) }
+        Fn   = { param($c)
+            $c.SkillResults = @(Install-AllSkill -Config $c.Config -RepoRoot $PSScriptRoot `
+                    -CodexSkillRoot (Join-Path $c.Config.paths.agentRoot '.agents\skills') `
+                    -WhatIf:$WhatIfPreference)
+            $c.CodexSkillResults = @($c.SkillResults)
+        }
     }
     @{ Id   = 6; Name = 'Verify'
         Test = { $false }
@@ -154,12 +174,19 @@ $phaseTable = @(
             if (-not $c.SkillResults -or $c.SkillResults.Count -eq 0) {
                 $c.SkillResults = @(Get-RecordedSkillResult -Config $c.Config)
             }
+            if (-not $c.CodexSkillResults -or $c.CodexSkillResults.Count -eq 0) {
+                $c.CodexSkillResults = @($c.SkillResults)
+            }
             if (-not $c.AgentResults -or $c.AgentResults.Count -eq 0) {
                 $c.AgentResults = @(Get-RecordedAgentResult -Config $c.Config)
             }
             $codexChecks = @(Get-CodexRegistrationCheck -Config $c.Config `
                     -ServerResults $c.ServerResults -CodexPath $c.CodexPath `
                     -CodexHome $c.CodexHome)
+            $codexChecks += @(Get-CodexWorkspaceCheck -Config $c.Config `
+                    -Catalog (Get-ToolCatalog) -ServerResults $c.ServerResults `
+                    -TemplateRoot (Join-Path $PSScriptRoot 'templates') `
+                    -ReconciliationRecords $c.CodexReconciliationRecords)
             $c.VerifyResults = Invoke-Verification -Config $c.Config `
                 -ServerResults $c.ServerResults -SkillResults $c.SkillResults `
                 -AgentResults $c.AgentResults `

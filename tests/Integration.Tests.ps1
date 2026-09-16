@@ -2,7 +2,7 @@ BeforeAll {
     $Script:Root = Join-Path $PSScriptRoot '..'
     foreach ($m in @('Common', 'Config', 'Discovery', 'Prereqs', 'Symbols',
             'Tokens', 'Json', 'Servers', 'Generate', 'Skills', 'Verify', 'Manifest', 'Agents',
-            'Codex')) {
+            'CodexAdapter', 'CodexWorkspace', 'CodexVerify', 'Codex')) {
         Import-Module (Join-Path $Script:Root "src\ReAgent.$m.psm1") -Force
     }
 }
@@ -32,6 +32,16 @@ Describe 'the entry point script' {
         } else {
             throw 'Could not find the module list in the entry point.'
         }
+    }
+
+    It 'imports the Codex workspace modules in dependency order' {
+        $text = Get-Content (Join-Path $Script:Root 'Install-REAgent.ps1') -Raw
+        $modules = [regex]::Match($text, '(?s)\$moduleNames = @\((?<names>.*?)\)').Groups['names'].Value
+        foreach ($name in @('CodexAdapter', 'CodexWorkspace', 'CodexVerify')) {
+            $modules | Should -Match ("'" + $name + "'")
+        }
+        $modules.IndexOf("'CodexAdapter'") | Should -BeLessThan $modules.IndexOf("'CodexWorkspace'")
+        $modules.IndexOf("'CodexWorkspace'") | Should -BeLessThan $modules.IndexOf("'CodexVerify'")
     }
 
     It 'binds every argument it passes to a phase function' {
@@ -68,12 +78,25 @@ Describe 'the entry point script' {
         foreach ($fn in @('Get-HostInventory', 'Assert-Preflight', 'Test-PrereqSatisfied',
                 'Install-Prereq', 'Test-SymbolsReady', 'Install-Symbols',
                 'Install-AllMcpServer', 'Write-AgentConfiguration', 'Write-CodexConfiguration',
-                'Install-AllSkill', 'Get-CodexRegistrationCheck', 'Invoke-Verification',
+                'Write-CodexWorkspaceConfiguration', 'Install-AllSkill',
+                'Get-CodexRegistrationCheck', 'Get-CodexWorkspaceCheck', 'Invoke-Verification',
                 'Assert-VerificationPassed',
                 'Write-Manifest')) {
             $text | Should -BeLike "*$fn*"
             Get-Command $fn -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
         }
+    }
+
+    It 'wires Codex workspace generation, skills, and verification into phases 4 through 6' {
+        $text = Get-Content (Join-Path $Script:Root 'Install-REAgent.ps1') -Raw
+        $text | Should -Match 'CodexWorkspaceConfiguration\s*='
+        $text | Should -Match 'Write-CodexWorkspaceConfiguration'
+        $text | Should -Match 'CodexSkillResults\s*='
+        $text | Should -Match 'CodexSkillRoot\s+\(Join-Path \$c\.Config\.paths\.agentRoot'
+        $text | Should -Match 'CodexReconciliationRecords\s*='
+        $text | Should -Match '-ReconciliationRecords \$c\.CodexReconciliationRecords'
+        $text | Should -Match 'Get-CodexWorkspaceCheck'
+        $text | Should -Match 'Assert-VerificationPassed\s+-Checks \$c\.VerifyResults'
     }
 }
 

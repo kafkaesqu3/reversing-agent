@@ -350,6 +350,19 @@ Describe 'Invoke-Verification tiers' {
         (Get-Content (Join-Path $Script:VCfg.paths.stateRoot 'verify-report.json') -Raw |
             ConvertFrom-Json).tier2Requested | Should -BeTrue
     }
+
+    It 'retains the Codex registration and workspace checks supplied by the installer' {
+        $additional = @(
+            New-CheckResult -Name 'Codex MCP registration' -Status 'pass'
+            New-CheckResult -Name 'C0 Codex instruction' -Status 'pass'
+            New-CheckResult -Name 'C8 Codex ownership' -Status 'pass'
+        )
+        $checks = Invoke-Verification -Config $Script:VCfg -ServerResults $Script:VResults `
+            -AdditionalChecks $additional
+        @($checks.Name) | Should -Contain 'Codex MCP registration'
+        @($checks.Name) | Should -Contain 'C0 Codex instruction'
+        @($checks.Name) | Should -Contain 'C8 Codex ownership'
+    }
 }
 
 Describe 'Get-ManualStep' {
