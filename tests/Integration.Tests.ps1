@@ -5,6 +5,56 @@ BeforeAll {
             'CodexAdapter', 'CodexWorkspace', 'CodexVerify', 'Codex')) {
         Import-Module (Join-Path $Script:Root "src\ReAgent.$m.psm1") -Force
     }
+
+    function Write-IntegrationUtf8File {
+        param([string]$Path, [string]$Text)
+        $null = New-Item -ItemType Directory -Path (Split-Path $Path -Parent) -Force
+        [IO.File]::WriteAllText($Path, $Text, [Text.UTF8Encoding]::new($false))
+    }
+
+    function New-CodexInstallerFixture {
+        $root = Join-Path $TestDrive ('codex-installer-' + [guid]::NewGuid().ToString('N'))
+        $repo = Join-Path $root 'repo'; $templates = Join-Path $repo 'templates'
+        Write-IntegrationUtf8File (Join-Path $templates 'instructions/common.md.template') '# Common'
+        Write-IntegrationUtf8File (Join-Path $templates 'instructions/codex.md.template') 'Use Codex.'
+        Write-IntegrationUtf8File (Join-Path $templates 'agents/verifier.md.template') (
+            "---`nname: verifier`ndescription: Verify`n---`nVerify independently.{{SERVERS}}{{LIMITATIONS}}{{CLIENT_LIMITATIONS}}")
+        Write-IntegrationUtf8File (Join-Path $repo 'vendor/skills/fixture/alpha/SKILL.md') (
+            "---`nname: alpha`ndescription: fixture`n---`nUse evidence first.`n")
+        $config = [pscustomobject]@{
+            paths = [pscustomobject]@{ agentRoot = (Join-Path $root 'agent'); stateRoot = $root }
+            mcpServers = @([pscustomobject]@{ name = 'pyghidra-mcp'; enabled = $true
+                    transport = 'http'; auth = 'none' })
+            skills = @([pscustomobject]@{ namespace = 'fixture'; enabled = $true
+                    targetServers = @('pyghidra-mcp'); codexScanExceptions = @()
+                    source = [pscustomobject]@{ repo = 'fixture'; commit = 'abc'; treeSha256 = 'abc' }
+                    review = [pscustomobject]@{ reviewedBy = 'test'; reviewedAt = '2026-01-01' }
+                    skills = @([pscustomobject]@{ name = 'alpha'; upstream = 'alpha'; enabled = $true }) })
+            agents = @([pscustomobject]@{ name = 'verifier'; enabled = $true; level = 'read'
+                    targetServers = @('pyghidra-mcp'); builtinTools = @('Read') })
+        }
+        $catalog = [pscustomobject]@{ servers = [pscustomobject]@{
+                'pyghidra-mcp' = [pscustomobject]@{ tools = @('read_binary')
+                    classification = [pscustomobject]@{ classifiedTools = @('read_binary')
+                        write = @(); destructive = @() } } } }
+        $servers = @([pscustomobject]@{ Name = 'pyghidra-mcp'; Installed = $true
+                Transport = 'http'; Bind = '127.0.0.1'; Port = 9103; Path = '/mcp'; Auth = 'none' })
+        [pscustomobject]@{ Root = $root; Repo = $repo; Templates = $templates; Config = $config
+            Catalog = $catalog; ServerResults = $servers }
+    }
+
+    function Install-IntegrationCodexSkills {
+        param($Fixture)
+        foreach ($root in @('.claude/skills', '.agents/skills')) {
+            $path = Join-Path $Fixture.Config.paths.agentRoot ($root + '/alpha')
+            if (-not (Test-Path $path)) {
+                Write-IntegrationUtf8File (Join-Path $path 'SKILL.md') (
+                    "---`nname: alpha`ndescription: fixture`n---`nUse evidence first.`n")
+                $marker = if ($root -like '.agents*') { 'codex:fixture/alpha' } else { 'fixture/alpha' }
+                Write-IntegrationUtf8File (Join-Path $path '.re-agent-managed') $marker
+            }
+        }
+    }
 }
 
 AfterAll {
@@ -97,6 +147,68 @@ Describe 'the entry point script' {
         $text | Should -Match '-ReconciliationRecords \$c\.CodexReconciliationRecords'
         $text | Should -Match 'Get-CodexWorkspaceCheck'
         $text | Should -Match 'Assert-VerificationPassed\s+-Checks \$c\.VerifyResults'
+    }
+}
+
+Describe 'Codex installer workspace integration' {
+    It 'installs equal Claude and Codex skill sets and passes C0 through C8' {
+        $f = New-CodexInstallerFixture
+        $workspace = Write-CodexWorkspaceConfiguration -Config $f.Config -Catalog $f.Catalog `
+            -ServerResults $f.ServerResults -TemplateRoot $f.Templates
+        Install-IntegrationCodexSkills -Fixture $f
+        $claude = @(Get-ChildItem (Join-Path $f.Config.paths.agentRoot '.claude\skills') -Directory |
+                ForEach-Object Name | Sort-Object)
+        $codex = @(Get-ChildItem (Join-Path $f.Config.paths.agentRoot '.agents\skills') -Directory |
+                ForEach-Object Name | Sort-Object)
+        $claude | Should -Be $codex
+        $checks = @(Get-CodexWorkspaceCheck -Config $f.Config -Catalog $f.Catalog `
+                -ServerResults $f.ServerResults -TemplateRoot $f.Templates `
+                -ReconciliationRecords (@($workspace.Instruction) + @($workspace.Agents)))
+        @($checks.Name) | Should -Be @('C0 Codex instructions', 'C1 Codex skill set',
+            'C2 Codex skill identity', 'C3 Codex MCP references', 'C4 Codex residue',
+            'C5 Codex agent identity', 'C6 Codex agent grant', 'C7 Codex secret isolation',
+            'C8 Codex ownership')
+        @($checks.Status | Where-Object { $_ -ne 'pass' }) | Should -BeNullOrEmpty
+    }
+
+    It 'preserves Codex bytes and timestamps on a second complete run' {
+        $f = New-CodexInstallerFixture
+        Write-CodexWorkspaceConfiguration -Config $f.Config -Catalog $f.Catalog `
+            -ServerResults $f.ServerResults -TemplateRoot $f.Templates | Out-Null
+        Install-IntegrationCodexSkills -Fixture $f
+        $files = @(Get-ChildItem $f.Config.paths.agentRoot -Recurse -File | Where-Object {
+                $_.FullName -match '\\(AGENTS\.md|SKILL\.md|.*\.toml)$' })
+        $before = @($files | ForEach-Object { $_.FullName + '|' + $_.LastWriteTimeUtc.Ticks + '|' +
+                [Convert]::ToBase64String([IO.File]::ReadAllBytes($_.FullName)) })
+        Write-CodexWorkspaceConfiguration -Config $f.Config -Catalog $f.Catalog `
+            -ServerResults $f.ServerResults -TemplateRoot $f.Templates | Out-Null
+        Install-IntegrationCodexSkills -Fixture $f
+        $after = @(Get-ChildItem $f.Config.paths.agentRoot -Recurse -File | Where-Object {
+                $_.FullName -match '\\(AGENTS\.md|SKILL\.md|.*\.toml)$' } | ForEach-Object {
+                $_.FullName + '|' + $_.LastWriteTimeUtc.Ticks + '|' +
+                [Convert]::ToBase64String([IO.File]::ReadAllBytes($_.FullName)) })
+        $after | Should -Be $before
+    }
+
+    It 'leaves both Codex roots absent under WhatIf' {
+        $f = New-CodexInstallerFixture
+        Write-CodexWorkspaceConfiguration -Config $f.Config -Catalog $f.Catalog `
+            -ServerResults $f.ServerResults -TemplateRoot $f.Templates -WhatIf | Out-Null
+        Test-Path (Join-Path $f.Config.paths.agentRoot 'AGENTS.md') | Should -BeFalse
+        Test-Path (Join-Path $f.Config.paths.agentRoot '.agents\skills') | Should -BeFalse
+    }
+
+    It 'fails C0 C1 and C5 when VerifyOnly finds a missing instruction skill or agent' {
+        foreach ($missing in @('AGENTS.md', '.agents\skills\alpha', '.codex\agents\verifier.toml')) {
+            $f = New-CodexInstallerFixture
+            Write-CodexWorkspaceConfiguration -Config $f.Config -Catalog $f.Catalog `
+                -ServerResults $f.ServerResults -TemplateRoot $f.Templates | Out-Null
+            Install-IntegrationCodexSkills -Fixture $f
+            Remove-Item (Join-Path $f.Config.paths.agentRoot $missing) -Recurse -Force
+            $checks = @(Get-CodexWorkspaceCheck -Config $f.Config -Catalog $f.Catalog `
+                    -ServerResults $f.ServerResults -TemplateRoot $f.Templates)
+            { Assert-VerificationPassed -Checks $checks } | Should -Throw '*failed*'
+        }
     }
 }
 
