@@ -593,3 +593,13 @@ byte-identical regeneration — but `C:\re\agent\.claude\agents\` **does not exi
 manifest at `C:\ProgramData\re-lab\manifest.json` predates the slice. The plan forbade running the
 real installer during implementation (this host is itself the target). One real
 `.\Install-REAgent.ps1` run writes the two enabled agents and records them.
+
+## Codex parity acceptance
+
+Task 9 defines the attended L0-L5 acceptance record but does not replace historical test counts.
+Task 10 must measure the full suite and analyzer before recording new values. Trust
+`C:\re\agent` and start `codex --strict-config -C C:\re\agent`; confirm the project
+`AGENTS.md`, `.agents/skills`, `.codex/agents`, the eleven `/skills` names, and the
+`static-analyst`/`verifier` picker entries. Legacy SSE remains Claude-only. See
+[CODEX.md](CODEX.md) for L0-L5 evidence and the complete-transport rule: local endpoints/commands
+may be in generated agent files, credentials never are.

@@ -117,3 +117,38 @@ HTTP headers and disabled entries. See the [official Codex MCP documentation](ht
 
 All Codex configuration writes during validation used temporary directories; the
 analyst's active Codex configuration was not changed.
+
+## Project workspace and attended acceptance
+
+Trust `C:\re\agent` when Codex asks. Trust is required for Codex to load the project
+`AGENTS.md`, `.agents/skills`, and `.codex/agents` layers. After reconciliation, start a new
+session with the exact command below:
+
+```powershell
+codex --strict-config -C C:\re\agent
+```
+
+Use `/skills` to verify exactly these eleven names:
+`windbg-crash-analysis`, `windbg-doctor`, `ghidra-iterative-re`, `re-ioc-extraction`,
+`re-unpacker`, `route-triage`, `reva-binary-triage`, `reva-deep-analysis`,
+`dotnet-debugging`, `tob-trailmark`, and `arch-architectural-analysis`. The agent picker must
+offer `static-analyst` and `verifier`; `dynamic-analyst` remains disabled and must not appear.
+
+Custom-agent MCP tables deliberately repeat complete transports. This follows the measured Codex
+runtime requirement: a table containing only `enabled` and `enabled_tools` is rejected as an
+invalid transport. Generated project agent files can therefore contain local HTTP endpoints or
+stdio commands, arguments, and safe environment entries, but never bearer values, authorization
+headers, tokens, or credentials. Legacy SSE servers remain Claude-only until a supported
+Streamable HTTP or stdio bridge exists.
+
+Record these direct observations as L0-L5 in `codex-verify-report.json`; they are attended
+evidence, separate from the deterministic C0-C8 results.
+
+| ID | Observation | Required evidence |
+|---|---|---|
+| L0 | Instruction source | Codex names `AGENTS.md` among loaded instructions. |
+| L1 | Eleven skills | `/skills` output lists exactly the eleven names above. |
+| L2 | Two custom agents | Picker shows `static-analyst` and `verifier`, and excludes `dynamic-analyst`. |
+| L3 | Verifier tool boundary | Verifier cannot see pyghidra write or destructive tools. |
+| L4 | Specialist read-only MCP call | A specialist successfully calls a catalog read tool, such as `list_project_binaries`, `decompile_function`, or `list_dumps`. |
+| L5 | Optional GUI host startup | Codex starts successfully while x32dbg remains closed. |

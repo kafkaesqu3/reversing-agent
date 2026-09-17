@@ -768,6 +768,50 @@ function Get-CodexWorkspaceCheck {
             -TemplateRoot $TemplateRoot -ReconciliationRecords $ReconciliationRecords)
 }
 
+function New-CodexAcceptanceObservation {
+    <# .SYNOPSIS Creates one attended Codex acceptance observation. #>
+    [CmdletBinding()]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
+    param(
+        [Parameter(Mandatory)][ValidateSet('L0', 'L1', 'L2', 'L3', 'L4', 'L5')][string]$Id,
+        [Parameter(Mandatory)][ValidateSet('pass', 'fail')][string]$Status,
+        [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$Evidence
+    )
+
+    return [pscustomobject][ordered]@{ Id = $Id; Status = $Status; Evidence = $Evidence
+        ObservedAt = (Get-Date -Format 'o') }
+}
+
+function Assert-CodexAcceptanceObservationSet {
+    param([Parameter(Mandatory)][AllowEmptyCollection()][array]$Observations)
+
+    if ($Observations.Count -eq 0) { return }
+    $expected = @('L0', 'L1', 'L2', 'L3', 'L4', 'L5')
+    if ($Observations.Count -ne $expected.Count) {
+        throw 'An attended acceptance record requires exactly one L0-L5 observation.'
+    }
+    $seen = @{}
+    foreach ($observation in $Observations) {
+        foreach ($field in @('Id', 'Status', 'Evidence', 'ObservedAt')) {
+            if ($observation.PSObject.Properties.Name -notcontains $field) {
+                throw "Acceptance observation is missing '$field'."
+            }
+        }
+        if ($observation.Id -notin $expected) { throw "Unknown acceptance ID '$($observation.Id)'." }
+        if ($seen.ContainsKey($observation.Id)) { throw "Duplicate acceptance ID '$($observation.Id)'." }
+        if ($observation.Status -notin @('pass', 'fail')) {
+            throw "Acceptance observation '$($observation.Id)' has an invalid status."
+        }
+        if ([string]::IsNullOrWhiteSpace([string]$observation.Evidence)) {
+            throw "Acceptance observation '$($observation.Id)' requires evidence."
+        }
+        $seen[$observation.Id] = $true
+    }
+    foreach ($id in $expected) {
+        if (-not $seen.ContainsKey($id)) { throw "Missing acceptance observation '$id'." }
+    }
+}
+
 function Write-CodexVerificationReport {
     <# .SYNOPSIS Writes the standalone deterministic Codex verification report. #>
     [CmdletBinding()]
@@ -777,6 +821,7 @@ function Write-CodexVerificationReport {
         [Parameter(Mandatory)][AllowEmptyCollection()][array]$Observations
     )
 
+    Assert-CodexAcceptanceObservationSet -Observations $Observations
     $version = if ($Config.PSObject.Properties.Name -contains 'codexVersion') {
         [string]$Config.codexVersion
     } else { 'codex-cli 0.153.4' }
@@ -793,4 +838,4 @@ Export-ModuleMember -Function Get-CodexInstructionCheck, Get-CodexSkillSetCheck,
     Get-CodexSkillIdentityCheck, Get-CodexSkillMcpCheck, Get-CodexResidueCheck, `
     Read-CodexAgentToml, Get-CodexAgentIdentityCheck, Get-CodexAgentGrantCheck, `
     Get-CodexSecretIsolationCheck, Get-CodexOwnershipCheck, Get-CodexWorkspaceCheck, `
-    Write-CodexVerificationReport
+    New-CodexAcceptanceObservation, Write-CodexVerificationReport

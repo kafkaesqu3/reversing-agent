@@ -1,6 +1,6 @@
 BeforeAll {
-    Import-Module "$PSScriptRoot/../src/ReAgent.CodexWorkspace.psm1" -Force
     Import-Module "$PSScriptRoot/../src/ReAgent.CodexVerify.psm1" -Force
+    Import-Module "$PSScriptRoot/../src/ReAgent.CodexWorkspace.psm1" -Force
 
 function Write-TestUtf8File {
     param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Text)
@@ -9,7 +9,6 @@ function Write-TestUtf8File {
     $null = New-Item -ItemType Directory -Path $parent -Force
     [IO.File]::WriteAllText($Path, $Text, [Text.UTF8Encoding]::new($false))
 }
-
 function New-CodexVerificationFixture {
     $root = Join-Path $TestDrive ('codex-verify-' + [guid]::NewGuid().ToString('N'))
     $templates = Join-Path $root 'templates'
@@ -496,5 +495,67 @@ Describe 'Codex custom-agent verification C5-C8' {
             'C8 Codex ownership')
         $report.codexVersion | Should -BeExactly 'codex-cli 0.153.4'
         @($report.attendedObservations).Count | Should -Be 0
+    }
+}
+
+Describe 'Codex attended acceptance observations' {
+    It 'creates a timestamped L0 observation with its supplied evidence' {
+        $observation = New-CodexAcceptanceObservation -Id L0 -Status pass `
+            -Evidence 'Codex reported AGENTS.md as the instruction source.'
+
+        $observation.Id | Should -BeExactly 'L0'
+        $observation.Status | Should -BeExactly 'pass'
+        $observation.Evidence | Should -BeExactly 'Codex reported AGENTS.md as the instruction source.'
+        $observation.ObservedAt | Should -Not -BeNullOrEmpty
+    }
+
+    It 'rejects an unknown observation ID, status, or empty evidence' -ForEach @(
+        @{ Id = 'L6'; Status = 'pass'; Evidence = 'unexpected ID' }
+        @{ Id = 'L0'; Status = 'not-testable'; Evidence = 'unexpected status' }
+        @{ Id = 'L0'; Status = 'pass'; Evidence = '' }
+    ) {
+        { New-CodexAcceptanceObservation -Id $Id -Status $Status -Evidence $Evidence } |
+            Should -Throw
+    }
+
+    It 'requires exactly one evidenced observation for every L0-L5 ID in an attended report' {
+        $fixture = New-CodexAgentVerificationFixture
+        $checks = @(Get-CodexWorkspaceCheck -Config $fixture.Config -Catalog $fixture.Catalog `
+            -ServerResults $fixture.ServerResults -TemplateRoot $fixture.Templates)
+        $observations = @(
+            New-CodexAcceptanceObservation -Id L0 -Status pass -Evidence 'instructions'
+            New-CodexAcceptanceObservation -Id L1 -Status pass -Evidence 'skills'
+            New-CodexAcceptanceObservation -Id L2 -Status pass -Evidence 'agents'
+            New-CodexAcceptanceObservation -Id L3 -Status pass -Evidence 'boundary'
+            New-CodexAcceptanceObservation -Id L4 -Status pass -Evidence 'read-only call'
+            New-CodexAcceptanceObservation -Id L5 -Status pass -Evidence 'x32dbg closed'
+        )
+
+        $path = Write-CodexVerificationReport -Config $fixture.Config -Checks $checks `
+            -Observations $observations
+        $report = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+
+        @($report.attendedObservations).Id | Should -Be @('L0', 'L1', 'L2', 'L3', 'L4', 'L5')
+    }
+
+    It 'rejects duplicate, incomplete, or evidence-free passing attended observations' -ForEach @(
+        @{ Case = 'duplicate'; Observations = @(
+                @{ Id = 'L0'; Status = 'pass'; Evidence = 'first' },
+                @{ Id = 'L0'; Status = 'fail'; Evidence = 'second' }) }
+        @{ Case = 'missing ID'; Observations = @(
+                @{ Id = 'L0'; Status = 'pass'; Evidence = 'instructions' }) }
+        @{ Case = 'empty passing evidence'; Observations = @(
+                @{ Id = 'L0'; Status = 'pass'; Evidence = '' },
+                @{ Id = 'L1'; Status = 'pass'; Evidence = 'skills' },
+                @{ Id = 'L2'; Status = 'pass'; Evidence = 'agents' },
+                @{ Id = 'L3'; Status = 'pass'; Evidence = 'boundary' },
+                @{ Id = 'L4'; Status = 'pass'; Evidence = 'read-only call' },
+                @{ Id = 'L5'; Status = 'pass'; Evidence = 'x32dbg closed' }) }
+    ) {
+        $fixture = New-CodexAgentVerificationFixture
+        $observations = @($Observations | ForEach-Object { [pscustomobject]$_ })
+
+        { Write-CodexVerificationReport -Config $fixture.Config -Checks @() `
+                -Observations $observations } | Should -Throw
     }
 }

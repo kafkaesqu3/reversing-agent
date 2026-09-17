@@ -49,6 +49,20 @@ Codex supports the STDIO and Streamable HTTP entries. The legacy SSE-only `pdbsq
 `ghidrasql`, and disabled `ghidramcp` entries remain available to Claude and are reported as
 skipped for Codex until they gain a supported transport or bridge.
 
+## Codex project workspace
+
+Trust the project before starting Codex so it loads the generated `AGENTS.md`,
+`.agents/skills`, and `.codex/agents` layers. Start the attended acceptance session with:
+
+```powershell
+codex --strict-config -C C:\re\agent
+```
+
+The full acceptance procedure, expected eleven `/skills` entries, two enabled specialists, and
+the legacy SSE limitation are in [docs/mvp/CODEX.md](docs/mvp/CODEX.md). Project agent files may
+contain local endpoints and commands needed for their complete MCP transports; they never contain
+credentials.
+
 RUN ONLY ON A VIRTUAL MACHINE. Requires Administrator for a full install.
 
 ## Layout

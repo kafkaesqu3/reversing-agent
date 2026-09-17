@@ -4,6 +4,13 @@
 See [CODEX.md](CODEX.md) for installation, configuration, and verification commands.
 The Claude MVP history below remains the baseline.
 
+**Codex parity acceptance is pending Task 10 measurement.** The project contract is
+`AGENTS.md`, `.agents/skills`, and `.codex/agents`; launch the attended session with
+`codex --strict-config -C C:\re\agent` after trusting the project. `/skills` must show the eleven
+reviewed names and the picker must show `static-analyst` and `verifier`. Legacy SSE remains
+Claude-only. The L0-L5 evidence checklist and complete-transport/credential boundary are in
+[CODEX.md](CODEX.md); do not update Codex suite or analyzer counts until Task 10 records them.
+
 **Goal:** one script, run on an existing FLARE VM, that leaves you with Claude Code able to drive **x64dbg, Ghidra, Binary Ninja, and WinDbg** through MCP.
 
 Nothing else. `../../BLUEPRINT.md`, `../../DEPLOYMENT_PLAN.md`, and `../../GAP_ANALYSIS.md` describe the full system; this file tracks only the first shippable slice of it and what still blocks that slice.
