@@ -1,9 +1,13 @@
 BeforeAll {
     $Script:Root = Join-Path $PSScriptRoot '..'
-    foreach ($m in @('Common', 'Config', 'Discovery', 'Prereqs', 'Symbols',
+    $moduleNames = @('Common', 'Config', 'Discovery', 'Prereqs', 'Symbols',
             'Tokens', 'Json', 'Servers', 'Generate', 'Skills', 'Verify', 'Manifest', 'Agents',
-            'CodexAdapter', 'CodexWorkspace', 'CodexVerify', 'Codex')) {
+            'CodexAdapter', 'CodexWorkspace', 'CodexVerify', 'Codex')
+    foreach ($m in $moduleNames) {
         Import-Module (Join-Path $Script:Root "src\ReAgent.$m.psm1") -Force
+    }
+    foreach ($m in $moduleNames) {
+        Import-Module (Join-Path $Script:Root "src\ReAgent.$m.psm1") -Global
     }
 
     function Write-IntegrationUtf8File {
@@ -100,6 +104,48 @@ BeforeAll {
         $output = @(Get-Content -LiteralPath $stdout -ErrorAction SilentlyContinue) +
             @(Get-Content -LiteralPath (Join-Path $Fixture.Config.paths.stateRoot 'install.log') `
                 -ErrorAction SilentlyContinue)
+        [pscustomobject]@{ ExitCode = $process.ExitCode; Output = $output }
+    }
+
+    function Initialize-StandaloneManifest {
+        param($Fixture)
+        $null = New-Item -ItemType Directory -Path $Fixture.Config.paths.stateRoot -Force
+        $server = $Fixture.Config.mcpServers | Where-Object name -eq 'pyghidra-mcp' |
+            Select-Object -First 1
+        $manifest = [ordered]@{ servers = @([ordered]@{ name = $server.name
+                    status = 'not-installed'; version = ''; reason = 'fixture has no services' }) }
+        Write-IntegrationUtf8File (Join-Path $Fixture.Config.paths.stateRoot 'codex-manifest.json') `
+            ($manifest | ConvertTo-Json -Depth 8)
+    }
+
+    function Initialize-StandaloneClaudeSkills {
+        param($Fixture)
+        foreach ($pack in @($Fixture.Config.skills | Where-Object enabled)) {
+            foreach ($skill in @($pack.skills | Where-Object enabled)) {
+                $root = Join-Path $Fixture.Config.paths.agentRoot ('.claude\skills\' + $skill.name)
+                Write-IntegrationUtf8File (Join-Path $root '.re-agent-managed') `
+                    "$($pack.namespace)/$($skill.upstream)"
+                Write-IntegrationUtf8File (Join-Path $root 'operator-sentinel.txt') 'unchanged'
+            }
+        }
+    }
+
+    function Invoke-StandaloneEntryPoint {
+        param([Parameter(Mandatory)]$Fixture, [switch]$ConfigureOnly, [switch]$VerifyOnly)
+
+        $quote = { param([string]$Value) "'" + $Value.Replace("'", "''") + "'" }
+        $command = "& $(& $quote (Join-Path $Script:Root 'install-codex.ps1')) " +
+            "-ConfigPath $(& $quote $Fixture.ConfigPath) -CodexHome $(& $quote $Fixture.CodexHome)"
+        if ($ConfigureOnly) { $command += ' -ConfigureOnly' }
+        if ($VerifyOnly) { $command += ' -VerifyOnly' }
+        $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+        $stdout = Join-Path $Fixture.Root ('standalone-' + [guid]::NewGuid().ToString('N') + '.out')
+        $stderr = $stdout + '.err'
+        $process = Start-Process powershell.exe -ArgumentList (
+            "-NoProfile -ExecutionPolicy Bypass -EncodedCommand $encoded") -Wait -PassThru `
+            -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+        $output = @(Get-Content $stdout -ErrorAction SilentlyContinue) +
+            @(Get-Content $stderr -ErrorAction SilentlyContinue)
         [pscustomobject]@{ ExitCode = $process.ExitCode; Output = $output }
     }
 }
@@ -262,6 +308,65 @@ Describe 'Codex installer workspace integration' {
             $run.ExitCode | Should -Not -Be 0
             ($run.Output -join "`n") | Should -Match 'C[015] Codex'
         }
+    }
+}
+
+Describe 'Standalone Codex installer workspace parity' {
+    It 'ConfigureOnly reconciles registration and every project artifact without Claude or services' {
+        $f = New-EntryPointFixture
+        Initialize-StandaloneManifest -Fixture $f
+        Initialize-StandaloneClaudeSkills -Fixture $f
+        Write-IntegrationUtf8File (Join-Path $f.CodexHome 'config.toml') "unrelated = 'keep'`n"
+        Write-IntegrationUtf8File (Join-Path $f.Config.paths.agentRoot '.agents\skills\operator\note.txt') 'keep'
+        Write-IntegrationUtf8File (Join-Path $f.Config.paths.agentRoot '.codex\agents\operator.toml') 'keep'
+
+        $run = Invoke-StandaloneEntryPoint -Fixture $f -ConfigureOnly
+        $run.ExitCode | Should -Be 0 -Because ($run.Output -join "`n")
+        Test-Path (Join-Path $f.Config.paths.agentRoot 'AGENTS.md') | Should -BeTrue
+        Test-Path (Join-Path $f.Config.paths.agentRoot '.agents\skills') | Should -BeTrue
+        Test-Path (Join-Path $f.Config.paths.agentRoot '.codex\agents\verifier.toml') | Should -BeTrue
+        @(Get-ChildItem (Join-Path $f.Config.paths.agentRoot '.claude') -Recurse -File |
+                Where-Object Name -eq 'SKILL.md').Count | Should -Be 0
+        @(Get-ChildItem (Join-Path $f.Config.paths.agentRoot '.claude') -Recurse -File |
+                Where-Object Name -eq 'operator-sentinel.txt').Count | Should -BeGreaterThan 0
+        Test-Path $f.Config.paths.toolRoot | Should -BeFalse
+        (Get-Content (Join-Path $f.CodexHome 'config.toml') -Raw) | Should -Match 'unrelated'
+        Test-Path (Join-Path $f.Config.paths.agentRoot '.agents\skills\operator\note.txt') |
+            Should -BeTrue
+        Test-Path (Join-Path $f.Config.paths.agentRoot '.codex\agents\operator.toml') |
+            Should -BeTrue
+        $manifest = Get-Content (Join-Path $f.Config.paths.stateRoot 'codex-manifest.json') -Raw |
+            ConvertFrom-Json
+        $manifest.codexWorkspace.instructions.status | Should -Be 'installed'
+    }
+
+    It 'VerifyOnly invokes no writer and fails when one managed artifact is missing' {
+        $f = New-EntryPointFixture
+        Initialize-StandaloneManifest -Fixture $f
+        Initialize-StandaloneClaudeSkills -Fixture $f
+        (Invoke-StandaloneEntryPoint -Fixture $f -ConfigureOnly).ExitCode | Should -Be 0
+        Remove-Item (Join-Path $f.Config.paths.agentRoot 'AGENTS.md') -Force
+        $before = (Get-Content (Join-Path $f.CodexHome 'config.toml') -Raw)
+        $run = Invoke-StandaloneEntryPoint -Fixture $f -VerifyOnly
+        $run.ExitCode | Should -Not -Be 0
+        ($run.Output -join "`n") | Should -Match 'C0 Codex instructions'
+        Test-Path (Join-Path $f.Config.paths.agentRoot 'AGENTS.md') | Should -BeFalse
+        (Get-Content (Join-Path $f.CodexHome 'config.toml') -Raw) | Should -BeExactly $before
+    }
+
+    It 'VerifyOnly fails a verifier write grant without repairing it' {
+        $f = New-EntryPointFixture
+        Initialize-StandaloneManifest -Fixture $f
+        Initialize-StandaloneClaudeSkills -Fixture $f
+        (Invoke-StandaloneEntryPoint -Fixture $f -ConfigureOnly).ExitCode | Should -Be 0
+        $path = Join-Path $f.Config.paths.agentRoot '.codex\agents\verifier.toml'
+        $text = (Get-Content $path -Raw).Replace('sandbox_mode = "read-only"',
+            'sandbox_mode = "workspace-write"')
+        Write-IntegrationUtf8File $path $text
+        $run = Invoke-StandaloneEntryPoint -Fixture $f -VerifyOnly
+        $run.ExitCode | Should -Not -Be 0
+        ($run.Output -join "`n") | Should -Match 'C6 Codex agent grant'
+        (Get-Content $path -Raw) | Should -Match 'sandbox_mode = "workspace-write"'
     }
 }
 

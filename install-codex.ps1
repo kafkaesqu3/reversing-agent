@@ -40,9 +40,14 @@ if (-not $CodexHome) {
     $CodexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USERPROFILE '.codex' }
 }
 $CodexHome = [IO.Path]::GetFullPath($CodexHome)
-foreach ($name in @('Common', 'Config', 'Discovery', 'Prereqs', 'Symbols',
-        'Tokens', 'Json', 'Servers', 'Generate', 'Skills', 'Verify', 'Manifest', 'Codex')) {
+$moduleNames = @('Common', 'Config', 'Discovery', 'Prereqs', 'Symbols',
+        'Tokens', 'Json', 'Servers', 'Generate', 'Skills', 'Verify', 'Manifest', 'Agents',
+        'CodexAdapter', 'CodexWorkspace', 'CodexVerify', 'Codex')
+foreach ($name in $moduleNames) {
     Import-Module (Join-Path $PSScriptRoot "src\ReAgent.$name.psm1") -Force
+}
+foreach ($name in $moduleNames) {
+    Import-Module (Join-Path $PSScriptRoot "src\ReAgent.$name.psm1") -Global
 }
 $config = Get-ReAgentConfig -Path $ConfigPath
 if (-not $PSCmdlet.ShouldProcess($CodexHome, 'Install/configure or verify RE Lab MCP services for Codex')) { return }
@@ -50,6 +55,9 @@ $codexCommand = Get-Command codex -ErrorAction SilentlyContinue
 $codexPath = if ($codexCommand) { $codexCommand.Source } else { '' }
 $serverResults = @()
 $checks = @()
+$workspaceConfiguration = $null
+$codexSkillResults = @()
+$reconciliationRecords = @()
 $exitCode = 0
 try {
     $inventory = Get-HostInventory
@@ -84,9 +92,73 @@ try {
         Write-CodexConfiguration -CodexPath $codexPath -CodexHome $CodexHome `
             -ServerResults $serverResults -ManagedNames @($config.mcpServers.name) `
             -TokenRoot (Join-Path $config.paths.toolRoot 'mcp\tokens')
+
+        $catalog = Get-ToolCatalog
+        $workspaceConfiguration = Write-CodexWorkspaceConfiguration -Config $config `
+            -Catalog $catalog -ServerResults $serverResults `
+            -TemplateRoot (Join-Path $PSScriptRoot 'templates') -WhatIf:$WhatIfPreference
+        $reconciliationRecords = @($workspaceConfiguration.Instruction) +
+            @($workspaceConfiguration.Agents) | ForEach-Object {
+                $action = if ($_.PSObject.Properties.Name -contains 'Status' -and
+                    $_.Status -eq 'created') { 'create' }
+                elseif ($_.PSObject.Properties.Name -contains 'Status' -and
+                    $_.Status -eq 'updated') { 'update' }
+                else { 'none' }
+                [pscustomobject]@{ Action = $action; Path = $_.Path
+                    OwnedBefore = ($action -ne 'create'); Changed = [bool]$_.Changed }
+            }
+
+        $skillRoot = Join-Path $config.paths.agentRoot '.agents\skills'
+        $wanted = @()
+        $markers = @{}
+        foreach ($pack in @($config.skills)) {
+            foreach ($skill in @($pack.skills)) {
+                $markers[$skill.name] = "codex:$($pack.namespace)/$($skill.upstream)"
+            }
+            if (-not $pack.enabled) { continue }
+            if (-not (Test-SkillPackReviewed -Pack $pack)) {
+                throw "Skill pack '$($pack.namespace)' has no current human review."
+            }
+            $packRoot = Join-Path $PSScriptRoot "vendor\skills\$($pack.namespace)"
+            $gate = Test-SkillPackGate -Pack $pack -PackRoot $packRoot -Catalog $catalog
+            if ($gate.Findings.Count) { throw $gate.Summary }
+            $records = @()
+            foreach ($skill in @($pack.skills | Where-Object enabled)) {
+                $wanted += $skill.name
+                $candidate = New-CodexSkillCandidate -Source (Join-Path $packRoot $skill.name) `
+                    -Destination (Join-Path $skillRoot $skill.name) -Pack $pack -Skill $skill `
+                    -Catalog $catalog -Config $config
+                $records += Install-CodexSkillDirectory -Candidate $candidate `
+                    -SkillRoot $skillRoot -Confirm:$false -WhatIf:$WhatIfPreference
+            }
+            $codexSkillResults += [pscustomobject]@{ Namespace = $pack.namespace
+                CodexSkillRecords = $records }
+            $reconciliationRecords += $records
+        }
+        $orphanRecords = @(Remove-OrphanedSkill -SkillRoot $skillRoot -Wanted $wanted `
+                -Client Codex -ExpectedMarkers $markers -ReturnRecords -Confirm:$false `
+                -WhatIf:$WhatIfPreference)
+        $reconciliationRecords += $orphanRecords
     }
-    $checks = @(Invoke-CodexVerification -Config $config -ServerResults $serverResults `
-        -CodexPath $codexPath -CodexHome $CodexHome -Attended:$Attended)
+
+    if ($VerifyOnly) {
+        $recordedWorkspace = Get-RecordedCodexWorkspaceResult -Config $config `
+            -ManifestName $manifestName
+        if ($recordedWorkspace) {
+            $reconciliationRecords = @($recordedWorkspace.Skills) +
+                @($recordedWorkspace.Agents)
+        }
+    }
+    $checks = @(Get-CodexRegistrationCheck -Config $config -ServerResults $serverResults `
+            -CodexPath $codexPath -CodexHome $CodexHome)
+    $checks += @(Get-CodexWorkspaceCheck -Config $config -Catalog (Get-ToolCatalog) `
+            -ServerResults $serverResults -TemplateRoot (Join-Path $PSScriptRoot 'templates') `
+            -ReconciliationRecords $reconciliationRecords)
+    $checks += @(Get-ServerCheck -Config $config -ServerResults $serverResults `
+            -Attended:$Attended)
+    foreach ($check in $checks) {
+        Write-ReAgentLog -Level INFO -Message "[$($check.Status)] $($check.Name): $($check.Detail)"
+    }
     if (@($checks | Where-Object { $_.Status -eq 'fail' }).Count) { $exitCode = 1 }
 } catch {
     $exitCode = 1
@@ -94,6 +166,9 @@ try {
 } finally {
     # A separate manifest preserves the existing Claude deployment record.
     # Server result objects contain launch metadata, never bearer tokens.
+    $manifestContext = @{ Config = $config
+        CodexWorkspaceConfiguration = $workspaceConfiguration
+        CodexSkillResults = $codexSkillResults }
     $manifest = [ordered]@{
         generatedAt = (Get-Date).ToString('o'); agent = 'Codex'; codexHome = $CodexHome
         configVersion = $config.version; inventory = $inventory; servers = @($serverResults)
@@ -105,6 +180,7 @@ try {
             'Open x64dbg and x32dbg with the target loaded for attended debugging.',
             'In Binary Ninja, run Plugins > MCP > Start Server each session.',
             'GhidraMCP is disabled; the MVP release is incompatible with Ghidra 12.1.2. Use pyghidra-mcp.')
+        codexWorkspace = ConvertTo-CodexWorkspaceManifestRecord -Context $manifestContext
     }
     if (-not $VerifyOnly -and $serverResults.Count -gt 0) {
         $null = New-Item -ItemType Directory -Path $config.paths.stateRoot -Force
@@ -113,5 +189,7 @@ try {
     }
 }
 Write-ReAgentLog -Level INFO -Message "Codex setup exit code: $exitCode. Reports: $($config.paths.stateRoot)\codex-*.json"
-Write-ReAgentLog -Level INFO -Message 'Restart Codex. Open x64dbg/x32dbg and run Binary Ninja > Plugins > MCP > Start Server for attended tools.'
+Write-ReAgentLog -Level INFO -Message (
+    "Restart Codex. Attended checks requested: $([bool]$Attended). Open x64dbg/x32dbg " +
+    'and run Binary Ninja > Plugins > MCP > Start Server for attended tools.')
 exit $exitCode
