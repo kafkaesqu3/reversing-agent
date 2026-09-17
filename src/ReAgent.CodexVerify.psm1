@@ -535,7 +535,8 @@ function Get-CodexAgentGrantCheck {
             foreach ($finding in @(Test-AgentClassificationCheck -Catalog $Catalog -Server $name)) {
                 $findings += "Agent '$($agent.name)' target '$name': $($finding.Message)"
             }
-            $server = @($parsed.Servers | Where-Object { $_.Name -ceq $name })[0]
+            $server = $parsed.Servers | Where-Object { $_.Name -ceq $name } |
+                Select-Object -First 1
             $wanted = Get-CodexExpectedAgentTool -Agent $agent -Catalog $Catalog -Server $name
             if (-not $server -or -not (Test-CodexExactNameSetEqual -Left $wanted `
                         -Right @($server.EnabledTools))) {
@@ -653,8 +654,11 @@ function Get-CodexSecretIsolationCheck {
                 }
             }
         }
-        $actual = @($parsed.Servers | ForEach-Object Name)
-        if (-not (Test-CodexNameSetEqual -Left @($expected.Name) -Right $actual)) {
+        $actual = @($parsed.Servers | Where-Object {
+                $_ -and $_.PSObject.Properties.Name -contains 'Name'
+            } | ForEach-Object { $_.Name })
+        $expectedNames = @($expected | ForEach-Object { $_.Name })
+        if (-not (Test-CodexNameSetEqual -Left $expectedNames -Right $actual)) {
             $findings += "$($file.Name) has transport table drift."
         }
         foreach ($server in $parsed.Servers) {

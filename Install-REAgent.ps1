@@ -69,6 +69,12 @@ foreach ($m in $moduleNames) {
     }
     Import-Module $modulePath -Force
 }
+# Several Codex modules import their dependencies with -Force in their private
+# scope. Re-export the entry point's modules after that dependency graph has
+# settled, so phase scriptblocks resolve their public commands in this scope.
+foreach ($m in $moduleNames) {
+    Import-Module "$PSScriptRoot\src\ReAgent.$m.psm1" -Global
+}
 
 $config = Get-ReAgentConfig -Path $ConfigPath
 $codexCommand = Get-Command codex -ErrorAction SilentlyContinue
@@ -144,9 +150,12 @@ $phaseTable = @(
                 -TemplateRoot (Join-Path $PSScriptRoot 'templates') -WhatIf:$WhatIfPreference
             $c.CodexReconciliationRecords = @($c.CodexWorkspaceConfiguration.Instruction) +
                 @($c.CodexWorkspaceConfiguration.Agents) | ForEach-Object {
-                    $action = if ($_.Enabled -eq $false -and $_.Changed) { 'remove' }
-                    elseif ($_.Status -eq 'created') { 'create' }
-                    elseif ($_.Status -eq 'updated') { 'update' }
+                    $action = if ($_.PSObject.Properties.Name -contains 'Enabled' -and
+                            $_.Enabled -eq $false -and $_.Changed) { 'remove' }
+                    elseif ($_.PSObject.Properties.Name -contains 'Status' -and
+                            $_.Status -eq 'created') { 'create' }
+                    elseif ($_.PSObject.Properties.Name -contains 'Status' -and
+                            $_.Status -eq 'updated') { 'update' }
                     else { 'none' }
                     [pscustomobject]@{ Action = $action; Path = $_.Path
                         OwnedBefore = ($action -ne 'create'); Changed = [bool]$_.Changed }

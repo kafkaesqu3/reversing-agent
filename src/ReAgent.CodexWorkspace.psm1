@@ -306,7 +306,8 @@ function Get-CodexAgentClientLimitation {
 }
 
 function Get-CodexAgentOmittedServer {
-    param([Parameter(Mandatory)][object]$Agent, [Parameter(Mandatory)][array]$ServerResults)
+    param([Parameter(Mandatory)][object]$Agent,
+        [Parameter(Mandatory)][AllowEmptyCollection()][array]$ServerResults)
 
     return @($ServerResults | Where-Object {
             $_.Installed -and $_.Transport -eq 'sse' -and $_.Name -in @($Agent.targetServers)
@@ -320,7 +321,7 @@ function Assert-CodexAgentAuthentication {
     param(
         [Parameter(Mandatory)][object]$Agent,
         [Parameter(Mandatory)][object]$Config,
-        [Parameter(Mandatory)][array]$ServerResults
+        [Parameter(Mandatory)][AllowEmptyCollection()][array]$ServerResults
     )
 
     foreach ($server in @($Config.mcpServers | Where-Object {

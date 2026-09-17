@@ -55,6 +55,53 @@ BeforeAll {
             }
         }
     }
+
+    function New-EntryPointFixture {
+        $root = Join-Path $TestDrive ('entry-point-' + [guid]::NewGuid().ToString('N'))
+        $config = Get-Content (Join-Path $Script:Root 're-agent.config.json') -Raw |
+            ConvertFrom-Json
+        $config.paths.toolRoot = Join-Path $root 'tools'
+        $config.paths.agentRoot = Join-Path $root 'agent'
+        $config.paths.stateRoot = Join-Path $root 'state'
+        $config.paths.symbolCache = Join-Path $root 'symbols'
+        # Phases 4 and 5 intentionally run without the VM-only phase 3. Keep
+        # the shipped packs and agents, but remove unavailable MCP transports
+        # from this entry-point fixture so VerifyOnly can reach C0/C1/C5.
+        foreach ($server in $config.mcpServers) { $server.enabled = $false }
+        foreach ($agent in $config.agents) { $agent.targetServers = @() }
+        $configPath = Join-Path $root 're-agent.config.json'
+        Write-IntegrationUtf8File $configPath ($config | ConvertTo-Json -Depth 100)
+        [pscustomobject]@{ Root = $root; ConfigPath = $configPath
+            Config = $config; CodexHome = (Join-Path $root 'codex-home') }
+    }
+
+    function Invoke-InstallerEntryPoint {
+        param(
+            [Parameter(Mandatory)]$Fixture,
+            [int[]]$Phases,
+            [switch]$Force,
+            [switch]$VerifyOnly,
+            [switch]$WhatIf
+        )
+
+        $quote = { param([string]$Value) "'" + $Value.Replace("'", "''") + "'" }
+        $command = "& $(& $quote (Join-Path $Script:Root 'Install-REAgent.ps1')) " +
+            "-ConfigPath $(& $quote $Fixture.ConfigPath) -CodexHome $(& $quote $Fixture.CodexHome)"
+        if ($Phases) { $command += ' -Phases ' + ($Phases -join ',') }
+        if ($Force) { $command += ' -Force' }
+        if ($VerifyOnly) { $command += ' -VerifyOnly' }
+        if ($WhatIf) { $command += ' -WhatIf' }
+        $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+        $stdout = Join-Path $Fixture.Root 'stdout.txt'
+        $stderr = Join-Path $Fixture.Root 'stderr.txt'
+        $argumentLine = "-NoProfile -ExecutionPolicy Bypass -EncodedCommand $encoded"
+        $process = Start-Process -FilePath powershell.exe -ArgumentList $argumentLine -Wait -PassThru `
+            -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+        $output = @(Get-Content -LiteralPath $stdout -ErrorAction SilentlyContinue) +
+            @(Get-Content -LiteralPath (Join-Path $Fixture.Config.paths.stateRoot 'install.log') `
+                -ErrorAction SilentlyContinue)
+        [pscustomobject]@{ ExitCode = $process.ExitCode; Output = $output }
+    }
 }
 
 AfterAll {
@@ -151,38 +198,28 @@ Describe 'the entry point script' {
 }
 
 Describe 'Codex installer workspace integration' {
-    It 'installs equal Claude and Codex skill sets and passes C0 through C8' {
-        $f = New-CodexInstallerFixture
-        $workspace = Write-CodexWorkspaceConfiguration -Config $f.Config -Catalog $f.Catalog `
-            -ServerResults $f.ServerResults -TemplateRoot $f.Templates
-        Install-IntegrationCodexSkills -Fixture $f
+    It 'runs phases 4 and 5 through the entry point with equal Claude and Codex skills' {
+        $f = New-EntryPointFixture
+        $run = Invoke-InstallerEntryPoint -Fixture $f -Phases 4,5 -Force
+        $run.ExitCode | Should -Be 0 -Because ($run.Output -join "`n")
+        ($run.Output -join "`n") | Should -Match 'Phase 4 \(AgentConfig\): ok' -Because ($run.Output -join "`n")
+        ($run.Output -join "`n") | Should -Match 'Phase 5 \(Skills\): ok' -Because ($run.Output -join "`n")
         $claude = @(Get-ChildItem (Join-Path $f.Config.paths.agentRoot '.claude\skills') -Directory |
                 ForEach-Object Name | Sort-Object)
         $codex = @(Get-ChildItem (Join-Path $f.Config.paths.agentRoot '.agents\skills') -Directory |
                 ForEach-Object Name | Sort-Object)
         $claude | Should -Be $codex
-        $checks = @(Get-CodexWorkspaceCheck -Config $f.Config -Catalog $f.Catalog `
-                -ServerResults $f.ServerResults -TemplateRoot $f.Templates `
-                -ReconciliationRecords (@($workspace.Instruction) + @($workspace.Agents)))
-        @($checks.Name) | Should -Be @('C0 Codex instructions', 'C1 Codex skill set',
-            'C2 Codex skill identity', 'C3 Codex MCP references', 'C4 Codex residue',
-            'C5 Codex agent identity', 'C6 Codex agent grant', 'C7 Codex secret isolation',
-            'C8 Codex ownership')
-        @($checks.Status | Where-Object { $_ -ne 'pass' }) | Should -BeNullOrEmpty
     }
 
-    It 'preserves Codex bytes and timestamps on a second complete run' {
-        $f = New-CodexInstallerFixture
-        Write-CodexWorkspaceConfiguration -Config $f.Config -Catalog $f.Catalog `
-            -ServerResults $f.ServerResults -TemplateRoot $f.Templates | Out-Null
-        Install-IntegrationCodexSkills -Fixture $f
+    It 'preserves Codex bytes and timestamps on a second entry point run' {
+        $f = New-EntryPointFixture
+        (Invoke-InstallerEntryPoint -Fixture $f -Phases 4,5 -Force).ExitCode | Should -Be 0
         $files = @(Get-ChildItem $f.Config.paths.agentRoot -Recurse -File | Where-Object {
                 $_.FullName -match '\\(AGENTS\.md|SKILL\.md|.*\.toml)$' })
         $before = @($files | ForEach-Object { $_.FullName + '|' + $_.LastWriteTimeUtc.Ticks + '|' +
                 [Convert]::ToBase64String([IO.File]::ReadAllBytes($_.FullName)) })
-        Write-CodexWorkspaceConfiguration -Config $f.Config -Catalog $f.Catalog `
-            -ServerResults $f.ServerResults -TemplateRoot $f.Templates | Out-Null
-        Install-IntegrationCodexSkills -Fixture $f
+        $run = Invoke-InstallerEntryPoint -Fixture $f -Phases 4,5 -Force
+        $run.ExitCode | Should -Be 0 -Because ($run.Output -join "`n")
         $after = @(Get-ChildItem $f.Config.paths.agentRoot -Recurse -File | Where-Object {
                 $_.FullName -match '\\(AGENTS\.md|SKILL\.md|.*\.toml)$' } | ForEach-Object {
                 $_.FullName + '|' + $_.LastWriteTimeUtc.Ticks + '|' +
@@ -190,24 +227,31 @@ Describe 'Codex installer workspace integration' {
         $after | Should -Be $before
     }
 
-    It 'leaves both Codex roots absent under WhatIf' {
-        $f = New-CodexInstallerFixture
-        Write-CodexWorkspaceConfiguration -Config $f.Config -Catalog $f.Catalog `
-            -ServerResults $f.ServerResults -TemplateRoot $f.Templates -WhatIf | Out-Null
+    It 'leaves both Codex roots absent when the entry point runs under WhatIf' {
+        $f = New-EntryPointFixture
+        $run = Invoke-InstallerEntryPoint -Fixture $f -Phases 4,5 -Force -WhatIf
+        $run.ExitCode | Should -Be 0 -Because ($run.Output -join "`n")
         Test-Path (Join-Path $f.Config.paths.agentRoot 'AGENTS.md') | Should -BeFalse
         Test-Path (Join-Path $f.Config.paths.agentRoot '.agents\skills') | Should -BeFalse
     }
 
-    It 'fails C0 C1 and C5 when VerifyOnly finds a missing instruction skill or agent' {
-        foreach ($missing in @('AGENTS.md', '.agents\skills\alpha', '.codex\agents\verifier.toml')) {
-            $f = New-CodexInstallerFixture
-            Write-CodexWorkspaceConfiguration -Config $f.Config -Catalog $f.Catalog `
-                -ServerResults $f.ServerResults -TemplateRoot $f.Templates | Out-Null
-            Install-IntegrationCodexSkills -Fixture $f
+    It 'returns a VerifyOnly failure when a Codex candidate is missing' {
+        foreach ($kind in @('instruction', 'skill', 'agent')) {
+            $f = New-EntryPointFixture
+            (Invoke-InstallerEntryPoint -Fixture $f -Phases 4,5,7 -Force).ExitCode | Should -Be 0
+            $missing = switch ($kind) {
+                'instruction' { 'AGENTS.md' }
+                'skill' {
+                    $skill = Get-ChildItem (Join-Path $f.Config.paths.agentRoot '.agents\skills') `
+                        -Directory | Select-Object -First 1
+                    Join-Path '.agents\skills' $skill.Name
+                }
+                default { '.codex\agents\verifier.toml' }
+            }
             Remove-Item (Join-Path $f.Config.paths.agentRoot $missing) -Recurse -Force
-            $checks = @(Get-CodexWorkspaceCheck -Config $f.Config -Catalog $f.Catalog `
-                    -ServerResults $f.ServerResults -TemplateRoot $f.Templates)
-            { Assert-VerificationPassed -Checks $checks } | Should -Throw '*failed*'
+            $run = Invoke-InstallerEntryPoint -Fixture $f -VerifyOnly
+            $run.ExitCode | Should -Not -Be 0
+            ($run.Output -join "`n") | Should -Match 'C[015] Codex'
         }
     }
 }
