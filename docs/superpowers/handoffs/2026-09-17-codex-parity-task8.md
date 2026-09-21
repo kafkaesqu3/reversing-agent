@@ -1,9 +1,9 @@
-# Codex parity handoff — Task 8 complete
+# Codex parity handoff — Task 10 complete
 
 ## Stop point
 
-Branch `codex-workspace-execution` is at commit `0d55722` (`Record Codex parity acceptance results`).
-Tasks 8 and 9 of `docs/superpowers/plans/2026-09-14-codex-parity.md` are complete. Task 10 remains incomplete because its automated and attended acceptance gates did not pass.
+Branch `codex-workspace-execution` is at commit `2b21406` (`Complete Codex parity acceptance gates`).
+Tasks 8 through 10 of `docs/superpowers/plans/2026-09-14-codex-parity.md` are complete.
 
 ## Task 9
 
@@ -12,10 +12,12 @@ Tasks 8 and 9 of `docs/superpowers/plans/2026-09-14-codex-parity.md` are complet
 - README and MVP operator documents now cover project trust, `codex --strict-config -C C:\re\agent`, the eleven skills, two enabled specialists, SSE limitation, complete-transport rule, secret boundary, and the L0-L5 checklist.
 - Fresh focused verification on 2026-09-17: `ReAgent.CodexVerify.Tests.ps1` (56 passed) plus `Integration.Tests.ps1` (45 passed); analyzer for `src/ReAgent.CodexVerify.psm1` reported 0 findings.
 
-## Task 10 measurements and blockers
+## Task 10 completion evidence
 
-- Pester 5.7.1 was installed in the current user's module path and the full suite was re-run: 781 total, 758 passed, 23 failed. Failures remain concentrated in older cross-module fixtures and one template expectation. Do not record a passing suite.
-- Whole-repository PSScriptAnalyzer reported 14 warnings, all in pre-existing test helpers. Do not record zero whole-repository findings.
+- Pester 5.7.1 full suite: 781 total, 781 passed, 0 failed, 0 skipped (285.54 seconds).
+- Whole-repository PSScriptAnalyzer: 0 findings.
+- The former failure causes were repaired: the static-analyst Bash limitation is explicit, Codex imports its verification primitives, Generate preserves CodexWorkspace exports, and the TOML parser test uses the functioning Windows Python launcher rather than the crashing Chocolatey shim.
+- Test fixtures now use analyzer-visible script scope, singular helper names, and narrowly documented stateful-helper suppressions.
 - Live `Install-REAgent.ps1 -VerifyOnly` initially failed as expected because `C:\re\agent` lacked all Codex project artifacts. The elevated first reconciliation generated those artifacts; its live C0-C8 checks all passed.
 - The first and second live reconciliations exited 1 because `claude mcp list` and the `mcp-windbg` live call failed, but a fresh non-elevated `-VerifyOnly -Attended` run on 2026-09-21 passed both checks, C0-C8, Binary Ninja, x64dbg-x64, pyghidra-mcp, and pdbsql. x32dbg remained closed and correctly reported not-testable.
 - Commit `ff52cfb` fixes `Merge-JsonFile` so it compares requested JSON values before backing up or writing. Focused tests prove no-op backup and timestamp preservation. Two fresh live reconciliations kept the Binary Ninja backup count at 23 before, after the first, and after the second run; C0-C8 passed both times.
@@ -56,13 +58,9 @@ stash@{0}: recovery/pre-task8-reverse-working-tree-2026-09-17
 
 The worktree was then restored to `afef8f1`, so the branch and working tree now reflect the committed history. Leave this stash intact unless its contents are deliberately needed for forensic comparison.
 
-## Historical next task
-
-Resume at Task 9, “Update operator documentation and acceptance recording.” Read its complete task block in the plan before editing. The attended L0–L5 acceptance work and the full-suite/live-install measurement in Task 10 remain unfinished.
-
 ## Next work
 
-To complete Task 10: repair the remaining full-suite failures (including cross-module fixture scope and the static-analyst template expectation) and eliminate the 14 pre-existing test-helper analyzer warnings. The Binary Ninja no-new-backup requirement, live MCP checks, and L0-L5 attended acceptance are now met.
+No Task 10 acceptance work remains. Keep the recovery stash intact unless a deliberate forensic comparison needs it.
 
 ## Process note
 
