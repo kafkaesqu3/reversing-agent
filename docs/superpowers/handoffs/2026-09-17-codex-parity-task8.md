@@ -2,8 +2,9 @@
 
 ## Stop point
 
-Branch `codex-workspace-execution` is at commit `2b21406` (`Complete Codex parity acceptance gates`).
-Tasks 8 through 10 of `docs/superpowers/plans/2026-09-14-codex-parity.md` are complete.
+Branch `codex-workspace-execution` completed Task 10 at `2b21406` (`Complete Codex parity acceptance gates`).
+This handoff records the follow-on branch state; Tasks 8 through 10 of
+`docs/superpowers/plans/2026-09-14-codex-parity.md` are complete.
 
 ## Task 9
 
