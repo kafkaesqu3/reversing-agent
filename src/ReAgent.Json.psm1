@@ -25,7 +25,8 @@ function Merge-JsonFile {
     )
 
     $existing = @{}
-    if (Test-Path -LiteralPath $Path) {
+    $fileExists = Test-Path -LiteralPath $Path
+    if ($fileExists) {
         $raw = Get-Content -LiteralPath $Path -Raw
         if ($raw -and $raw.Trim()) {
             try {
@@ -36,19 +37,38 @@ function Merge-JsonFile {
             }
             foreach ($p in $parsed.PSObject.Properties) { $existing[$p.Name] = $p.Value }
         }
-        $backup = "$Path.bak-$((Get-Date).ToString('yyyyMMddHHmmss'))"
-        Copy-Item -LiteralPath $Path -Destination $backup -Force
-        Write-ReAgentLog -Level INFO -Message "Backed up '$Path' to '$backup'."
-    } else {
-        $dir = Split-Path -Parent $Path
-        if ($dir -and -not (Test-Path -LiteralPath $dir)) {
-            $null = New-Item -ItemType Directory -Path $dir -Force
-        }
     }
 
-    foreach ($k in $Values.Keys) { $existing[$k] = $Values[$k] }
+    $changed = -not $fileExists
+    foreach ($k in $Values.Keys) {
+        $currentJson = if ($existing.ContainsKey($k)) {
+            ConvertTo-Json -InputObject $existing[$k] -Depth 12 -Compress
+        } else {
+            $null
+        }
+        $requestedJson = ConvertTo-Json -InputObject $Values[$k] -Depth 12 -Compress
+        if ($null -eq $currentJson -or $currentJson -cne $requestedJson) {
+            $changed = $true
+        }
+        $existing[$k] = $Values[$k]
+    }
+
+    if (-not $changed) {
+        Write-ReAgentLog -Level INFO -Message "JSON settings at '$Path' are already current."
+        return
+    }
 
     if ($PSCmdlet.ShouldProcess($Path, 'Merge JSON settings')) {
+        if ($fileExists) {
+            $backup = "$Path.bak-$((Get-Date).ToString('yyyyMMddHHmmss'))"
+            Copy-Item -LiteralPath $Path -Destination $backup -Force
+            Write-ReAgentLog -Level INFO -Message "Backed up '$Path' to '$backup'."
+        } else {
+            $dir = Split-Path -Parent $Path
+            if ($dir -and -not (Test-Path -LiteralPath $dir)) {
+                $null = New-Item -ItemType Directory -Path $dir -Force
+            }
+        }
         Write-Utf8NoBomFile -Path $Path `
             -Text (([PSCustomObject]$existing) | ConvertTo-Json -Depth 12)
     }
