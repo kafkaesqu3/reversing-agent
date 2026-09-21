@@ -9,9 +9,10 @@ The Claude MVP history below remains the baseline.
 the failures are existing cross-module fixture-scope/template issues, not the focused Codex
 workspace tests. Whole-repository PSScriptAnalyzer reported 14 warnings, all in test helpers.
 Two consecutive elevated reconciliations kept Binary Ninja settings current without creating a
-backup (23 before, 23 after each run), and C0-C8 passed. Both runs still failed `claude mcp list`
-and the `mcp-windbg` live call. L0-L5 remain unrecorded because they require an attended Codex
-session. The project contract is `AGENTS.md`, `.agents/skills`, and `.codex/agents`; launch with
+backup (23 before, 23 after each run), and C0-C8 passed. A fresh attended verification later
+passed `claude mcp list`, every enabled live MCP call, C0-C8, and all L0-L5 observations. x32dbg
+remained closed and correctly reported `not-testable`. The project contract is `AGENTS.md`,
+`.agents/skills`, and `.codex/agents`; launch with
 `codex --strict-config -C C:\re\agent` after trusting the project. Legacy SSE remains Claude-only.
 The L0-L5 checklist and complete-transport/credential boundary are in [CODEX.md](CODEX.md).
 

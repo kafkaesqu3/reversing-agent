@@ -605,12 +605,13 @@ Task 10 was re-measured on 2026-09-21 with Codex CLI `0.154.0` and Pester `5.7.1
   zero-warning whole-repository result.
 - Two elevated reconciliations preserved Binary Ninja settings without a new backup (23 backups
   before, after the first, and after the second run). C0-C8 passed on both runs.
-- Both live runs exited 1 because `claude mcp list` and the `mcp-windbg` live call failed. GUI
-  probes remained `not-testable`.
-- L0-L5 are still unrecorded. An analyst must trust `C:\re\agent`, open Binary Ninja and start its
-  MCP server, open x64dbg with an x64 target, leave x32dbg closed, then run
-  `codex --strict-config -C C:\re\agent`. Confirm the project `AGENTS.md`, `.agents/skills`,
-  `.codex/agents`, the eleven `/skills` names, and the `static-analyst`/`verifier` picker entries.
+- A fresh non-elevated `-VerifyOnly -Attended` run passed `claude mcp list`, C0-C8, Binary Ninja,
+  x64dbg-x64, pyghidra-mcp, mcp-windbg, and pdbsql live calls. x32dbg remained closed and was
+  correctly `not-testable`; disabled Ghidra hosts were also `not-testable`.
+- L0-L5 are recorded as passing in `C:\ProgramData\re-lab\codex-verify-report.json`: Codex loaded
+  `AGENTS.md`; all eleven skills were visible; only `static-analyst` and `verifier` were available;
+  verifier had read-only grants; static-analyst listed the Ghidra project binaries; and Codex ran
+  while x32dbg was closed.
 
 Legacy SSE remains Claude-only. See [CODEX.md](CODEX.md) for L0-L5 evidence and the
 complete-transport rule: local endpoints/commands may be in generated agent files, credentials

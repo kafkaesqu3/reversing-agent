@@ -17,9 +17,9 @@ Tasks 8 and 9 of `docs/superpowers/plans/2026-09-14-codex-parity.md` are complet
 - Pester 5.7.1 was installed in the current user's module path and the full suite was re-run: 781 total, 758 passed, 23 failed. Failures remain concentrated in older cross-module fixtures and one template expectation. Do not record a passing suite.
 - Whole-repository PSScriptAnalyzer reported 14 warnings, all in pre-existing test helpers. Do not record zero whole-repository findings.
 - Live `Install-REAgent.ps1 -VerifyOnly` initially failed as expected because `C:\re\agent` lacked all Codex project artifacts. The elevated first reconciliation generated those artifacts; its live C0-C8 checks all passed.
-- The first and second live reconciliations both exited 1 because `claude mcp list` and the `mcp-windbg` live call failed. GUI host probes were not-testable.
+- The first and second live reconciliations exited 1 because `claude mcp list` and the `mcp-windbg` live call failed, but a fresh non-elevated `-VerifyOnly -Attended` run on 2026-09-21 passed both checks, C0-C8, Binary Ninja, x64dbg-x64, pyghidra-mcp, and pdbsql. x32dbg remained closed and correctly reported not-testable.
 - Commit `ff52cfb` fixes `Merge-JsonFile` so it compares requested JSON values before backing up or writing. Focused tests prove no-op backup and timestamp preservation. Two fresh live reconciliations kept the Binary Ninja backup count at 23 before, after the first, and after the second run; C0-C8 passed both times.
-- L0-L5 remain unobserved. They require a human-operated Codex session with Binary Ninja open and its MCP server started, x64dbg open on an x64 target, and x32dbg closed.
+- L0-L5 now pass and are recorded in `C:\ProgramData\re-lab\codex-verify-report.json`: AGENTS.md loaded; all eleven skills visible; static-analyst/verifier available and dynamic-analyst absent; verifier read-only grant confirmed; static-analyst listed the Ghidra project binaries; and Codex worked while x32dbg remained closed.
 
 ## What changed
 
@@ -62,7 +62,7 @@ Resume at Task 9, “Update operator documentation and acceptance recording.” 
 
 ## Next work
 
-To complete Task 10: repair the remaining full-suite failures (including cross-module fixture scope and the static-analyst template expectation); resolve `claude mcp list` and `mcp-windbg` live-call failures; then conduct the human-attended L0-L5 session and update the report with direct evidence. The Binary Ninja no-new-backup requirement is now met.
+To complete Task 10: repair the remaining full-suite failures (including cross-module fixture scope and the static-analyst template expectation) and eliminate the 14 pre-existing test-helper analyzer warnings. The Binary Ninja no-new-backup requirement, live MCP checks, and L0-L5 attended acceptance are now met.
 
 ## Process note
 
