@@ -596,10 +596,22 @@ real installer during implementation (this host is itself the target). One real
 
 ## Codex parity acceptance
 
-Task 9 defines the attended L0-L5 acceptance record but does not replace historical test counts.
-Task 10 must measure the full suite and analyzer before recording new values. Trust
-`C:\re\agent` and start `codex --strict-config -C C:\re\agent`; confirm the project
-`AGENTS.md`, `.agents/skills`, `.codex/agents`, the eleven `/skills` names, and the
-`static-analyst`/`verifier` picker entries. Legacy SSE remains Claude-only. See
-[CODEX.md](CODEX.md) for L0-L5 evidence and the complete-transport rule: local endpoints/commands
-may be in generated agent files, credentials never are.
+Task 10 was re-measured on 2026-09-21 with Codex CLI `0.154.0` and Pester `5.7.1`.
+
+- The complete suite reported **758 passed, 23 failed, 781 total**. The failures are existing
+  cross-module test-fixture scope/template failures; the focused JSON regression and integration
+  suite passed (11/11 and 45/45 respectively).
+- Whole-repository PSScriptAnalyzer reported **14 warnings**, all in test helpers. Do not report a
+  zero-warning whole-repository result.
+- Two elevated reconciliations preserved Binary Ninja settings without a new backup (23 backups
+  before, after the first, and after the second run). C0-C8 passed on both runs.
+- Both live runs exited 1 because `claude mcp list` and the `mcp-windbg` live call failed. GUI
+  probes remained `not-testable`.
+- L0-L5 are still unrecorded. An analyst must trust `C:\re\agent`, open Binary Ninja and start its
+  MCP server, open x64dbg with an x64 target, leave x32dbg closed, then run
+  `codex --strict-config -C C:\re\agent`. Confirm the project `AGENTS.md`, `.agents/skills`,
+  `.codex/agents`, the eleven `/skills` names, and the `static-analyst`/`verifier` picker entries.
+
+Legacy SSE remains Claude-only. See [CODEX.md](CODEX.md) for L0-L5 evidence and the
+complete-transport rule: local endpoints/commands may be in generated agent files, credentials
+never are.

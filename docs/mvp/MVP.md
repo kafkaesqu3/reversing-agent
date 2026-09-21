@@ -4,12 +4,16 @@
 See [CODEX.md](CODEX.md) for installation, configuration, and verification commands.
 The Claude MVP history below remains the baseline.
 
-**Codex parity acceptance is pending Task 10 measurement.** The project contract is
-`AGENTS.md`, `.agents/skills`, and `.codex/agents`; launch the attended session with
-`codex --strict-config -C C:\re\agent` after trusting the project. `/skills` must show the eleven
-reviewed names and the picker must show `static-analyst` and `verifier`. Legacy SSE remains
-Claude-only. The L0-L5 evidence checklist and complete-transport/credential boundary are in
-[CODEX.md](CODEX.md); do not update Codex suite or analyzer counts until Task 10 records them.
+**Codex parity acceptance was measured on 2026-09-21 and is not yet complete.** Codex CLI is
+`0.154.0`. With Pester 5.7.1, the complete suite reported 758 passed and 23 failed (781 total);
+the failures are existing cross-module fixture-scope/template issues, not the focused Codex
+workspace tests. Whole-repository PSScriptAnalyzer reported 14 warnings, all in test helpers.
+Two consecutive elevated reconciliations kept Binary Ninja settings current without creating a
+backup (23 before, 23 after each run), and C0-C8 passed. Both runs still failed `claude mcp list`
+and the `mcp-windbg` live call. L0-L5 remain unrecorded because they require an attended Codex
+session. The project contract is `AGENTS.md`, `.agents/skills`, and `.codex/agents`; launch with
+`codex --strict-config -C C:\re\agent` after trusting the project. Legacy SSE remains Claude-only.
+The L0-L5 checklist and complete-transport/credential boundary are in [CODEX.md](CODEX.md).
 
 **Goal:** one script, run on an existing FLARE VM, that leaves you with Claude Code able to drive **x64dbg, Ghidra, Binary Ninja, and WinDbg** through MCP.
 
