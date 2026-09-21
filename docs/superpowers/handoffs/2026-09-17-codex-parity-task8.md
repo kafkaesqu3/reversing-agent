@@ -2,8 +2,8 @@
 
 ## Stop point
 
-Branch `codex-workspace-execution` is at commit `da06ec4` (`Document Codex workspace parity acceptance`).
-Tasks 8 and 9 of `docs/superpowers/plans/2026-09-14-codex-parity.md` are complete. Task 10 is incomplete because its automated and attended acceptance gates did not pass.
+Branch `codex-workspace-execution` is at commit `0d55722` (`Record Codex parity acceptance results`).
+Tasks 8 and 9 of `docs/superpowers/plans/2026-09-14-codex-parity.md` are complete. Task 10 remains incomplete because its automated and attended acceptance gates did not pass.
 
 ## Task 9
 
@@ -14,11 +14,11 @@ Tasks 8 and 9 of `docs/superpowers/plans/2026-09-14-codex-parity.md` are complet
 
 ## Task 10 measurements and blockers
 
-- Full suite with the only available compatible-newer runner, Pester 6.1.0: 778 total, 755 passed, 23 failed. Failures are concentrated in older cross-module fixtures (including Pester's escaped `break`/`continue` behavior); Pester 5.x is not installed. Do not record a passing suite from this run.
+- Pester 5.7.1 was installed in the current user's module path and the full suite was re-run: 781 total, 758 passed, 23 failed. Failures remain concentrated in older cross-module fixtures and one template expectation. Do not record a passing suite.
 - Whole-repository PSScriptAnalyzer reported 14 warnings, all in pre-existing test helpers. Do not record zero whole-repository findings.
 - Live `Install-REAgent.ps1 -VerifyOnly` initially failed as expected because `C:\re\agent` lacked all Codex project artifacts. The elevated first reconciliation generated those artifacts; its live C0-C8 checks all passed.
 - The first and second live reconciliations both exited 1 because `claude mcp list` and the `mcp-windbg` live call failed. GUI host probes were not-testable.
-- The second reconciliation skipped all eleven skills and retained C0-C8 pass, but created another `Binary Ninja\settings.json` backup. `Merge-JsonFile` always writes the settings file even when values are unchanged, so Task 10's no-new-backup idempotency requirement is currently not met.
+- Commit `ff52cfb` fixes `Merge-JsonFile` so it compares requested JSON values before backing up or writing. Focused tests prove no-op backup and timestamp preservation. Two fresh live reconciliations kept the Binary Ninja backup count at 23 before, after the first, and after the second run; C0-C8 passed both times.
 - L0-L5 remain unobserved. They require a human-operated Codex session with Binary Ninja open and its MCP server started, x64dbg open on an x64 target, and x32dbg closed.
 
 ## What changed
@@ -56,13 +56,13 @@ stash@{0}: recovery/pre-task8-reverse-working-tree-2026-09-17
 
 The worktree was then restored to `afef8f1`, so the branch and working tree now reflect the committed history. Leave this stash intact unless its contents are deliberately needed for forensic comparison.
 
-## Next task
+## Historical next task
 
 Resume at Task 9, “Update operator documentation and acceptance recording.” Read its complete task block in the plan before editing. The attended L0–L5 acceptance work and the full-suite/live-install measurement in Task 10 remain unfinished.
 
 ## Next work
 
-To complete Task 10: use a Pester 5.x runner or repair the cross-module test compatibility; eliminate unconditional Binary Ninja settings rewrites/backups; restore the two failed live checks; then conduct the human-attended L0-L5 session and update MVP/HANDOFF with the actual successful measurements.
+To complete Task 10: repair the remaining full-suite failures (including cross-module fixture scope and the static-analyst template expectation); resolve `claude mcp list` and `mcp-windbg` live-call failures; then conduct the human-attended L0-L5 session and update the report with direct evidence. The Binary Ninja no-new-backup requirement is now met.
 
 ## Process note
 
