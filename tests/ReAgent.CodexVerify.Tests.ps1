@@ -10,6 +10,10 @@ function Write-TestUtf8File {
     [IO.File]::WriteAllText($Path, $Text, [Text.UTF8Encoding]::new($false))
 }
 function New-CodexVerificationFixture {
+    # Test fixture: creates only isolated files beneath Pester TestDrive.
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+        'PSUseShouldProcessForStateChangingFunctions', '')]
+    param()
     $root = Join-Path $TestDrive ('codex-verify-' + [guid]::NewGuid().ToString('N'))
     $templates = Join-Path $root 'templates'
     $config = [pscustomobject]@{
@@ -53,6 +57,10 @@ function Add-TestText {
 }
 
 function New-CodexAgentVerificationFixture {
+    # Test fixture: extends an isolated fixture with generated agent files.
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+        'PSUseShouldProcessForStateChangingFunctions', '')]
+    param()
     $fixture = New-CodexVerificationFixture
     $fixture.Config.paths | Add-Member -NotePropertyName stateRoot -NotePropertyValue $fixture.Root
     $fixture.Config.mcpServers = @(

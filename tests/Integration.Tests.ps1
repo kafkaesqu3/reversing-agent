@@ -17,6 +17,10 @@ BeforeAll {
     }
 
     function New-CodexInstallerFixture {
+        # Test fixture: creates only isolated files beneath Pester TestDrive.
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+            'PSUseShouldProcessForStateChangingFunctions', '')]
+        param()
         $root = Join-Path $TestDrive ('codex-installer-' + [guid]::NewGuid().ToString('N'))
         $repo = Join-Path $root 'repo'; $templates = Join-Path $repo 'templates'
         Write-IntegrationUtf8File (Join-Path $templates 'instructions/common.md.template') '# Common'
@@ -47,7 +51,7 @@ BeforeAll {
             Catalog = $catalog; ServerResults = $servers }
     }
 
-    function Install-IntegrationCodexSkills {
+    function Install-IntegrationCodexSkill {
         param($Fixture)
         foreach ($root in @('.claude/skills', '.agents/skills')) {
             $path = Join-Path $Fixture.Config.paths.agentRoot ($root + '/alpha')
@@ -61,6 +65,10 @@ BeforeAll {
     }
 
     function New-EntryPointFixture {
+        # Test fixture: creates only isolated files beneath Pester TestDrive.
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+            'PSUseShouldProcessForStateChangingFunctions', '')]
+        param()
         $root = Join-Path $TestDrive ('entry-point-' + [guid]::NewGuid().ToString('N'))
         $config = Get-Content (Join-Path $Script:Root 're-agent.config.json') -Raw |
             ConvertFrom-Json
@@ -80,6 +88,8 @@ BeforeAll {
     }
 
     function Invoke-InstallerEntryPoint {
+        # Test fixture: forwards WhatIf to a disposable child-process fixture.
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSupportsShouldProcess', '')]
         param(
             [Parameter(Mandatory)]$Fixture,
             [int[]]$Phases,
@@ -118,7 +128,7 @@ BeforeAll {
             ($manifest | ConvertTo-Json -Depth 8)
     }
 
-    function Initialize-StandaloneClaudeSkills {
+    function Initialize-StandaloneClaudeSkill {
         param($Fixture)
         foreach ($pack in @($Fixture.Config.skills | Where-Object enabled)) {
             foreach ($skill in @($pack.skills | Where-Object enabled)) {
@@ -315,7 +325,7 @@ Describe 'Standalone Codex installer workspace parity' {
     It 'ConfigureOnly reconciles registration and every project artifact without Claude or services' {
         $f = New-EntryPointFixture
         Initialize-StandaloneManifest -Fixture $f
-        Initialize-StandaloneClaudeSkills -Fixture $f
+        Initialize-StandaloneClaudeSkill -Fixture $f
         Write-IntegrationUtf8File (Join-Path $f.CodexHome 'config.toml') "unrelated = 'keep'`n"
         Write-IntegrationUtf8File (Join-Path $f.Config.paths.agentRoot '.agents\skills\operator\note.txt') 'keep'
         Write-IntegrationUtf8File (Join-Path $f.Config.paths.agentRoot '.codex\agents\operator.toml') 'keep'
@@ -343,7 +353,7 @@ Describe 'Standalone Codex installer workspace parity' {
     It 'VerifyOnly invokes no writer and fails when one managed artifact is missing' {
         $f = New-EntryPointFixture
         Initialize-StandaloneManifest -Fixture $f
-        Initialize-StandaloneClaudeSkills -Fixture $f
+        Initialize-StandaloneClaudeSkill -Fixture $f
         (Invoke-StandaloneEntryPoint -Fixture $f -ConfigureOnly).ExitCode | Should -Be 0
         Remove-Item (Join-Path $f.Config.paths.agentRoot 'AGENTS.md') -Force
         $before = (Get-Content (Join-Path $f.CodexHome 'config.toml') -Raw)
@@ -357,7 +367,7 @@ Describe 'Standalone Codex installer workspace parity' {
     It 'VerifyOnly fails a verifier write grant without repairing it' {
         $f = New-EntryPointFixture
         Initialize-StandaloneManifest -Fixture $f
-        Initialize-StandaloneClaudeSkills -Fixture $f
+        Initialize-StandaloneClaudeSkill -Fixture $f
         (Invoke-StandaloneEntryPoint -Fixture $f -ConfigureOnly).ExitCode | Should -Be 0
         $path = Join-Path $f.Config.paths.agentRoot '.codex\agents\verifier.toml'
         $text = (Get-Content $path -Raw).Replace('sandbox_mode = "read-only"',

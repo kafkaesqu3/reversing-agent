@@ -29,7 +29,7 @@ BeforeAll {
 Describe 'Install-CodexSkillDirectory' {
     BeforeEach {
         $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
-        $candidate = [pscustomobject]@{
+        $script:candidate = [pscustomobject]@{
             Name = 'crash'; Destination = (Join-Path $root 'crash'); Marker = 'codex:windbg/crash'
             Files = @(
                 [pscustomobject]@{ RelativePath = 'SKILL.md'; Bytes = [byte[]]@(65, 10) }
@@ -40,7 +40,7 @@ Describe 'Install-CodexSkillDirectory' {
     }
 
     It 'preserves unchanged tree timestamps and removes stale files on replacement' {
-        $first = Install-CodexSkillDirectory -Candidate $candidate -SkillRoot $root
+        $first = Install-CodexSkillDirectory -Candidate $script:candidate -SkillRoot $root
         $before = (Get-Item $candidate.Destination).LastWriteTimeUtc
         $again = Install-CodexSkillDirectory -Candidate $candidate -SkillRoot $root
         $again.Changed | Should -BeFalse
@@ -181,7 +181,7 @@ Describe 'New-CodexSkillCandidate validation' {
         $skill = [pscustomobject]@{ name = 'crash'; upstream = 'upstream'; enabled = $true }
         $pack = [pscustomobject]@{ namespace = 'windbg'; skills = @($skill)
             scanExceptions = @(); codexScanExceptions = @() }
-        $params = @{ Source = $source; Destination = (Join-Path $repo '.agents\skills\crash')
+        $script:params = @{ Source = $source; Destination = (Join-Path $repo '.agents\skills\crash')
             Pack = $pack; Skill = $skill; Catalog = Get-ToolCatalog
             Config = [pscustomobject]@{ mcpServers = @(
                 [pscustomobject]@{ name = 'mcp-windbg'; transport = 'http' },
@@ -191,7 +191,7 @@ Describe 'New-CodexSkillCandidate validation' {
     It 'rejects unwaived Claude residue in quoted history' {
         '> TodoWrite' | Set-Content (Join-Path $source 'reference.md')
         { New-CodexSkillCandidate @params } | Should -Throw '*C4-TODOWRITE*reference.md*'
-        Test-Path (Split-Path $params.Destination) | Should -BeFalse
+        Test-Path (Split-Path $script:params.Destination) | Should -BeFalse
     }
 
     It 'uses the exact configured exception for real upstream dispatch history' {

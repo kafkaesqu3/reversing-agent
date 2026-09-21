@@ -24,6 +24,9 @@ Stamp every finding with `static-analyst` and the tool calls behind it.
 
 ## Limitations
 
+No Bash tool is available, so `msvc_demangle` cannot run. Report this limitation instead of
+attempting a shell workaround.
+
 {{LIMITATIONS}}
 
 {{CLIENT_LIMITATIONS}}

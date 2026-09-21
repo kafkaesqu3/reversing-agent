@@ -1,7 +1,7 @@
 Set-StrictMode -Version Latest
 
 Import-Module (Join-Path $PSScriptRoot 'ReAgent.Agents.psm1') -Force
-Import-Module (Join-Path $PSScriptRoot 'ReAgent.CodexWorkspace.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'ReAgent.CodexWorkspace.psm1')
 
 # Depends on functions exported by sibling modules, which Install-REAgent.ps1
 # imports into the session before this one: Write-ReAgentLog (Common),

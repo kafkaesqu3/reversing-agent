@@ -1,5 +1,6 @@
 Set-StrictMode -Version Latest
 
+Import-Module (Join-Path $PSScriptRoot 'ReAgent.Verify.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'ReAgent.CodexVerify.psm1') -Force
 
 function Invoke-CodexConfigurationCommand {
