@@ -1,5 +1,8 @@
 Set-StrictMode -Version Latest
 
+Import-Module (Join-Path $PSScriptRoot 'ReAgent.Verify.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'ReAgent.CodexVerify.psm1') -Force
+
 function Invoke-CodexConfigurationCommand {
     <# .SYNOPSIS
         Runs Codex against an explicit home, capturing output without logging secrets.
@@ -255,9 +258,7 @@ function Invoke-CodexVerification {
     $checks += Get-CodexRegistrationCheck -Config $Config -ServerResults $ServerResults `
         -CodexPath $CodexPath -CodexHome $CodexHome
     $checks += Get-ServerCheck -Config $Config -ServerResults $ServerResults -Attended:$Attended
-    $null = New-Item -ItemType Directory -Path $Config.paths.stateRoot -Force
-    $reportPath = Join-Path $Config.paths.stateRoot 'codex-verify-report.json'
-    Write-Utf8NoBomFile -Path $reportPath -Text (ConvertTo-Json -InputObject @($checks) -Depth 8)
+    $null = Write-CodexVerificationReport -Config $Config -Checks $checks -Observations @()
     foreach ($check in $checks) {
         Write-ReAgentLog -Level INFO -Message "[$($check.Status)] $($check.Name): $($check.Detail)"
     }

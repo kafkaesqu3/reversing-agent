@@ -248,32 +248,32 @@ Use a concise Codex task or plan list and $windbg-crash.
 
 Describe 'New-CodexAgentServerTable' {
     BeforeEach {
-        $httpConfig = [pscustomobject]@{ name = 'x64dbg-mcp-x64'; auth = 'bearer' }
-        $httpResult = [pscustomobject]@{
+        $script:httpConfig = [pscustomobject]@{ name = 'x64dbg-mcp-x64'; auth = 'bearer' }
+        $script:httpResult = [pscustomobject]@{
             Transport = 'http'; Bind = '127.0.0.1'; Port = 8765; Path = '/mcp'
         }
-        $stdioConfig = [pscustomobject]@{ name = 'mcp-windbg'; auth = 'none' }
-        $stdioResult = [pscustomobject]@{
+        $script:stdioConfig = [pscustomobject]@{ name = 'mcp-windbg'; auth = 'none' }
+        $script:stdioResult = [pscustomobject]@{
             Transport = 'stdio'
             Command = [pscustomobject]@{
                 Executable = 'C:\Program Files\WinDbg MCP\server.exe'
                 Arguments = @('--mode', 'read only')
-                Env = [ordered]@{ RE_MODE = 'analysis'; RE_LABEL = "cafÃ©" }
+                Env = [ordered]@{ RE_MODE = 'analysis'; RE_LABEL = ('caf' + [char]0x00E9) }
             }
         }
     }
 
     It 'emits a complete disabled authenticated HTTP table without credentials' {
-        $actual = New-CodexAgentServerTable -ConfigServer $httpConfig `
-            -ServerResult $httpResult -Enabled $false -EnabledTools @()
+        $actual = New-CodexAgentServerTable -ConfigServer $script:httpConfig `
+            -ServerResult $script:httpResult -Enabled $false -EnabledTools @()
         $actual | Should -Match 'url = "http://127\.0\.0\.1:8765/mcp"'
         $actual | Should -Match 'enabled = false'
         $actual | Should -Not -Match '(?i)Authorization|Bearer|token'
     }
 
     It 'emits command args cwd and sorted non-secret environment for stdio' {
-        $actual = New-CodexAgentServerTable -ConfigServer $stdioConfig `
-            -ServerResult $stdioResult -Enabled $true -EnabledTools @('list_dumps')
+        $actual = New-CodexAgentServerTable -ConfigServer $script:stdioConfig `
+            -ServerResult $script:stdioResult -Enabled $true -EnabledTools @('list_dumps')
         $actual | Should -Match 'command = "C:\\\\Program Files\\\\WinDbg MCP\\\\server\.exe"'
         $actual | Should -Match 'args = \["--mode","read only"\]'
         $actual.IndexOf('RE_LABEL') | Should -BeLessThan $actual.IndexOf('RE_MODE')
@@ -287,7 +287,7 @@ Describe 'New-CodexAgentServerTable' {
         [IO.File]::WriteAllText($path, $actual, $utf8)
         $code = "import json,sys,tomllib; print(json.dumps(" +
             "tomllib.load(open(sys.argv[1], 'rb'))))"
-        $json = & python -c $code $path
+        $json = & py -3 -c $code $path
         $LASTEXITCODE | Should -Be 0
         $server = ($json | ConvertFrom-Json).mcp_servers.'mcp-windbg'
         $server.enabled | Should -BeTrue
@@ -339,9 +339,10 @@ Describe 'New-CodexAgentServerTable' {
     }
 
     It 'escapes quotes apostrophes backslashes Unicode and newlines' {
-        $value = 'quote " apostrophe '' slash \ cafÃ©' + "`nnext"
+        $value = 'quote " apostrophe '' slash \ caf' + [char]0x00E9 + "`nnext"
         $encoded = ConvertTo-CodexTomlValue -Value $value
-        $encoded | Should -BeExactly '"quote \" apostrophe '' slash \\ cafÃ©\nnext"'
+        $expected = '"quote \" apostrophe '' slash \\ caf' + [char]0x00E9 + '\nnext"'
+        $encoded | Should -BeExactly $expected
     }
 
     It 'renders an exact TOML basic string array' {

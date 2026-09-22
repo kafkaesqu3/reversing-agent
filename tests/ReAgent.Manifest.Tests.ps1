@@ -13,6 +13,10 @@ BeforeAll {
     }
 }
 
+AfterAll {
+    Get-Module 'ReAgent.*' | Remove-Module -Force
+}
+
 Describe 'Get-RecordedServerResult' {
     BeforeEach {
         $Script:State = Join-Path $TestDrive ([guid]::NewGuid().ToString())
@@ -455,5 +459,134 @@ Describe 'Get-RecordedAgentResult' {
                     enabled = $true; level = 'read'; servers = @(); toolCount = 1
                     gate = 'pass'; disabledReason = '' }) }
         @(Get-RecordedAgentResult -Config $cfg -Manifest $man).Count | Should -Be 0
+    }
+}
+
+Describe 'Codex workspace manifest records' {
+    BeforeEach {
+        $Script:CwRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $Script:CwAgentRoot = Join-Path $Script:CwRoot 'agent'
+        $Script:CwStateRoot = Join-Path $Script:CwRoot 'state'
+        $null = New-Item -ItemType Directory -Path (Join-Path $Script:CwAgentRoot '.codex\agents') -Force
+        $null = New-Item -ItemType Directory -Path $Script:CwStateRoot -Force
+        $instruction = Join-Path $Script:CwAgentRoot 'AGENTS.md'
+        [IO.File]::WriteAllText($instruction, '<!-- re-agent-managed -->')
+        [IO.File]::WriteAllText((Join-Path $Script:CwAgentRoot '.codex\agents\static-analyst.toml'),
+            @'
+# re-agent-managed: codex-custom-agent v1
+name = "static-analyst"
+sandbox_mode = "workspace-write"
+[mcp_servers."pyghidra-mcp"]
+enabled = true
+enabled_tools = ["decompile_function", "rename_function"]
+[mcp_servers."pdbsql"]
+enabled = false
+enabled_tools = []
+'@)
+        [IO.File]::WriteAllText((Join-Path $Script:CwAgentRoot '.codex\agents\verifier.toml'),
+            @'
+# re-agent-managed: codex-custom-agent v1
+name = "verifier"
+sandbox_mode = "read-only"
+[mcp_servers."mcp-windbg"]
+enabled = true
+enabled_tools = ["read_memory"]
+[mcp_servers."pyghidra-mcp"]
+enabled = true
+enabled_tools = ["decompile_function"]
+'@)
+        $Script:CwConfig = [pscustomobject]@{
+            version = 1
+            paths = [pscustomobject]@{ agentRoot = $Script:CwAgentRoot
+                stateRoot = $Script:CwStateRoot }
+            mcpServers = @()
+            skills = @([pscustomobject]@{ enabled = $true; namespace = 'fixture'
+                    skills = @([pscustomobject]@{ name = 'alpha'; enabled = $true }) })
+            agents = @(
+                [pscustomobject]@{ name = 'static-analyst'; enabled = $true; level = 'write' },
+                [pscustomobject]@{ name = 'verifier'; enabled = $true; level = 'read' })
+        }
+        $Script:CwContext = @{
+            Config = $Script:CwConfig
+            CodexWorkspaceConfiguration = [pscustomobject]@{
+                Instruction = [pscustomobject]@{ Path = $instruction; Status = 'created'
+                    Sha256 = ('a' * 64) }
+                Agents = @(
+                    [pscustomobject]@{ Name = 'static-analyst'; Enabled = $true
+                        Path = (Join-Path $Script:CwAgentRoot '.codex\agents\static-analyst.toml')
+                        Status = 'created'; OmittedServers = @(
+                            [pscustomobject]@{ Agent = 'static-analyst'; Name = 'pdbsql'
+                                Reason = 'legacy SSE is unsupported by Codex' },
+                            [pscustomobject]@{ Agent = 'static-analyst'; Name = 'ghidrasql'
+                                Reason = 'legacy SSE is unsupported by Codex' }) },
+                    [pscustomobject]@{ Name = 'verifier'; Enabled = $true
+                        Path = (Join-Path $Script:CwAgentRoot '.codex\agents\verifier.toml')
+                        Status = 'created'; OmittedServers = @(
+                            [pscustomobject]@{ Agent = 'verifier'; Name = 'pdbsql'
+                                Reason = 'legacy SSE is unsupported by Codex' }) })
+            }
+            CodexSkillResults = @([pscustomobject]@{ CodexSkillRecords = @(
+                        [pscustomobject]@{ Name = 'alpha'; Status = 'installed'
+                            Sha256 = ('b' * 64); Path = (Join-Path $Script:CwAgentRoot '.agents\skills\alpha') }) })
+        }
+    }
+
+    It 'records generated instructions, enabled skills, compatible agents, and exact SSE omissions' {
+        $record = ConvertTo-CodexWorkspaceManifestRecord -Context $Script:CwContext
+        $record.root | Should -Be $Script:CwAgentRoot
+        $record.instructions.path | Should -Be (Join-Path $Script:CwAgentRoot 'AGENTS.md')
+        $record.instructions.status | Should -Be 'installed'
+        $record.instructions.sha256 | Should -Be ('a' * 64)
+        @($record.skills).Count | Should -Be 1
+        $record.skills[0].name | Should -Be 'alpha'
+        $record.skills[0].sha256 | Should -Be ('b' * 64)
+        @($record.agents).Count | Should -Be 2
+        $static = @($record.agents | Where-Object name -eq 'static-analyst')[0]
+        $static.servers | Should -Be @('pyghidra-mcp')
+        $static.toolCount | Should -Be 2
+        $verifier = @($record.agents | Where-Object name -eq 'verifier')[0]
+        $verifier.servers | Should -Be @('mcp-windbg', 'pyghidra-mcp')
+        $verifier.toolCount | Should -Be 2
+        @($record.omittedServers | ForEach-Object { "$($_.name):$($_.reason)" }) |
+            Should -Be @('ghidrasql:legacy SSE is unsupported by Codex',
+                'pdbsql:legacy SSE is unsupported by Codex')
+    }
+
+    It 'serializes no Codex user configuration or secret-bearing preference' {
+        $Script:CwContext.Config | Add-Member -NotePropertyName fixtureToken `
+            -NotePropertyValue 'manifest-fixture-secret'
+        $record = ConvertTo-CodexWorkspaceManifestRecord -Context $Script:CwContext
+        $json = $record | ConvertTo-Json -Depth 12
+        foreach ($forbidden in @('manifest-fixture-secret', 'Authorization', 'config.toml',
+                'model =', 'model_reasoning_effort', 'approval_policy', 'login', 'memories',
+                'plugins')) {
+            $json | Should -Not -Match ([regex]::Escape($forbidden))
+        }
+        $json | Should -Match 'sandbox_mode'
+    }
+
+    It 'replays the optional workspace object and tolerates a pre-parity manifest' {
+        $record = ConvertTo-CodexWorkspaceManifestRecord -Context $Script:CwContext
+        [IO.File]::WriteAllText((Join-Path $Script:CwStateRoot 'codex-manifest.json'),
+            ([ordered]@{ codexWorkspace = $record } | ConvertTo-Json -Depth 12))
+        $replayed = Get-RecordedCodexWorkspaceResult -Config $Script:CwConfig `
+            -ManifestName 'codex-manifest.json'
+        $replayed.Instruction.Sha256 | Should -Be ('a' * 64)
+        $replayed.Skills[0].Name | Should -Be 'alpha'
+        $replayed.Agents[0].Servers.Count | Should -BeGreaterThan 0
+
+        [IO.File]::WriteAllText((Join-Path $Script:CwStateRoot 'manifest.json'), '{"servers":[]}')
+        { Get-RecordedCodexWorkspaceResult -Config $Script:CwConfig } | Should -Not -Throw
+        @(Get-RecordedCodexWorkspaceResult -Config $Script:CwConfig).Count | Should -Be 0
+    }
+
+    It 'defaults missing fields in an early workspace record instead of throwing' {
+        [IO.File]::WriteAllText((Join-Path $Script:CwStateRoot 'manifest.json'),
+            '{"codexWorkspace":{"instructions":{},"skills":[{}],"agents":[{}]}}')
+        { Get-RecordedCodexWorkspaceResult -Config $Script:CwConfig } | Should -Not -Throw
+        $got = Get-RecordedCodexWorkspaceResult -Config $Script:CwConfig
+        $got.Instruction.Sha256 | Should -Be ''
+        $got.Skills[0].Name | Should -Be ''
+        $got.Agents[0].Servers.Count | Should -Be 0
     }
 }

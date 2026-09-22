@@ -123,6 +123,25 @@ Describe 'Codex configuration' {
         $checks[0].Status | Should -Be 'fail'
     }
 
+    It 'writes the standalone Codex report with deterministic checks and observations fields' {
+        $target = Join-Path $TestDrive 'report-schema'
+        $null = New-Item -ItemType Directory $target
+        [IO.File]::WriteAllText((Join-Path $target 'config.toml'),
+            "[mcp_servers.'x64dbg-x64']`nurl = `"http://localhost:1/`"`n")
+        $server = Get-CodexFixture
+        $config = [PSCustomObject]@{ paths = @{ stateRoot = $target }; mcpServers = @($server) }
+        Mock Get-ServerCheck -ModuleName ReAgent.Codex { @() }
+
+        $null = Invoke-CodexVerification -Config $config -ServerResults @($server) `
+            -CodexPath $script:codexPath -CodexHome $target
+        $report = Get-Content -LiteralPath (Join-Path $target 'codex-verify-report.json') -Raw |
+            ConvertFrom-Json
+
+        $report.PSObject.Properties.Name | Should -Contain 'generatedAt'
+        $report.PSObject.Properties.Name | Should -Contain 'checks'
+        $report.PSObject.Properties.Name | Should -Contain 'attendedObservations'
+    }
+
     It 'passes registration when every Codex-compatible server is present and enabled SSE is omitted' {
         $target = Join-Path $TestDrive 'verify-mixed-transports'
         $http = Get-CodexFixture

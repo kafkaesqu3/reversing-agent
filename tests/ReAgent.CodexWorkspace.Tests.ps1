@@ -2,6 +2,7 @@ BeforeAll {
     # Earlier suites can retain nested instances under different UNC path spellings.
     Get-Module ReAgent.CodexWorkspace -All | Remove-Module -Force
     Import-Module "$PSScriptRoot/../src/ReAgent.Common.psm1" -Force
+    Import-Module "$PSScriptRoot/../src/ReAgent.Agents.psm1" -Force
     Import-Module "$PSScriptRoot/../src/ReAgent.CodexAdapter.psm1" -Force
     Import-Module "$PSScriptRoot/../src/ReAgent.CodexWorkspace.psm1"
 
@@ -28,7 +29,7 @@ BeforeAll {
 Describe 'Install-CodexSkillDirectory' {
     BeforeEach {
         $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
-        $candidate = [pscustomobject]@{
+        $script:candidate = [pscustomobject]@{
             Name = 'crash'; Destination = (Join-Path $root 'crash'); Marker = 'codex:windbg/crash'
             Files = @(
                 [pscustomobject]@{ RelativePath = 'SKILL.md'; Bytes = [byte[]]@(65, 10) }
@@ -39,7 +40,7 @@ Describe 'Install-CodexSkillDirectory' {
     }
 
     It 'preserves unchanged tree timestamps and removes stale files on replacement' {
-        $first = Install-CodexSkillDirectory -Candidate $candidate -SkillRoot $root
+        $first = Install-CodexSkillDirectory -Candidate $script:candidate -SkillRoot $root
         $before = (Get-Item $candidate.Destination).LastWriteTimeUtc
         $again = Install-CodexSkillDirectory -Candidate $candidate -SkillRoot $root
         $again.Changed | Should -BeFalse
@@ -180,7 +181,7 @@ Describe 'New-CodexSkillCandidate validation' {
         $skill = [pscustomobject]@{ name = 'crash'; upstream = 'upstream'; enabled = $true }
         $pack = [pscustomobject]@{ namespace = 'windbg'; skills = @($skill)
             scanExceptions = @(); codexScanExceptions = @() }
-        $params = @{ Source = $source; Destination = (Join-Path $repo '.agents\skills\crash')
+        $script:params = @{ Source = $source; Destination = (Join-Path $repo '.agents\skills\crash')
             Pack = $pack; Skill = $skill; Catalog = Get-ToolCatalog
             Config = [pscustomobject]@{ mcpServers = @(
                 [pscustomobject]@{ name = 'mcp-windbg'; transport = 'http' },
@@ -190,7 +191,7 @@ Describe 'New-CodexSkillCandidate validation' {
     It 'rejects unwaived Claude residue in quoted history' {
         '> TodoWrite' | Set-Content (Join-Path $source 'reference.md')
         { New-CodexSkillCandidate @params } | Should -Throw '*C4-TODOWRITE*reference.md*'
-        Test-Path (Split-Path $params.Destination) | Should -BeFalse
+        Test-Path (Split-Path $script:params.Destination) | Should -BeFalse
     }
 
     It 'uses the exact configured exception for real upstream dispatch history' {
@@ -420,5 +421,143 @@ Describe 'Write-CodexInstruction' {
         $result.Path | Should -Be $path
         $result.Status | Should -Be 'what-if'
         $result.Changed | Should -BeTrue
+    }
+}
+
+Describe 'Codex custom-agent generation' {
+    BeforeEach {
+        $script:CodexAgentRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        $script:CodexAgentTemplates = Join-Path $script:CodexAgentRoot 'templates'
+        $null = New-Item -ItemType Directory -Path (Join-Path $script:CodexAgentTemplates 'agents') -Force
+        $instructionDir = Join-Path $script:CodexAgentTemplates 'instructions'
+        $null = New-Item -ItemType Directory -Path $instructionDir -Force
+        '# fixture contract' | Set-Content (Join-Path $instructionDir 'common.md.template')
+        '# fixture Codex' | Set-Content (Join-Path $instructionDir 'codex.md.template')
+        @(
+            @{ Name = 'static-analyst'; Description = 'Static "analysis"'; Body = 'Static body with """ safely embedded.{{CLIENT_LIMITATIONS}}' }
+            @{ Name = 'verifier'; Description = 'Independent verifier'; Body = 'Verifier body.{{CLIENT_LIMITATIONS}}' }
+            @{ Name = 'dynamic-analyst'; Description = 'Disabled dynamic role'; Body = 'Dynamic body.{{CLIENT_LIMITATIONS}}' }
+        ) | ForEach-Object {
+            "---`nname: $($_.Name)`ndescription: $($_.Description)`ntools: ignored`n---`n$($_.Body)" |
+                Set-Content (Join-Path $script:CodexAgentTemplates "agents\$($_.Name).md.template")
+        }
+        $script:CodexAgentConfig = [pscustomobject]@{
+            paths = [pscustomobject]@{ agentRoot = $script:CodexAgentRoot }
+            mcpServers = @(
+                [pscustomobject]@{ name = 'x64dbg-x64'; transport = 'http'; auth = 'bearer-generated' }
+                [pscustomobject]@{ name = 'x64dbg-x32'; transport = 'http'; auth = 'bearer-generated' }
+                [pscustomobject]@{ name = 'binaryninja'; transport = 'http'; auth = 'bearer-generated' }
+                [pscustomobject]@{ name = 'pyghidra-mcp'; transport = 'http'; auth = 'none' }
+                [pscustomobject]@{ name = 'mcp-windbg'; transport = 'stdio'; auth = 'none' }
+                [pscustomobject]@{ name = 'pdbsql'; transport = 'sse'; auth = 'none' }
+                [pscustomobject]@{ name = 'ghidrasql'; transport = 'sse'; auth = 'none' }
+                [pscustomobject]@{ name = 'ghidramcp'; transport = 'sse'; auth = 'bearer-generated' }
+            )
+            agents = @(
+                [pscustomobject]@{ name = 'static-analyst'; enabled = $true; level = 'write'
+                    targetServers = @('pyghidra-mcp', 'pdbsql', 'ghidrasql'); builtinTools = @('Read') }
+                [pscustomobject]@{ name = 'verifier'; enabled = $true; level = 'read'
+                    targetServers = @('pyghidra-mcp', 'mcp-windbg', 'pdbsql'); builtinTools = @('Read') }
+                [pscustomobject]@{ name = 'dynamic-analyst'; enabled = $false; level = 'write'
+                    targetServers = @('mcp-windbg'); builtinTools = @('Read'); disabledReason = 'deferred' }
+            )
+        }
+        $script:CodexAgentCatalog = [pscustomobject]@{ servers = [pscustomobject]@{
+                'pyghidra-mcp' = [pscustomobject]@{ tools = @('read_binary', 'rename_function', 'delete_binary'); classification = [pscustomobject]@{
+                        classifiedTools = @('read_binary', 'rename_function', 'delete_binary'); write = @('rename_function'); destructive = @('delete_binary') } }
+                'mcp-windbg' = [pscustomobject]@{ tools = @('list_dumps', 'write_memory'); classification = [pscustomobject]@{
+                        classifiedTools = @('list_dumps', 'write_memory'); write = @('write_memory'); destructive = @() } }
+            } }
+        $command = [pscustomobject]@{ Executable = 'C:\\tools\\windbg.exe'; Arguments = @('--mcp'); Env = @{} }
+        $script:CodexAgentResults = @(
+            [pscustomobject]@{ Name = 'x64dbg-x64'; Installed = $true; Transport = 'http'; Bind = '127.0.0.1'; Port = 9100; Path = '/mcp'; Auth = 'bearer-generated' }
+            [pscustomobject]@{ Name = 'x64dbg-x32'; Installed = $true; Transport = 'http'; Bind = '127.0.0.1'; Port = 9101; Path = '/mcp'; Auth = 'bearer-generated' }
+            [pscustomobject]@{ Name = 'binaryninja'; Installed = $true; Transport = 'http'; Bind = '127.0.0.1'; Port = 9102; Path = '/mcp'; Auth = 'bearer-generated' }
+            [pscustomobject]@{ Name = 'pyghidra-mcp'; Installed = $true; Transport = 'http'; Bind = '127.0.0.1'; Port = 9103; Path = '/mcp'; Auth = 'none' }
+            [pscustomobject]@{ Name = 'mcp-windbg'; Installed = $true; Transport = 'stdio'; Command = $command; Auth = 'none' }
+            [pscustomobject]@{ Name = 'pdbsql'; Installed = $true; Transport = 'sse'; Auth = 'none' }
+            [pscustomobject]@{ Name = 'ghidrasql'; Installed = $true; Transport = 'sse'; Auth = 'none' }
+            [pscustomobject]@{ Name = 'ghidramcp'; Installed = $true; Transport = 'sse'; Auth = 'bearer-generated' }
+        )
+    }
+
+    It 'renders complete token-free specialist TOML with exact grants and omissions' {
+        $result = Write-CodexAgentDefinition -Config $script:CodexAgentConfig -Catalog $script:CodexAgentCatalog `
+            -ServerResults $script:CodexAgentResults -TemplateRoot $script:CodexAgentTemplates
+        $static = Get-Content -LiteralPath (Join-Path $script:CodexAgentRoot '.codex\agents\static-analyst.toml') -Raw
+        $verifier = Get-Content -LiteralPath (Join-Path $script:CodexAgentRoot '.codex\agents\verifier.toml') -Raw
+
+        foreach ($text in @($static, $verifier)) {
+            $text | Should -Match '^# re-agent-managed: codex-custom-agent v1'
+            foreach ($field in @('name', 'description', 'developer_instructions', 'sandbox_mode')) {
+                $text | Should -Match ('(?m)^' + $field + ' = "')
+            }
+            @([regex]::Matches($text, '(?m)^\[mcp_servers\."[^"]+"\]$')).Count | Should -Be 5
+            $text | Should -Not -Match '(?i)bearer|authorization|fixture-sensitive-token'
+            $text | Should -Not -Match '(?m)^\[mcp_servers\."(?:pdbsql|ghidrasql|ghidramcp)"\]$'
+        }
+        $static | Should -Match '(?m)^sandbox_mode = "workspace-write"$'
+        $verifier | Should -Match '(?m)^sandbox_mode = "read-only"$'
+        $static | Should -Match 'mcp_servers\."pyghidra-mcp"\][\s\S]*enabled_tools = \["read_binary","rename_function"\]'
+        $static | Should -Not -Match 'delete_binary'
+        $verifier | Should -Match 'mcp_servers\."pyghidra-mcp"\][\s\S]*enabled_tools = \["read_binary"\]'
+        $verifier | Should -Match 'mcp_servers\."mcp-windbg"\][\s\S]*enabled_tools = \["list_dumps"\]'
+        @($result.OmittedServers | Where-Object { $_.Reason -eq 'legacy SSE is unsupported by Codex' }).Count |
+            Should -Be 3
+        Test-Path (Join-Path $script:CodexAgentRoot '.codex\agents\dynamic-analyst.toml') | Should -BeFalse
+    }
+
+    It 'removes only a marked disabled agent and refuses an unmarked name collision' {
+        $dir = Join-Path $script:CodexAgentRoot '.codex\agents'
+        $null = New-Item -ItemType Directory -Path $dir -Force
+        '# re-agent-managed: codex-custom-agent v1' | Set-Content (Join-Path $dir 'dynamic-analyst.toml')
+        'operator owned' | Set-Content (Join-Path $dir 'static-analyst.toml')
+
+        { Write-CodexAgentDefinition -Config $script:CodexAgentConfig -Catalog $script:CodexAgentCatalog `
+                -ServerResults $script:CodexAgentResults -TemplateRoot $script:CodexAgentTemplates } |
+            Should -Throw '*unmanaged*'
+
+        Test-Path (Join-Path $dir 'dynamic-analyst.toml') | Should -BeFalse
+        Get-Content -LiteralPath (Join-Path $dir 'static-analyst.toml') -Raw | Should -Match '^operator owned'
+    }
+
+    It 'refuses an authenticated compatible target before writing any agent file' {
+        $script:CodexAgentConfig.agents[0].targetServers += 'x64dbg-x64'
+
+        { Write-CodexAgentDefinition -Config $script:CodexAgentConfig -Catalog $script:CodexAgentCatalog `
+                -ServerResults $script:CodexAgentResults -TemplateRoot $script:CodexAgentTemplates } |
+            Should -Throw '*Authenticated*cannot be enabled*'
+
+        Test-Path (Join-Path $script:CodexAgentRoot '.codex\agents\static-analyst.toml') | Should -BeFalse
+    }
+
+    It 'composes omission records when the configuration includes a disabled agent' {
+        $workspace = Write-CodexWorkspaceConfiguration -Config $script:CodexAgentConfig `
+            -Catalog $script:CodexAgentCatalog -ServerResults $script:CodexAgentResults `
+            -TemplateRoot $script:CodexAgentTemplates
+
+        $workspace.Agents.Count | Should -Be 3
+        @($workspace.OmittedServers).Count | Should -Be 3
+        @(@($workspace.Agents | Where-Object { -not $_.Enabled })[0].OmittedServers).Count |
+            Should -Be 0
+    }
+
+    It 'enables a compatible target even when its derived catalog grant is empty' {
+        $script:CodexAgentConfig.mcpServers += [pscustomobject]@{
+            name = 'catalog-empty'; transport = 'http'; auth = 'none'
+        }
+        $script:CodexAgentConfig.agents[0].targetServers += 'catalog-empty'
+        $script:CodexAgentResults += [pscustomobject]@{
+            Name = 'catalog-empty'; Installed = $true; Transport = 'http'
+            Bind = '127.0.0.1'; Port = 9104; Path = '/mcp'; Auth = 'none'
+        }
+
+        $toml = New-CodexAgentToml -Agent $script:CodexAgentConfig.agents[0] `
+            -Catalog $script:CodexAgentCatalog -Config $script:CodexAgentConfig `
+            -ServerResults $script:CodexAgentResults -TemplateRoot $script:CodexAgentTemplates
+
+        $toml | Should -Match (
+            '(?m)^\[mcp_servers\."catalog-empty"\]\r?$\r?\n' +
+            'enabled = true\r?\nenabled_tools = \[\]')
     }
 }

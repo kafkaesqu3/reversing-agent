@@ -1,7 +1,7 @@
 Set-StrictMode -Version Latest
 
 Import-Module (Join-Path $PSScriptRoot 'ReAgent.Agents.psm1') -Force
-Import-Module (Join-Path $PSScriptRoot 'ReAgent.CodexWorkspace.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'ReAgent.CodexWorkspace.psm1')
 
 # Depends on functions exported by sibling modules, which Install-REAgent.ps1
 # imports into the session before this one: Write-ReAgentLog (Common),
@@ -285,6 +285,8 @@ function Write-AgentDefinition {
         $text = $text.Replace('{{SERVERS}}', (Get-AgentServerProse -Agent $agent -Grant $grant))
         $text = $text.Replace('{{LIMITATIONS}}',
             (Get-AgentLimitationProse -Agent $agent -Catalog $Catalog))
+        $text = $text.Replace('{{CLIENT_LIMITATIONS}}',
+            (Get-ClaudeAgentClientLimitation -Agent $agent))
 
         $changed = Write-FileIfChanged -Path $path -Text $text
         $results += [PSCustomObject]@{ Name = $agent.name; Enabled = $true
@@ -292,6 +294,34 @@ function Write-AgentDefinition {
             ToolCount = $grant.Tools.Count; Path = $path; Changed = $changed }
     }
     return $results
+}
+
+function Get-AgentTemplateBody {
+    <#
+    .SYNOPSIS
+        Returns a specialist template body after strict YAML frontmatter removal.
+    .PARAMETER Path
+        Specialist template path.
+    .OUTPUTS
+        [string] The template body with its frontmatter removed.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Path)
+
+    $text = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
+    $match = [regex]::Match($text, '\A---\r?\n[\s\S]*?\r?\n---\r?\n(?<body>[\s\S]*)\z')
+    if (-not $match.Success) { throw "Agent template '$Path' has no strict frontmatter." }
+    return $match.Groups['body'].Value
+}
+
+function Get-ClaudeAgentClientLimitation {
+    param([Parameter(Mandatory)][object]$Agent)
+
+    if ($Agent.name -ne 'static-analyst') { return '' }
+    return ('You have no `Bash`. The `ghidra-iterative-re` skill''s `scripts/msvc_demangle` ' +
+        "therefore cannot run in this context $([char]0x2014) demangle by hand, " +
+        'or ask the main session to run it. ' +
+        'Do not report the skill as broken; it is a deliberate consequence of your tool grant.')
 }
 
 function Get-AgentServerProse {
@@ -359,4 +389,4 @@ function Get-AgentLimitationProse {
 
 Export-ModuleMember -Function New-McpServerEntry, New-McpJsonObject, `
     New-ClaudeSettingsObject, Write-JsonFile, Write-AgentConfiguration, `
-    Write-AgentDefinition, Get-AgentServerProse, Get-AgentLimitationProse
+    Write-AgentDefinition, Get-AgentTemplateBody, Get-AgentServerProse, Get-AgentLimitationProse

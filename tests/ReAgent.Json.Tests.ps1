@@ -43,6 +43,34 @@ Describe 'Merge-JsonFile' {
             Should -BeGreaterThan 0
     }
 
+    It 'does not create a backup when every requested value is already current' {
+        $p = Join-Path $TestDrive 'current.json'
+        '{ "ui.mcp.enabled": true }' | Set-Content $p
+
+        Merge-JsonFile -Path $p -Values @{ 'ui.mcp.enabled' = $true }
+
+        @(Get-ChildItem $TestDrive -Filter 'current.json.bak-*').Count | Should -Be 0
+    }
+
+    It 'does not rewrite an already-current settings file' {
+        $p = Join-Path $TestDrive 'current-time.json'
+        '{ "ui.mcp.enabled": true }' | Set-Content $p
+        $before = (Get-Item -LiteralPath $p).LastWriteTimeUtc
+        Start-Sleep -Milliseconds 1100
+
+        Merge-JsonFile -Path $p -Values @{ 'ui.mcp.enabled' = $true }
+
+        (Get-Item -LiteralPath $p).LastWriteTimeUtc | Should -Be $before
+    }
+
+    It 'does not create parent directories under WhatIf' {
+        $p = Join-Path $TestDrive 'absent\settings.json'
+
+        Merge-JsonFile -Path $p -Values @{ 'ui.mcp.enabled' = $true } -WhatIf
+
+        Test-Path -LiteralPath (Split-Path -Parent $p) | Should -BeFalse
+    }
+
     It 'handles an empty file, which Binary Ninja ships as {}' {
         $p = Join-Path $TestDrive 'empty.json'
         '' | Set-Content $p

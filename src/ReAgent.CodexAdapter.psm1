@@ -1,5 +1,31 @@
 Set-StrictMode -Version Latest
 
+$script:CodexMcpReferencePattern = '(?<![A-Za-z0-9_])mcp__([A-Za-z0-9][A-Za-z0-9_-]*?)__' +
+    '([A-Za-z0-9][A-Za-z0-9_-]*|\*)?(?![A-Za-z0-9_-])'
+
+function Get-CodexMcpReference {
+    <#
+    .SYNOPSIS
+        Extracts exact structured Codex MCP references from generated text.
+    .PARAMETER Text
+        Text that may contain structured MCP references.
+    .EXAMPLE
+        Get-CodexMcpReference -Text 'mcp__mcp_windbg__list_dumps'
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Text)
+
+    foreach ($match in [regex]::Matches($Text, $script:CodexMcpReferencePattern)) {
+        $prefix = $Text.Substring(0, $match.Index)
+        [pscustomobject]@{
+            Reference = $match.Value
+            Namespace = $match.Groups[1].Value
+            Tool = $match.Groups[2].Value
+            Line = 1 + @([regex]::Matches($prefix, "`n")).Count
+        }
+    }
+}
+
 function ConvertTo-CodexMcpNamespace {
     <#
     .SYNOPSIS
@@ -72,8 +98,6 @@ function ConvertTo-CodexMcpReference {
     $referenceMap = $NamespaceMap
     $referenceCatalog = $Catalog
     $supportedServers = $CompatibleServers
-    $pattern = '(?<![A-Za-z0-9_])mcp__([A-Za-z0-9][A-Za-z0-9_-]*?)__' +
-        '([A-Za-z0-9][A-Za-z0-9_-]*|\*)?(?![A-Za-z0-9_-])'
     $evaluator = [Text.RegularExpressions.MatchEvaluator]{
         param($match)
         $server = $match.Groups[1].Value
@@ -91,7 +115,7 @@ function ConvertTo-CodexMcpReference {
         }
         return 'mcp__' + $referenceMap[$server] + '__' + $tool
     }
-    return [regex]::Replace($Text, $pattern, $evaluator)
+    return [regex]::Replace($Text, $script:CodexMcpReferencePattern, $evaluator)
 }
 
 function ConvertTo-CodexTomlValue {
@@ -400,6 +424,7 @@ function New-CodexAgentServerTable {
 }
 
 Export-ModuleMember -Function ConvertTo-CodexMcpNamespace, Get-CodexMcpNamespaceMap, `
+    Get-CodexMcpReference, `
     ConvertTo-CodexMcpReference, ConvertTo-CodexFrontmatter, ConvertTo-CodexWorkflowText, `
     ConvertTo-CodexTomlValue, ConvertTo-CodexTomlArray, New-CodexAgentServerTable, `
     ConvertTo-CodexSkillText

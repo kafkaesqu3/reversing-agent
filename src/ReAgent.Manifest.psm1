@@ -26,7 +26,7 @@ function Get-SkillPackProp {
     param([object]$Obj, [Parameter(Mandatory)][string]$Name)
 
     if ($null -eq $Obj) { return '' }
-    if ($Obj.PSObject.Properties.Name -notcontains $Name) { return '' }
+    if ($null -eq $Obj.PSObject.Properties[$Name]) { return '' }
     return $Obj.$Name
 }
 
@@ -182,6 +182,133 @@ function Get-ManifestSkillEntry {
     return @($Entry.skillEntries)
 }
 
+function Get-CodexManifestAgentState {
+    param([Parameter(Mandatory)][object]$Record)
+
+    $servers = @()
+    $toolCount = 0
+    $sandboxMode = ''
+    if ($null -ne $Record.PSObject.Properties['Path'] -and
+        (Test-Path -LiteralPath $Record.Path -PathType Leaf)) {
+        $text = [IO.File]::ReadAllText($Record.Path, [Text.Encoding]::UTF8)
+        $sandbox = [regex]::Match($text, '(?m)^sandbox_mode\s*=\s*"(?<value>[^"]+)"\s*$')
+        if ($sandbox.Success) { $sandboxMode = $sandbox.Groups['value'].Value }
+        $tables = [regex]::Matches($text,
+            '(?ms)^\[mcp_servers\."(?<name>[^"]+)"\]\s*(?<body>.*?)(?=^\[|\z)')
+        foreach ($table in $tables) {
+            $body = $table.Groups['body'].Value
+            if ($body -notmatch '(?m)^enabled\s*=\s*true\s*$') { continue }
+            $servers += $table.Groups['name'].Value
+            $tools = [regex]::Match($body, '(?ms)^enabled_tools\s*=\s*\[(?<items>.*?)\]')
+            if ($tools.Success) {
+                $toolCount += [regex]::Matches($tools.Groups['items'].Value, '"(?:[^"\\]|\\.)*"').Count
+            }
+        }
+    }
+    return [pscustomobject]@{ Servers = @($servers | Sort-Object); ToolCount = $toolCount
+        SandboxMode = $sandboxMode }
+}
+
+function ConvertTo-CodexWorkspaceManifestRecord {
+    <# .SYNOPSIS Projects generated Codex workspace output into a secret-free manifest record. #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][hashtable]$Context)
+
+    $config = $Context.Config
+    $workspace = if ($Context.ContainsKey('CodexWorkspaceConfiguration')) {
+        $Context.CodexWorkspaceConfiguration
+    } else { $null }
+    $instruction = $null
+    $workspaceInstruction = if ($workspace -and
+        $null -ne $workspace.PSObject.Properties['Instruction']) {
+        $workspace.Instruction
+    } else { $null }
+    if ($workspaceInstruction) {
+        $instruction = [ordered]@{ path = $workspaceInstruction.Path; status = 'installed'
+            sha256 = $workspaceInstruction.Sha256 }
+    }
+
+    $skills = @()
+    if ($Context.ContainsKey('CodexSkillResults')) {
+        $skills = @($Context.CodexSkillResults | ForEach-Object {
+                if ($null -ne $_.PSObject.Properties['CodexSkillRecords']) {
+                    @($_.CodexSkillRecords)
+                }
+            } | ForEach-Object {
+                [ordered]@{ name = $_.Name; status = 'installed'; sha256 = $_.Sha256 }
+            } | Sort-Object name)
+    }
+
+    $agents = @()
+    $omissions = @{}
+    if ($workspace -and $null -ne $workspace.PSObject.Properties['Agents']) {
+        foreach ($record in @($workspace.Agents | Where-Object Enabled | Sort-Object Name)) {
+            $state = Get-CodexManifestAgentState -Record $record
+            $agentConfig = @($config.agents | Where-Object { $_.name -eq $record.Name }) |
+                Select-Object -First 1
+            $level = if ($agentConfig) { [string]$agentConfig.level } else { '' }
+            $agents += [ordered]@{ name = $record.Name; status = 'installed'; level = $level
+                servers = @($state.Servers); toolCount = $state.ToolCount
+                sandbox_mode = $state.SandboxMode }
+            if ($null -ne $record.PSObject.Properties['OmittedServers']) {
+                foreach ($omitted in @($record.OmittedServers)) {
+                    $omissions[[string]$omitted.Name] = [string]$omitted.Reason
+                }
+            }
+        }
+    }
+    $omittedServers = @($omissions.Keys | Sort-Object | ForEach-Object {
+            [ordered]@{ name = $_; reason = $omissions[$_] }
+        })
+    return [ordered]@{ root = $config.paths.agentRoot; instructions = $instruction
+        skills = $skills; agents = $agents; omittedServers = $omittedServers }
+}
+
+function Get-RecordedCodexWorkspaceResult {
+    <# .SYNOPSIS Replays optional Codex workspace records from a prior manifest. #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Config,
+        [string]$ManifestName = 'manifest.json'
+    )
+
+    $path = Join-Path $Config.paths.stateRoot $ManifestName
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return @() }
+    try { $manifest = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json }
+    catch { return @() }
+    if ($null -eq $manifest.PSObject.Properties['codexWorkspace']) { return @() }
+    $record = $manifest.codexWorkspace
+    if ($null -eq $record) { return @() }
+    $instruction = if ($null -ne $record.PSObject.Properties['instructions']) {
+        $entry = $record.instructions
+        if ($entry) { [pscustomobject]@{
+                Path = Get-SkillPackProp -Obj $entry -Name 'path'
+                Status = Get-SkillPackProp -Obj $entry -Name 'status'
+                Sha256 = Get-SkillPackProp -Obj $entry -Name 'sha256'; Changed = $false } }
+    }
+    $skills = if ($null -ne $record.PSObject.Properties['skills']) {
+        @($record.skills | ForEach-Object { [pscustomobject]@{
+                    Name = Get-SkillPackProp -Obj $_ -Name 'name'
+                    Status = Get-SkillPackProp -Obj $_ -Name 'status'
+                    Sha256 = Get-SkillPackProp -Obj $_ -Name 'sha256'; Changed = $false } })
+    } else { @() }
+    $agents = if ($null -ne $record.PSObject.Properties['agents']) {
+        @($record.agents | ForEach-Object {
+                $servers = if ($null -ne $_.PSObject.Properties['servers']) { @($_.servers) } else { @() }
+                $tools = if ($null -ne $_.PSObject.Properties['toolCount']) { [int]$_.toolCount } else { 0 }
+                [pscustomobject]@{ Name = Get-SkillPackProp -Obj $_ -Name 'name'
+                    Status = Get-SkillPackProp -Obj $_ -Name 'status'
+                    Level = Get-SkillPackProp -Obj $_ -Name 'level'
+                    Servers = $servers; ToolCount = $tools; Changed = $false }
+            })
+    } else { @() }
+    $omitted = if ($null -ne $record.PSObject.Properties['omittedServers']) {
+        @($record.omittedServers)
+    } else { @() }
+    return [pscustomobject]@{ Instruction = $instruction; Skills = $skills
+        Agents = $agents; OmittedServers = $omitted }
+}
+
 function Write-Manifest {
     <#
     .SYNOPSIS
@@ -262,6 +389,7 @@ function Write-Manifest {
                     servers = @($_.Servers); toolCount = $_.ToolCount
                     gate = $agentGate }
             })
+        codexWorkspace = ConvertTo-CodexWorkspaceManifestRecord -Context $Context
         authExemptions = $exemptions
         manualSteps   = @(Get-ManualStep -Config $config -ServerResults $servers)
     }
@@ -476,4 +604,5 @@ function Get-RecordedAgentResult {
 
 Export-ModuleMember -Function Get-ManualStep, Write-Manifest, Get-RecordedServerResult, `
     Get-SkillPackProp, Test-SkillPackReviewGap, Get-RecordedSkillResult, `
-    ConvertTo-ManifestSkillRecord, Get-ManifestSkillEntry, Get-RecordedAgentResult
+    ConvertTo-ManifestSkillRecord, Get-ManifestSkillEntry, Get-RecordedAgentResult, `
+    ConvertTo-CodexWorkspaceManifestRecord, Get-RecordedCodexWorkspaceResult

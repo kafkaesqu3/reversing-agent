@@ -4,6 +4,17 @@
 See [CODEX.md](CODEX.md) for installation, configuration, and verification commands.
 The Claude MVP history below remains the baseline.
 
+**Codex parity acceptance was completed on 2026-09-21.** Codex CLI is `0.154.0`. With Pester
+5.7.1, the complete suite reported 781 passed and 0 failed (781 total), and whole-repository
+PSScriptAnalyzer reported 0 findings. Two consecutive elevated reconciliations kept Binary Ninja
+settings current without creating a backup (23 before, 23 after each run), and C0-C8 passed. A
+fresh attended verification later passed `claude mcp list`, every enabled live MCP call, C0-C8,
+and all L0-L5 observations. x32dbg remained closed and correctly reported `not-testable`. The
+project contract is `AGENTS.md`,
+`.agents/skills`, and `.codex/agents`; launch with
+`codex --strict-config -C C:\re\agent` after trusting the project. Legacy SSE remains Claude-only.
+The L0-L5 checklist and complete-transport/credential boundary are in [CODEX.md](CODEX.md).
+
 **Goal:** one script, run on an existing FLARE VM, that leaves you with Claude Code able to drive **x64dbg, Ghidra, Binary Ninja, and WinDbg** through MCP.
 
 Nothing else. `../../BLUEPRINT.md`, `../../DEPLOYMENT_PLAN.md`, and `../../GAP_ANALYSIS.md` describe the full system; this file tracks only the first shippable slice of it and what still blocks that slice.

@@ -1,9 +1,162 @@
 BeforeAll {
     $Script:Root = Join-Path $PSScriptRoot '..'
-    foreach ($m in @('Common', 'Config', 'Discovery', 'Prereqs', 'Symbols',
+    $moduleNames = @('Common', 'Config', 'Discovery', 'Prereqs', 'Symbols',
             'Tokens', 'Json', 'Servers', 'Generate', 'Skills', 'Verify', 'Manifest', 'Agents',
-            'Codex')) {
+            'CodexAdapter', 'CodexWorkspace', 'CodexVerify', 'Codex')
+    foreach ($m in $moduleNames) {
         Import-Module (Join-Path $Script:Root "src\ReAgent.$m.psm1") -Force
+    }
+    foreach ($m in $moduleNames) {
+        Import-Module (Join-Path $Script:Root "src\ReAgent.$m.psm1") -Global
+    }
+
+    function Write-IntegrationUtf8File {
+        param([string]$Path, [string]$Text)
+        $null = New-Item -ItemType Directory -Path (Split-Path $Path -Parent) -Force
+        [IO.File]::WriteAllText($Path, $Text, [Text.UTF8Encoding]::new($false))
+    }
+
+    function New-CodexInstallerFixture {
+        # Test fixture: creates only isolated files beneath Pester TestDrive.
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+            'PSUseShouldProcessForStateChangingFunctions', '')]
+        param()
+        $root = Join-Path $TestDrive ('codex-installer-' + [guid]::NewGuid().ToString('N'))
+        $repo = Join-Path $root 'repo'; $templates = Join-Path $repo 'templates'
+        Write-IntegrationUtf8File (Join-Path $templates 'instructions/common.md.template') '# Common'
+        Write-IntegrationUtf8File (Join-Path $templates 'instructions/codex.md.template') 'Use Codex.'
+        Write-IntegrationUtf8File (Join-Path $templates 'agents/verifier.md.template') (
+            "---`nname: verifier`ndescription: Verify`n---`nVerify independently.{{SERVERS}}{{LIMITATIONS}}{{CLIENT_LIMITATIONS}}")
+        Write-IntegrationUtf8File (Join-Path $repo 'vendor/skills/fixture/alpha/SKILL.md') (
+            "---`nname: alpha`ndescription: fixture`n---`nUse evidence first.`n")
+        $config = [pscustomobject]@{
+            paths = [pscustomobject]@{ agentRoot = (Join-Path $root 'agent'); stateRoot = $root }
+            mcpServers = @([pscustomobject]@{ name = 'pyghidra-mcp'; enabled = $true
+                    transport = 'http'; auth = 'none' })
+            skills = @([pscustomobject]@{ namespace = 'fixture'; enabled = $true
+                    targetServers = @('pyghidra-mcp'); codexScanExceptions = @()
+                    source = [pscustomobject]@{ repo = 'fixture'; commit = 'abc'; treeSha256 = 'abc' }
+                    review = [pscustomobject]@{ reviewedBy = 'test'; reviewedAt = '2026-01-01' }
+                    skills = @([pscustomobject]@{ name = 'alpha'; upstream = 'alpha'; enabled = $true }) })
+            agents = @([pscustomobject]@{ name = 'verifier'; enabled = $true; level = 'read'
+                    targetServers = @('pyghidra-mcp'); builtinTools = @('Read') })
+        }
+        $catalog = [pscustomobject]@{ servers = [pscustomobject]@{
+                'pyghidra-mcp' = [pscustomobject]@{ tools = @('read_binary')
+                    classification = [pscustomobject]@{ classifiedTools = @('read_binary')
+                        write = @(); destructive = @() } } } }
+        $servers = @([pscustomobject]@{ Name = 'pyghidra-mcp'; Installed = $true
+                Transport = 'http'; Bind = '127.0.0.1'; Port = 9103; Path = '/mcp'; Auth = 'none' })
+        [pscustomobject]@{ Root = $root; Repo = $repo; Templates = $templates; Config = $config
+            Catalog = $catalog; ServerResults = $servers }
+    }
+
+    function Install-IntegrationCodexSkill {
+        param($Fixture)
+        foreach ($root in @('.claude/skills', '.agents/skills')) {
+            $path = Join-Path $Fixture.Config.paths.agentRoot ($root + '/alpha')
+            if (-not (Test-Path $path)) {
+                Write-IntegrationUtf8File (Join-Path $path 'SKILL.md') (
+                    "---`nname: alpha`ndescription: fixture`n---`nUse evidence first.`n")
+                $marker = if ($root -like '.agents*') { 'codex:fixture/alpha' } else { 'fixture/alpha' }
+                Write-IntegrationUtf8File (Join-Path $path '.re-agent-managed') $marker
+            }
+        }
+    }
+
+    function New-EntryPointFixture {
+        # Test fixture: creates only isolated files beneath Pester TestDrive.
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+            'PSUseShouldProcessForStateChangingFunctions', '')]
+        param()
+        $root = Join-Path $TestDrive ('entry-point-' + [guid]::NewGuid().ToString('N'))
+        $config = Get-Content (Join-Path $Script:Root 're-agent.config.json') -Raw |
+            ConvertFrom-Json
+        $config.paths.toolRoot = Join-Path $root 'tools'
+        $config.paths.agentRoot = Join-Path $root 'agent'
+        $config.paths.stateRoot = Join-Path $root 'state'
+        $config.paths.symbolCache = Join-Path $root 'symbols'
+        # Phases 4 and 5 intentionally run without the VM-only phase 3. Keep
+        # the shipped packs and agents, but remove unavailable MCP transports
+        # from this entry-point fixture so VerifyOnly can reach C0/C1/C5.
+        foreach ($server in $config.mcpServers) { $server.enabled = $false }
+        foreach ($agent in $config.agents) { $agent.targetServers = @() }
+        $configPath = Join-Path $root 're-agent.config.json'
+        Write-IntegrationUtf8File $configPath ($config | ConvertTo-Json -Depth 100)
+        [pscustomobject]@{ Root = $root; ConfigPath = $configPath
+            Config = $config; CodexHome = (Join-Path $root 'codex-home') }
+    }
+
+    function Invoke-InstallerEntryPoint {
+        # Test fixture: forwards WhatIf to a disposable child-process fixture.
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSupportsShouldProcess', '')]
+        param(
+            [Parameter(Mandatory)]$Fixture,
+            [int[]]$Phases,
+            [switch]$Force,
+            [switch]$VerifyOnly,
+            [switch]$WhatIf
+        )
+
+        $quote = { param([string]$Value) "'" + $Value.Replace("'", "''") + "'" }
+        $command = "& $(& $quote (Join-Path $Script:Root 'Install-REAgent.ps1')) " +
+            "-ConfigPath $(& $quote $Fixture.ConfigPath) -CodexHome $(& $quote $Fixture.CodexHome)"
+        if ($Phases) { $command += ' -Phases ' + ($Phases -join ',') }
+        if ($Force) { $command += ' -Force' }
+        if ($VerifyOnly) { $command += ' -VerifyOnly' }
+        if ($WhatIf) { $command += ' -WhatIf' }
+        $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+        $stdout = Join-Path $Fixture.Root 'stdout.txt'
+        $stderr = Join-Path $Fixture.Root 'stderr.txt'
+        $argumentLine = "-NoProfile -ExecutionPolicy Bypass -EncodedCommand $encoded"
+        $process = Start-Process -FilePath powershell.exe -ArgumentList $argumentLine -Wait -PassThru `
+            -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+        $output = @(Get-Content -LiteralPath $stdout -ErrorAction SilentlyContinue) +
+            @(Get-Content -LiteralPath (Join-Path $Fixture.Config.paths.stateRoot 'install.log') `
+                -ErrorAction SilentlyContinue)
+        [pscustomobject]@{ ExitCode = $process.ExitCode; Output = $output }
+    }
+
+    function Initialize-StandaloneManifest {
+        param($Fixture)
+        $null = New-Item -ItemType Directory -Path $Fixture.Config.paths.stateRoot -Force
+        $server = $Fixture.Config.mcpServers | Where-Object name -eq 'pyghidra-mcp' |
+            Select-Object -First 1
+        $manifest = [ordered]@{ servers = @([ordered]@{ name = $server.name
+                    status = 'not-installed'; version = ''; reason = 'fixture has no services' }) }
+        Write-IntegrationUtf8File (Join-Path $Fixture.Config.paths.stateRoot 'codex-manifest.json') `
+            ($manifest | ConvertTo-Json -Depth 8)
+    }
+
+    function Initialize-StandaloneClaudeSkill {
+        param($Fixture)
+        foreach ($pack in @($Fixture.Config.skills | Where-Object enabled)) {
+            foreach ($skill in @($pack.skills | Where-Object enabled)) {
+                $root = Join-Path $Fixture.Config.paths.agentRoot ('.claude\skills\' + $skill.name)
+                Write-IntegrationUtf8File (Join-Path $root '.re-agent-managed') `
+                    "$($pack.namespace)/$($skill.upstream)"
+                Write-IntegrationUtf8File (Join-Path $root 'operator-sentinel.txt') 'unchanged'
+            }
+        }
+    }
+
+    function Invoke-StandaloneEntryPoint {
+        param([Parameter(Mandatory)]$Fixture, [switch]$ConfigureOnly, [switch]$VerifyOnly)
+
+        $quote = { param([string]$Value) "'" + $Value.Replace("'", "''") + "'" }
+        $command = "& $(& $quote (Join-Path $Script:Root 'install-codex.ps1')) " +
+            "-ConfigPath $(& $quote $Fixture.ConfigPath) -CodexHome $(& $quote $Fixture.CodexHome)"
+        if ($ConfigureOnly) { $command += ' -ConfigureOnly' }
+        if ($VerifyOnly) { $command += ' -VerifyOnly' }
+        $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+        $stdout = Join-Path $Fixture.Root ('standalone-' + [guid]::NewGuid().ToString('N') + '.out')
+        $stderr = $stdout + '.err'
+        $process = Start-Process powershell.exe -ArgumentList (
+            "-NoProfile -ExecutionPolicy Bypass -EncodedCommand $encoded") -Wait -PassThru `
+            -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+        $output = @(Get-Content $stdout -ErrorAction SilentlyContinue) +
+            @(Get-Content $stderr -ErrorAction SilentlyContinue)
+        [pscustomobject]@{ ExitCode = $process.ExitCode; Output = $output }
     }
 }
 
@@ -32,6 +185,16 @@ Describe 'the entry point script' {
         } else {
             throw 'Could not find the module list in the entry point.'
         }
+    }
+
+    It 'imports the Codex workspace modules in dependency order' {
+        $text = Get-Content (Join-Path $Script:Root 'Install-REAgent.ps1') -Raw
+        $modules = [regex]::Match($text, '(?s)\$moduleNames = @\((?<names>.*?)\)').Groups['names'].Value
+        foreach ($name in @('CodexAdapter', 'CodexWorkspace', 'CodexVerify')) {
+            $modules | Should -Match ("'" + $name + "'")
+        }
+        $modules.IndexOf("'CodexAdapter'") | Should -BeLessThan $modules.IndexOf("'CodexWorkspace'")
+        $modules.IndexOf("'CodexWorkspace'") | Should -BeLessThan $modules.IndexOf("'CodexVerify'")
     }
 
     It 'binds every argument it passes to a phase function' {
@@ -68,12 +231,152 @@ Describe 'the entry point script' {
         foreach ($fn in @('Get-HostInventory', 'Assert-Preflight', 'Test-PrereqSatisfied',
                 'Install-Prereq', 'Test-SymbolsReady', 'Install-Symbols',
                 'Install-AllMcpServer', 'Write-AgentConfiguration', 'Write-CodexConfiguration',
-                'Install-AllSkill', 'Get-CodexRegistrationCheck', 'Invoke-Verification',
+                'Write-CodexWorkspaceConfiguration', 'Install-AllSkill',
+                'Get-CodexRegistrationCheck', 'Get-CodexWorkspaceCheck', 'Invoke-Verification',
                 'Assert-VerificationPassed',
                 'Write-Manifest')) {
             $text | Should -BeLike "*$fn*"
             Get-Command $fn -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
         }
+    }
+
+    It 'wires Codex workspace generation, skills, and verification into phases 4 through 6' {
+        $text = Get-Content (Join-Path $Script:Root 'Install-REAgent.ps1') -Raw
+        $text | Should -Match 'CodexWorkspaceConfiguration\s*='
+        $text | Should -Match 'Write-CodexWorkspaceConfiguration'
+        $text | Should -Match 'CodexSkillResults\s*='
+        $text | Should -Match 'CodexSkillRoot\s+\(Join-Path \$c\.Config\.paths\.agentRoot'
+        $text | Should -Match 'CodexReconciliationRecords\s*='
+        $text | Should -Match '-ReconciliationRecords \$c\.CodexReconciliationRecords'
+        $text | Should -Match 'Get-CodexWorkspaceCheck'
+        $text | Should -Match 'Assert-VerificationPassed\s+-Checks \$c\.VerifyResults'
+    }
+}
+
+Describe 'Codex installer workspace integration' {
+    It 'runs phases 4 through 6 with equal skills and passing Codex checks' {
+        $f = New-EntryPointFixture
+        $run = Invoke-InstallerEntryPoint -Fixture $f -Phases 4,5,6 -Force
+        # This host has no Claude CLI, so the shared Claude checks fail. The
+        # entry point still reaches Phase 6 and must report every Codex check
+        # as passing before its nonzero process exit.
+        $run.ExitCode | Should -Not -Be 0 -Because ($run.Output -join "`n")
+        ($run.Output -join "`n") | Should -Match 'Phase 4 \(AgentConfig\): ok' -Because ($run.Output -join "`n")
+        ($run.Output -join "`n") | Should -Match 'Phase 5 \(Skills\): ok' -Because ($run.Output -join "`n")
+        foreach ($check in @('codex registration', 'C0 Codex instructions', 'C1 Codex skill set',
+                'C2 Codex skill identity', 'C3 Codex MCP references', 'C4 Codex residue',
+                'C5 Codex agent identity', 'C6 Codex agent grant', 'C7 Codex secret isolation',
+                'C8 Codex ownership')) {
+            ($run.Output -join "`n") | Should -Match ("\[pass\] " + [regex]::Escape($check))
+        }
+        $claude = @(Get-ChildItem (Join-Path $f.Config.paths.agentRoot '.claude\skills') -Directory |
+                ForEach-Object Name | Sort-Object)
+        $codex = @(Get-ChildItem (Join-Path $f.Config.paths.agentRoot '.agents\skills') -Directory |
+                ForEach-Object Name | Sort-Object)
+        $claude | Should -Be $codex
+    }
+
+    It 'preserves Codex bytes and timestamps on a second entry point run' {
+        $f = New-EntryPointFixture
+        (Invoke-InstallerEntryPoint -Fixture $f -Phases 4,5,6 -Force).ExitCode | Should -Not -Be 0
+        $files = @(Get-ChildItem $f.Config.paths.agentRoot -Recurse -File | Where-Object {
+                $_.FullName -match '\\(AGENTS\.md|SKILL\.md|.*\.toml)$' })
+        $before = @($files | ForEach-Object { $_.FullName + '|' + $_.LastWriteTimeUtc.Ticks + '|' +
+                [Convert]::ToBase64String([IO.File]::ReadAllBytes($_.FullName)) })
+        $run = Invoke-InstallerEntryPoint -Fixture $f -Phases 4,5,6 -Force
+        $run.ExitCode | Should -Not -Be 0 -Because ($run.Output -join "`n")
+        $after = @(Get-ChildItem $f.Config.paths.agentRoot -Recurse -File | Where-Object {
+                $_.FullName -match '\\(AGENTS\.md|SKILL\.md|.*\.toml)$' } | ForEach-Object {
+                $_.FullName + '|' + $_.LastWriteTimeUtc.Ticks + '|' +
+                [Convert]::ToBase64String([IO.File]::ReadAllBytes($_.FullName)) })
+        $after | Should -Be $before
+    }
+
+    It 'leaves both Codex roots absent when the entry point runs under WhatIf' {
+        $f = New-EntryPointFixture
+        $run = Invoke-InstallerEntryPoint -Fixture $f -Phases 4,5 -Force -WhatIf
+        $run.ExitCode | Should -Be 0 -Because ($run.Output -join "`n")
+        Test-Path (Join-Path $f.Config.paths.agentRoot 'AGENTS.md') | Should -BeFalse
+        Test-Path (Join-Path $f.Config.paths.agentRoot '.agents\skills') | Should -BeFalse
+    }
+
+    It 'returns a VerifyOnly failure when a Codex candidate is missing' {
+        foreach ($kind in @('instruction', 'skill', 'agent')) {
+            $f = New-EntryPointFixture
+            (Invoke-InstallerEntryPoint -Fixture $f -Phases 4,5,7 -Force).ExitCode | Should -Be 0
+            $missing = switch ($kind) {
+                'instruction' { 'AGENTS.md' }
+                'skill' {
+                    $skill = Get-ChildItem (Join-Path $f.Config.paths.agentRoot '.agents\skills') `
+                        -Directory | Select-Object -First 1
+                    Join-Path '.agents\skills' $skill.Name
+                }
+                default { '.codex\agents\verifier.toml' }
+            }
+            Remove-Item (Join-Path $f.Config.paths.agentRoot $missing) -Recurse -Force
+            $run = Invoke-InstallerEntryPoint -Fixture $f -VerifyOnly
+            $run.ExitCode | Should -Not -Be 0
+            ($run.Output -join "`n") | Should -Match 'C[015] Codex'
+        }
+    }
+}
+
+Describe 'Standalone Codex installer workspace parity' {
+    It 'ConfigureOnly reconciles registration and every project artifact without Claude or services' {
+        $f = New-EntryPointFixture
+        Initialize-StandaloneManifest -Fixture $f
+        Initialize-StandaloneClaudeSkill -Fixture $f
+        Write-IntegrationUtf8File (Join-Path $f.CodexHome 'config.toml') "unrelated = 'keep'`n"
+        Write-IntegrationUtf8File (Join-Path $f.Config.paths.agentRoot '.agents\skills\operator\note.txt') 'keep'
+        Write-IntegrationUtf8File (Join-Path $f.Config.paths.agentRoot '.codex\agents\operator.toml') 'keep'
+
+        $run = Invoke-StandaloneEntryPoint -Fixture $f -ConfigureOnly
+        $run.ExitCode | Should -Be 0 -Because ($run.Output -join "`n")
+        Test-Path (Join-Path $f.Config.paths.agentRoot 'AGENTS.md') | Should -BeTrue
+        Test-Path (Join-Path $f.Config.paths.agentRoot '.agents\skills') | Should -BeTrue
+        Test-Path (Join-Path $f.Config.paths.agentRoot '.codex\agents\verifier.toml') | Should -BeTrue
+        @(Get-ChildItem (Join-Path $f.Config.paths.agentRoot '.claude') -Recurse -File |
+                Where-Object Name -eq 'SKILL.md').Count | Should -Be 0
+        @(Get-ChildItem (Join-Path $f.Config.paths.agentRoot '.claude') -Recurse -File |
+                Where-Object Name -eq 'operator-sentinel.txt').Count | Should -BeGreaterThan 0
+        Test-Path $f.Config.paths.toolRoot | Should -BeFalse
+        (Get-Content (Join-Path $f.CodexHome 'config.toml') -Raw) | Should -Match 'unrelated'
+        Test-Path (Join-Path $f.Config.paths.agentRoot '.agents\skills\operator\note.txt') |
+            Should -BeTrue
+        Test-Path (Join-Path $f.Config.paths.agentRoot '.codex\agents\operator.toml') |
+            Should -BeTrue
+        $manifest = Get-Content (Join-Path $f.Config.paths.stateRoot 'codex-manifest.json') -Raw |
+            ConvertFrom-Json
+        $manifest.codexWorkspace.instructions.status | Should -Be 'installed'
+    }
+
+    It 'VerifyOnly invokes no writer and fails when one managed artifact is missing' {
+        $f = New-EntryPointFixture
+        Initialize-StandaloneManifest -Fixture $f
+        Initialize-StandaloneClaudeSkill -Fixture $f
+        (Invoke-StandaloneEntryPoint -Fixture $f -ConfigureOnly).ExitCode | Should -Be 0
+        Remove-Item (Join-Path $f.Config.paths.agentRoot 'AGENTS.md') -Force
+        $before = (Get-Content (Join-Path $f.CodexHome 'config.toml') -Raw)
+        $run = Invoke-StandaloneEntryPoint -Fixture $f -VerifyOnly
+        $run.ExitCode | Should -Not -Be 0
+        ($run.Output -join "`n") | Should -Match 'C0 Codex instructions'
+        Test-Path (Join-Path $f.Config.paths.agentRoot 'AGENTS.md') | Should -BeFalse
+        (Get-Content (Join-Path $f.CodexHome 'config.toml') -Raw) | Should -BeExactly $before
+    }
+
+    It 'VerifyOnly fails a verifier write grant without repairing it' {
+        $f = New-EntryPointFixture
+        Initialize-StandaloneManifest -Fixture $f
+        Initialize-StandaloneClaudeSkill -Fixture $f
+        (Invoke-StandaloneEntryPoint -Fixture $f -ConfigureOnly).ExitCode | Should -Be 0
+        $path = Join-Path $f.Config.paths.agentRoot '.codex\agents\verifier.toml'
+        $text = (Get-Content $path -Raw).Replace('sandbox_mode = "read-only"',
+            'sandbox_mode = "workspace-write"')
+        Write-IntegrationUtf8File $path $text
+        $run = Invoke-StandaloneEntryPoint -Fixture $f -VerifyOnly
+        $run.ExitCode | Should -Not -Be 0
+        ($run.Output -join "`n") | Should -Match 'C6 Codex agent grant'
+        (Get-Content $path -Raw) | Should -Match 'sandbox_mode = "workspace-write"'
     }
 }
 

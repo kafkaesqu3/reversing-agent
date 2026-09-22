@@ -354,6 +354,50 @@ Describe 'Write-AgentDefinition' {
         Test-Path (Join-Path $script:Dir 'verifier.md') | Should -BeFalse
     }
 }
+
+Describe 'Claude specialist limitation rendering' {
+    It 'keeps the static analyst Bash limitation when rendering the Claude view' {
+        $root = Join-Path $TestDrive 'claude-specialist'
+        $templateRoot = Join-Path $root 'templates'
+        $agentDir = Join-Path $root 'agents'
+        $null = New-Item -ItemType Directory -Path (Join-Path $templateRoot 'agents') -Force
+        @'
+---
+name: static-analyst
+description: fixture
+tools: {{TOOLS}}
+---
+{{CLIENT_LIMITATIONS}}
+'@ | Set-Content (Join-Path $templateRoot 'agents\static-analyst.md.template')
+        $config = [pscustomobject]@{ agents = @([pscustomobject]@{
+                    name = 'static-analyst'; enabled = $true; level = 'write'
+                    targetServers = @(); builtinTools = @(); model = 'inherit'; disabledReason = '' }) }
+        $catalog = [pscustomobject]@{ servers = [pscustomobject]@{} }
+
+        Write-AgentDefinition -Config $config -Catalog $catalog -RepoRoot $root -AgentDir $agentDir |
+            Out-Null
+
+        (Get-Content -LiteralPath (Join-Path $agentDir 'static-analyst.md') -Raw) |
+            Should -Match 'You have no'
+    }
+}
+
+Describe 'Get-AgentTemplateBody' {
+    It 'removes strict multiline frontmatter without altering the body' {
+        $template = Join-Path $TestDrive 'body.template'
+        @'
+---
+name: fixture
+description: multiline frontmatter
+tools: Read
+---
+Body line one.
+Body line two.
+'@ | Set-Content -LiteralPath $template
+
+        Get-AgentTemplateBody -Path $template | Should -Match '^Body line one\.'
+    }
+}
 Describe 'Claude instruction agents section' {
     BeforeAll {
         $templateRoot = Join-Path (Join-Path $PSScriptRoot '..') 'templates'

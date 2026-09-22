@@ -24,8 +24,9 @@ Stamp every finding with `static-analyst` and the tool calls behind it.
 
 ## Limitations
 
+No Bash tool is available, so `msvc_demangle` cannot run. Report this limitation instead of
+attempting a shell workaround.
+
 {{LIMITATIONS}}
 
-You have no `Bash`. The `ghidra-iterative-re` skill's `scripts/msvc_demangle` therefore cannot run
-in this context — demangle by hand, or ask the main session to run it. Do not report the skill as
-broken; it is a deliberate consequence of your tool grant.
+{{CLIENT_LIMITATIONS}}

@@ -1676,7 +1676,8 @@ function Invoke-Verification {
     .PARAMETER Attended
         Include tier-2 checks.
     .PARAMETER AdditionalChecks
-        Checks from another configured agent client, such as Codex registration.
+        Checks from another configured agent client, such as Codex registration
+        and its project-workspace C0-C8 verification group.
     .EXAMPLE
         Invoke-Verification -Config $c.Config -ServerResults $c.ServerResults -Inventory $c.Inventory
     #>
