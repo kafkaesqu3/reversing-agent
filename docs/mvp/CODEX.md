@@ -1,16 +1,18 @@
 # Codex installer
 
-Run from the repository directory in Windows PowerShell 5.1 or later:
+The main installer configures Claude Code and Codex together. Run it from the repository
+directory in Windows PowerShell 5.1 or later:
 
 ```powershell
-.\install-codex.ps1
+.\Install-REAgent.ps1
 ```
 
 A full run requires an elevated shell **under the analyst's Windows account** on
-the FLARE VM. Codex CLI must already be installed and available as `codex`.
-Authentication to Codex remains interactive. Claude Code is not required.
+the FLARE VM. Both Claude Code and Codex CLI must already be installed.
+Authentication remains interactive. The standalone `install-codex.ps1` does not
+require Claude Code.
 
-If the original MVP installer has already set up the services, use:
+To reconcile Codex by itself after the services are installed, use:
 
 ```powershell
 .\install-codex.ps1 -ConfigureOnly
@@ -44,11 +46,13 @@ or reinstall services. `-Attended` includes the debugger and Binary Ninja checks
 | `binaryninja` | HTTP, `http://127.0.0.1:24642/mcp` | Open a binary; run **Plugins > MCP > Start Server** each session |
 | `pyghidra-mcp` | HTTP, `http://127.0.0.1:8762/mcp` | Existing logon Scheduled Task |
 | `mcp-windbg` | stdio, discovered venv and explicit `cdb.exe` path | Codex starts it on demand |
+| `pdbsql` | Legacy SSE, omitted | Installed for Claude; Codex requires a supported transport or bridge |
+| `ghidrasql` | Legacy SSE, omitted | Installed for Claude; Codex requires a supported transport or bridge |
 | `ghidramcp` | Legacy SSE, omitted | Disabled in the MVP; version 1.4 targets Ghidra 11.3.2 and is incompatible with the measured 12.1.2 host |
 
-Enabling legacy `ghidramcp` is rejected with an explanation. It would require a
-compatible extension and a stdio bridge; treating its SSE URL as streamable HTTP
-would produce a broken entry. Keep the working `pyghidra-mcp` default.
+Legacy SSE servers are skipped with an explanation while compatible servers are still
+reconciled. They require Streamable HTTP support or a stdio bridge; treating an SSE URL as
+Streamable HTTP would produce a broken entry. Keep the working `pyghidra-mcp` default.
 
 The installer uses the existing token files for Binary Ninja and both x64dbg
 entries. Tokens are stored in Codex's `http_headers` settings and are never printed
@@ -70,8 +74,8 @@ copy before replacement, and malformed configuration leaves the original intact.
 Changed files receive a `config.toml.<unique-id>.bak` backup. An unchanged run leaves
 the configuration and backups untouched.
 
-The existing Claude installer and its generated files remain available. This script
-reuses its service setup but does not install the Claude-specific skills.
+The standalone script reuses the main installer's service setup but does not install the
+Claude-specific skills. `Install-REAgent.ps1` remains the normal combined entry point.
 
 Reports live under `paths.stateRoot` from the JSON configuration:
 

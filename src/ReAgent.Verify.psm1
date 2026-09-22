@@ -1675,6 +1675,8 @@ function Invoke-Verification {
         Repository root holding vendor\skills, for the skill adaptation gate.
     .PARAMETER Attended
         Include tier-2 checks.
+    .PARAMETER AdditionalChecks
+        Checks from another configured agent client, such as Codex registration.
     .EXAMPLE
         Invoke-Verification -Config $c.Config -ServerResults $c.ServerResults -Inventory $c.Inventory
     #>
@@ -1686,7 +1688,8 @@ function Invoke-Verification {
         [AllowEmptyCollection()][array]$AgentResults = @(),
         [object]$Inventory = $null,
         [string]$RepoRoot = '',
-        [switch]$Attended
+        [switch]$Attended,
+        [AllowEmptyCollection()][array]$AdditionalChecks = @()
     )
 
     $checks = @()
@@ -1695,6 +1698,7 @@ function Invoke-Verification {
     $checks += Test-ClaudeCli -ClaudePath $claude
     $checks += Test-ClaudeMcpList -ClaudePath $claude -WorkingDirectory $Config.paths.agentRoot
     $checks += Test-GeneratedConfig -Config $Config
+    $checks += $AdditionalChecks
 
     $checks += Get-ServerCheck -Config $Config -ServerResults $ServerResults -Attended:$Attended
     $checks += Get-SkillCheck -Config $Config -SkillResults $SkillResults -RepoRoot $RepoRoot `
@@ -1725,6 +1729,22 @@ function Invoke-Verification {
     return $checks
 }
 
+function Assert-VerificationPassed {
+    <# .SYNOPSIS
+        Throws when one or more verification checks failed.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][array]$Checks
+    )
+
+    $failed = @($Checks | Where-Object { $_.Status -eq 'fail' })
+    if ($failed.Count -gt 0) {
+        $names = @($failed | ForEach-Object { $_.Name }) -join ', '
+        throw "$($failed.Count) verification check(s) failed: $names"
+    }
+}
+
 Export-ModuleMember -Function New-CheckResult, Invoke-McpProbe, Test-ClaudeCli, `
     Test-ClaudeMcpList, Test-GeneratedConfig, Test-ServerNotTestable, `
     Get-ProbeScriptPath, Test-PyghidraLive, Test-WindbgLive, Invoke-Verification, `
@@ -1735,4 +1755,5 @@ Export-ModuleMember -Function New-CheckResult, Invoke-McpProbe, Test-ClaudeCli, 
     Get-PackPinCheck, `
     Get-PackAdaptationCheck, Get-PackDriftCheck, Get-SkillCheck, `
     ConvertFrom-CatalogServerMap, Update-CatalogServerEntry, Save-ToolCatalog, `
-    Invoke-AgentVerification, Get-AgentCheck, Test-ReadOnlyLaunchCheck, Get-SqlCheck
+    Invoke-AgentVerification, Get-AgentCheck, Test-ReadOnlyLaunchCheck, Get-SqlCheck, `
+    Assert-VerificationPassed

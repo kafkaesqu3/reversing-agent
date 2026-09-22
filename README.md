@@ -1,6 +1,6 @@
 # REVERSING_AGENT
 
-Wires Claude Code (and, optionally, Codex) to a reverse-engineering toolchain on an existing
+Wires Claude Code and Codex to a reverse-engineering toolchain on an existing
 FLARE VM via MCP: x64dbg, Ghidra, Binary Ninja, WinDbg, and a SQL query layer over Ghidra/PDB
 symbols. One script inventories the host, installs only what's missing, and generates all agent
 configuration from `re-agent.config.json` — idempotent, so a second run changes nothing.
@@ -16,8 +16,9 @@ it does not assume a clean baseline) leaves you with:
 
 1. `claude --version` and `claude doctor` succeeding.
 2. `claude mcp list` showing every enabled server connected.
-3. Each server answering a real tool call against a known test binary.
-4. A `manifest.json` recording every component, version, source, and hash installed.
+3. Codex reading every installed MCP server whose transport it supports.
+4. Each server answering a real tool call against a known test binary.
+5. A `manifest.json` recording every component, version, source, and hash installed.
 
 ## MCP servers
 
@@ -40,9 +41,13 @@ it does not assume a clean baseline) leaves you with:
 # Verify only, including tier-2 checks that need GUI tools open
 .\Install-REAgent.ps1 -VerifyOnly -Attended
 
-# Also wire the same servers into Codex
-.\install-codex.ps1
+# Reconcile Codex by itself, without running the combined installer
+.\install-codex.ps1 -ConfigureOnly
 ```
+
+Codex supports the STDIO and Streamable HTTP entries. The legacy SSE-only `pdbsql`,
+`ghidrasql`, and disabled `ghidramcp` entries remain available to Claude and are reported as
+skipped for Codex until they gain a supported transport or bridge.
 
 RUN ONLY ON A VIRTUAL MACHINE. Requires Administrator for a full install.
 

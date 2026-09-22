@@ -452,6 +452,14 @@
       ],
       "skills": [
         { "upstream": "architectural-analysis", "name": "arch-architectural-analysis", "enabled": true }
+      ],
+      "codexScanExceptions": [
+        {
+          "skill": "architectural-analysis",
+          "file": "references/subagent-dispatch.md",
+          "ruleId": "C4-AGENT-TOOL",
+          "justification": "The fenced parallel-call transcript preserves quoted upstream history using Agent tool blocks; Codex workflow instructions outside that historical example use Codex subagent collaboration."
+        }
       ]
     }
   ]

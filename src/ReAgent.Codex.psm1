@@ -90,8 +90,16 @@ function Write-CodexConfiguration {
     )
     $path = Join-Path $CodexHome 'config.toml'
     if (-not $PSCmdlet.ShouldProcess($path, 'Merge RE Lab MCP servers')) { return }
+    $unsupported = @($ServerResults | Where-Object {
+        $_.Installed -and $_.Transport -notin @('http', 'stdio')
+    })
+    foreach ($result in $unsupported | Where-Object { $_.Enabled }) {
+        Write-ReAgentLog -Level WARN -Message (
+            "Skipping '$($result.Name)' in Codex: legacy $($result.Transport.ToUpperInvariant()) " +
+            'is not a supported Codex MCP transport. The installed server remains available to Claude.')
+    }
     $tables = @($ServerResults | Where-Object {
-        $_.Installed -and -not ($_.Transport -eq 'sse' -and -not $_.Enabled)
+        $_.Installed -and $_.Transport -in @('http', 'stdio')
     } | Sort-Object Name | ForEach-Object {
         New-CodexServerTable -Result $_ -TokenRoot $TokenRoot
     })
@@ -155,24 +163,25 @@ function Write-CodexConfiguration {
     }
 }
 
-function Invoke-CodexVerification {
+function Get-CodexRegistrationCheck {
     <# .SYNOPSIS
-        Checks Codex registration and performs the existing real MCP tool probes.
+        Checks every Codex-compatible enabled server registration.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][object]$Config,
         [Parameter(Mandatory)][AllowEmptyCollection()][array]$ServerResults,
         [Parameter(Mandatory)][string]$CodexPath,
-        [Parameter(Mandatory)][string]$CodexHome,
-        [switch]$Attended
+        [Parameter(Mandatory)][string]$CodexHome
     )
-    $checks = @()
     try {
         $invoke = @{ CodexPath = $CodexPath; CodexHome = $CodexHome }
         $null = Invoke-CodexConfigurationCommand @invoke -Arguments @('--version')
         $registered = Invoke-CodexConfigurationCommand @invoke -Arguments @('mcp', 'list', '--json') | ConvertFrom-Json
-        foreach ($server in $Config.mcpServers | Where-Object { $_.enabled }) {
+        $compatible = @($Config.mcpServers | Where-Object {
+            $_.enabled -and $_.transport -in @('http', 'stdio')
+        })
+        foreach ($server in $compatible) {
             $entry = @($registered | Where-Object { $_.name -eq $server.name -and $_.enabled })
             if ($entry.Count -ne 1) { throw "Enabled server '$($server.name)' is missing from Codex configuration." }
             $transport = $entry[0].transport
@@ -210,10 +219,41 @@ function Invoke-CodexVerification {
                 }
             }
         }
-        $checks += New-CheckResult -Name 'codex registration' -Status pass -Detail 'Codex reads all enabled server entries. Live connectivity is checked separately.'
+        $unsupportedServers = @($Config.mcpServers | Where-Object {
+            $_.enabled -and $_.transport -notin @('http', 'stdio')
+        })
+        foreach ($server in $unsupportedServers) {
+            $stale = @($registered | Where-Object { $_.name -eq $server.name -and $_.enabled })
+            if ($stale.Count -gt 0) {
+                throw "Unsupported legacy SSE server '$($server.name)' is still enabled in Codex configuration. Re-run the installer."
+            }
+        }
+        $unsupported = @($unsupportedServers | Select-Object -ExpandProperty name | Sort-Object)
+        $detail = "Codex reads all $($compatible.Count) enabled compatible server entries."
+        if ($unsupported.Count) {
+            $detail += " Skipped unsupported legacy SSE: $($unsupported -join ', ')."
+        }
+        return New-CheckResult -Name 'codex registration' -Status pass -Detail $detail
     } catch {
-        $checks += New-CheckResult -Name 'codex registration' -Status fail -Detail $_.Exception.Message
+        return New-CheckResult -Name 'codex registration' -Status fail -Detail $_.Exception.Message
     }
+}
+
+function Invoke-CodexVerification {
+    <# .SYNOPSIS
+        Checks Codex registration and performs the existing real MCP tool probes.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Config,
+        [Parameter(Mandatory)][AllowEmptyCollection()][array]$ServerResults,
+        [Parameter(Mandatory)][string]$CodexPath,
+        [Parameter(Mandatory)][string]$CodexHome,
+        [switch]$Attended
+    )
+    $checks = @()
+    $checks += Get-CodexRegistrationCheck -Config $Config -ServerResults $ServerResults `
+        -CodexPath $CodexPath -CodexHome $CodexHome
     $checks += Get-ServerCheck -Config $Config -ServerResults $ServerResults -Attended:$Attended
     $null = New-Item -ItemType Directory -Path $Config.paths.stateRoot -Force
     $reportPath = Join-Path $Config.paths.stateRoot 'codex-verify-report.json'
@@ -225,4 +265,5 @@ function Invoke-CodexVerification {
 }
 
 Export-ModuleMember -Function Invoke-CodexConfigurationCommand, ConvertTo-CodexTomlString, `
-    New-CodexServerTable, Write-CodexConfiguration, Invoke-CodexVerification
+    New-CodexServerTable, Write-CodexConfiguration, Get-CodexRegistrationCheck, `
+    Invoke-CodexVerification

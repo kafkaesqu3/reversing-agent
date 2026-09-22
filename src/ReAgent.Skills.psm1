@@ -1,5 +1,7 @@
 Set-StrictMode -Version Latest
 
+Import-Module (Join-Path $PSScriptRoot 'ReAgent.CodexWorkspace.psm1')
+
 # Depends on functions exported by sibling modules, which Install-REAgent.ps1
 # imports into the session before this one: Write-ReAgentLog,
 # Write-FileIfChanged, Assert-FileHash (Common).
@@ -87,6 +89,9 @@ function New-SkillResult {
         Status     = $Status
         Installed  = ($Status -eq 'installed' -or $Status -eq 'skipped')
         SkillNames = @($SkillNames)
+        CodexSkillNames = @()
+        CodexSkillRecords = @()
+        PreserveSkillNames = @()
         SkillEntries = @(Get-SkillEntry -Pack $Pack)
         Repo       = $Pack.source.repo
         Commit     = $Pack.source.commit
@@ -692,6 +697,38 @@ function Test-SkillAdaptation {
     return $findings
 }
 
+function Get-SkillOwnershipMap {
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][array]$Packs,
+        [ValidateSet('Claude', 'Codex')][string]$Client = 'Claude'
+    )
+
+    $markers = @{}
+    $prefix = if ($Client -eq 'Codex') { 'codex:' } else { '' }
+    foreach ($pack in $Packs) {
+        foreach ($skill in $pack.skills) {
+            $markers[$skill.name] = "$prefix$($pack.namespace)/$($skill.upstream)"
+        }
+    }
+    return $markers
+}
+
+function Test-SkillOwnershipMarker {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [ValidateSet('Claude', 'Codex')][string]$Client = 'Claude',
+        [string]$ExpectedMarker = ''
+    )
+
+    if ($ExpectedMarker) {
+        return Test-ReAgentOwnershipMarker -Path $Path -Marker $ExpectedMarker
+    }
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
+    $prefix = if ($Client -eq 'Codex') { 'codex:' } else { '' }
+    $pattern = '\A' + $prefix + '[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*(\r?\n)?\z'
+    return (Get-Content -LiteralPath $Path -Raw -Encoding UTF8) -cmatch $pattern
+}
+
 function Remove-OrphanedSkill {
     <#
     .SYNOPSIS
@@ -704,29 +741,39 @@ function Remove-OrphanedSkill {
         The .claude\skills directory.
     .PARAMETER Wanted
         Skill directory names that should survive.
+    .PARAMETER Client
+        Client whose ownership marker syntax applies to this root.
+    .PARAMETER ExpectedMarkers
+        Exact identities for configured names, including disabled skills.
     .EXAMPLE
         Remove-OrphanedSkill -SkillRoot $r -Wanted @('windbg-crash')
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory)][string]$SkillRoot,
-        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Wanted
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Wanted,
+        [ValidateSet('Claude', 'Codex')][string]$Client = 'Claude',
+        [hashtable]$ExpectedMarkers = @{}
     )
 
     if (-not (Test-Path -LiteralPath $SkillRoot)) { return 0 }
 
     $removed = 0
     foreach ($d in (Get-ChildItem -LiteralPath $SkillRoot -Directory)) {
+        if ($d.Name -match '^\.re-agent-(stage|previous)-.+-[a-f0-9]{32}$') { continue }
         if ($Wanted -contains $d.Name) { continue }
         $marker = Join-Path $d.FullName '.re-agent-managed'
-        if (-not (Test-Path -LiteralPath $marker)) {
+        if (-not (Test-SkillOwnershipMarker -Path $marker -Client $Client `
+                -ExpectedMarker ([string]$ExpectedMarkers[$d.Name]))) {
             Write-ReAgentLog -Level WARN -Message (
-                "Leaving '$($d.Name)' alone: it carries no re-agent marker, so it is not " +
+                "Leaving '$($d.Name)' alone: its ownership marker does not match, so it is not " +
                 'ours to remove.')
             continue
         }
         if ($PSCmdlet.ShouldProcess($d.FullName, 'Remove orphaned skill')) {
-            Remove-Item -LiteralPath $d.FullName -Recurse -Force
+            $safe = Assert-SkillTreePath -Root $SkillRoot -Path $d.FullName
+            Assert-SkillCleanupTree -Directory $safe -SkillRoot $SkillRoot
+            Remove-Item -LiteralPath $safe -Recurse -Force
             Write-ReAgentLog -Level INFO -Message "Removed orphaned skill '$($d.Name)'."
             $removed++
         }
@@ -756,24 +803,42 @@ function Remove-PackSkill {
         This pack's own skill directory names.
     .PARAMETER Reason
         Why they are going, recorded verbatim on the WARN line.
+    .PARAMETER ExpectedMarkers
+        Exact client and pack ownership markers for every removable name.
     .EXAMPLE
         Remove-PackSkill -SkillRoot $skillRoot -Names $wanted `
-            -Reason 'its pack now fails the security scan'
+            -Reason 'its pack now fails the security scan' -ExpectedMarkers $markers
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory)][string]$SkillRoot,
         [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Names,
-        [Parameter(Mandatory)][string]$Reason
+        [Parameter(Mandatory)][string]$Reason,
+        [Parameter(Mandatory)][hashtable]$ExpectedMarkers
     )
 
     foreach ($n in $Names) {
         $d = Join-Path $SkillRoot $n
-        if (-not (Test-Path -LiteralPath (Join-Path $d '.re-agent-managed'))) { continue }
+        if (-not $ExpectedMarkers.ContainsKey($n)) { continue }
+        if (-not (Test-SkillOwnershipMarker -Path (Join-Path $d '.re-agent-managed') `
+                -ExpectedMarker $ExpectedMarkers[$n])) { continue }
         if ($PSCmdlet.ShouldProcess($d, "Remove skill: $Reason")) {
-            Remove-Item -LiteralPath $d -Recurse -Force
+            $safe = Assert-SkillTreePath -Root $SkillRoot -Path $d
+            Assert-SkillCleanupTree -Directory $safe -SkillRoot $SkillRoot
+            Remove-Item -LiteralPath $safe -Recurse -Force
             Write-ReAgentLog -Level WARN -Message "Removed '$n': $Reason."
         }
+    }
+}
+
+function Assert-SkillCleanupTree {
+    param(
+        [Parameter(Mandatory)][string]$Directory,
+        [Parameter(Mandatory)][string]$SkillRoot
+    )
+
+    foreach ($item in Get-ChildItem -LiteralPath $Directory -Recurse -Force) {
+        $null = Assert-SkillTreePath -Root $SkillRoot -Path $item.FullName
     }
 }
 
@@ -805,9 +870,9 @@ function Write-SkillPackFile {
     .SYNOPSIS
         Copies one skill's files into place and writes its management marker.
     .DESCRIPTION
-        Every file is routed through Write-FileIfChanged, so a second
-        identical run touches nothing on disk and LastWriteTimeUtc holds
-        still. The marker is written last: it is what lets Remove-OrphanedSkill
+        Files are compared and copied as bytes, so scripts and binary assets
+        remain identical and a second run preserves LastWriteTimeUtc.
+        The marker is written last: it is what lets Remove-OrphanedSkill
         later tell an installed skill apart from an operator's own
         hand-written directory.
     .PARAMETER PackRoot
@@ -824,7 +889,7 @@ function Write-SkillPackFile {
         Write-SkillPackFile -PackRoot $packRoot -SkillRoot $skillRoot `
             -Namespace 'windbg' -Skill $skill
     #>
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory)][string]$PackRoot,
         [Parameter(Mandatory)][string]$SkillRoot,
@@ -835,14 +900,28 @@ function Write-SkillPackFile {
     $src = Join-Path $PackRoot $Skill.name
     $dst = Join-Path $SkillRoot $Skill.name
 
+    $null = Assert-SkillTreePath -Root $SkillRoot -Path $dst
+    $marker = Join-Path $dst '.re-agent-managed'
+    if ((Test-Path -LiteralPath $dst) -and
+        -not (Test-ReAgentOwnershipMarker -Path $marker -Marker "$Namespace/$($Skill.upstream)")) {
+        throw "Refusing to replace unmanaged skill '$dst'."
+    }
+    if (-not $PSCmdlet.ShouldProcess($dst, 'Copy reviewed Claude skill bytes')) { return $false }
+
     $wrote = $false
-    foreach ($f in (Get-ChildItem -LiteralPath $src -Recurse -File)) {
+    foreach ($f in (Get-ChildItem -LiteralPath $src -Recurse -File -Force)) {
         $rel = $f.FullName.Substring($src.Length).TrimStart('\')
         $out = Join-Path $dst $rel
-        $text = Get-Content -LiteralPath $f.FullName -Raw -Encoding UTF8
-        if (Write-FileIfChanged -Path $out -Text $text) {
-            $wrote = $true
+        $null = Assert-SkillTreePath -Root $SkillRoot -Path $out
+        $bytes = [IO.File]::ReadAllBytes($f.FullName)
+        if (Test-Path -LiteralPath $out) {
+            $same = [Collections.StructuralComparisons]::StructuralEqualityComparer.Equals(
+                [IO.File]::ReadAllBytes($out), $bytes)
+            if ($same) { continue }
         }
+        $null = New-Item -ItemType Directory -Path (Split-Path $out) -Force
+        [IO.File]::WriteAllBytes($out, $bytes)
+        $wrote = $true
     }
     $marker = Join-Path $dst '.re-agent-managed'
     if (Write-FileIfChanged -Path $marker -Text "$Namespace/$($Skill.upstream)") {
@@ -867,6 +946,8 @@ function Install-SkillPack {
         Repository root holding vendor\skills.
     .PARAMETER Catalog
         From Get-ToolCatalog.
+    .PARAMETER CodexSkillRoot
+        Codex skill destination parent; defaults to agentRoot/.agents/skills.
     .EXAMPLE
         Install-SkillPack -Pack $p -Config $cfg -RepoRoot $r -Catalog $c
     #>
@@ -875,13 +956,18 @@ function Install-SkillPack {
         [Parameter(Mandatory)][object]$Pack,
         [Parameter(Mandatory)][object]$Config,
         [Parameter(Mandatory)][string]$RepoRoot,
-        [Parameter(Mandatory)][object]$Catalog
+        [Parameter(Mandatory)][object]$Catalog,
+        [string]$CodexSkillRoot = ''
     )
 
     $skillRoot = Join-Path $Config.paths.agentRoot '.claude\skills'
+    if (-not $CodexSkillRoot) {
+        $CodexSkillRoot = Join-Path $Config.paths.agentRoot '.agents\skills'
+    }
     $packRoot = Join-Path $RepoRoot "vendor\skills\$($Pack.namespace)"
 
-    $refusal = Get-SkillPackRefusal -Pack $Pack -SkillRoot $skillRoot -PackRoot $packRoot
+    $refusal = Get-SkillPackRefusal -Pack $Pack -SkillRoot $skillRoot -PackRoot $packRoot `
+        -CodexSkillRoot $CodexSkillRoot
     if ($refusal) { return $refusal }
 
     $enabled = @($Pack.skills | Where-Object { $_.enabled })
@@ -889,23 +975,41 @@ function Install-SkillPack {
     $gate = Test-SkillPackGate -Pack $Pack -PackRoot $packRoot -Catalog $Catalog
     if ($gate.Findings.Count -gt 0) {
         Remove-PackSkill -SkillRoot $skillRoot -Names $wanted -Confirm:$false `
-            -Reason 'its pack now fails the security scan'
+            -Reason 'its pack now fails the security scan' `
+            -ExpectedMarkers (Get-SkillOwnershipMap -Packs @($Pack))
         return New-SkillResult -Pack $Pack -Status 'failed' -Findings $gate.Findings `
             -Reason $gate.Summary
     }
 
-    # Not '$wrote = $wrote -or (...)': -or short-circuits, so once one skill reports a
-    # write the rest of the pack is never written at all.
-    $wrote = $false
-    foreach ($skill in $enabled) {
-        if (Write-SkillPackFile -PackRoot $packRoot -SkillRoot $skillRoot `
-                -Namespace $Pack.namespace -Skill $skill) {
-            $wrote = $true
-        }
+    try {
+        $candidates = @($enabled | ForEach-Object {
+            New-CodexSkillCandidate -Source (Join-Path $packRoot $_.name) `
+                -Destination (Join-Path $CodexSkillRoot $_.name) -Pack $Pack -Skill $_ `
+                -Catalog $Catalog -Config $Config
+        })
+    } catch {
+        $failure = New-SkillResult -Pack $Pack -Status 'failed' -Reason $_.Exception.Message
+        $failure.PreserveSkillNames = $wanted
+        return $failure
     }
 
-    $status = if ($wrote) { 'installed' } else { 'skipped' }
-    return New-SkillResult -Pack $Pack -Status $status -SkillNames $wanted
+    $changes = @()
+    $records = @()
+    foreach ($skill in $enabled) {
+        $changes += Write-SkillPackFile -PackRoot $packRoot -SkillRoot $skillRoot `
+            -Namespace $Pack.namespace -Skill $skill -WhatIf:$WhatIfPreference
+        $candidate = $candidates | Where-Object { $_.Name -eq $skill.name }
+        $record = Install-CodexSkillDirectory -Candidate $candidate -SkillRoot $CodexSkillRoot `
+            -WhatIf:$WhatIfPreference -Confirm:$false
+        $records += $record
+        $changes += $record.Changed
+    }
+
+    $status = if ($changes -contains $true) { 'installed' } else { 'skipped' }
+    $result = New-SkillResult -Pack $Pack -Status $status -SkillNames $wanted
+    $result.CodexSkillNames = $wanted
+    $result.CodexSkillRecords = $records
+    return $result
 }
 
 function Get-SkillPackRefusal {
@@ -926,6 +1030,8 @@ function Get-SkillPackRefusal {
         The .claude\skills directory.
     .PARAMETER PackRoot
         The pack's vendored tree.
+    .PARAMETER CodexSkillRoot
+        Optional Codex root whose marked skills are also removed for a disabled pack.
     .OUTPUTS
         A New-SkillResult record, or $null when the pack should be installed.
     .EXAMPLE
@@ -935,13 +1041,21 @@ function Get-SkillPackRefusal {
     param(
         [Parameter(Mandatory)][object]$Pack,
         [Parameter(Mandatory)][string]$SkillRoot,
-        [Parameter(Mandatory)][string]$PackRoot
+        [Parameter(Mandatory)][string]$PackRoot,
+        [string]$CodexSkillRoot = ''
     )
 
     if (-not $Pack.enabled) {
+        if ($CodexSkillRoot) {
+            Remove-PackSkill -SkillRoot $CodexSkillRoot -Confirm:$false `
+                -Names @($Pack.skills | ForEach-Object { $_.name }) `
+                -Reason 'its pack is disabled' `
+                -ExpectedMarkers (Get-SkillOwnershipMap -Packs @($Pack) -Client Codex)
+        }
         Remove-PackSkill -SkillRoot $SkillRoot -Confirm:$false `
             -Names @($Pack.skills | ForEach-Object { $_.name }) `
-            -Reason 'its pack is disabled in re-agent.config.json'
+            -Reason 'its pack is disabled in re-agent.config.json' `
+            -ExpectedMarkers (Get-SkillOwnershipMap -Packs @($Pack))
         return New-SkillResult -Pack $Pack -Status 'not-installed' `
             -Reason 'disabled in re-agent.config.json'
     }
@@ -1198,33 +1312,51 @@ function Install-AllSkill {
         The parsed configuration object.
     .PARAMETER RepoRoot
         Repository root.
+    .PARAMETER CodexSkillRoot
+        Codex skill destination parent; defaults to agentRoot/.agents/skills.
     .EXAMPLE
         Install-AllSkill -Config $cfg -RepoRoot $PSScriptRoot
     #>
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory)][object]$Config,
-        [Parameter(Mandatory)][string]$RepoRoot
+        [Parameter(Mandatory)][string]$RepoRoot,
+        [string]$CodexSkillRoot = ''
     )
 
     if ($Config.PSObject.Properties.Name -notcontains 'skills') { return @() }
+    if (-not $CodexSkillRoot) {
+        $CodexSkillRoot = Join-Path $Config.paths.agentRoot '.agents\skills'
+    }
 
     $catalog = Get-ToolCatalog
     $results = @()
     foreach ($pack in $Config.skills) {
         try {
             $results += Install-SkillPack -Pack $pack -Config $Config -RepoRoot $RepoRoot `
-                -Catalog $catalog -Confirm:$false
+                -Catalog $catalog -CodexSkillRoot $CodexSkillRoot -Confirm:$false `
+                -WhatIf:$WhatIfPreference
         } catch {
-            $results += New-SkillResult -Pack $pack -Status 'failed' `
+            $failure = New-SkillResult -Pack $pack -Status 'failed' `
                 -Reason $_.Exception.Message
+            $failure.PreserveSkillNames = @($pack.skills | Where-Object enabled |
+                ForEach-Object { $_.name })
+            $results += $failure
         }
     }
 
     $wanted = @($results | Where-Object { $_.Installed } |
             ForEach-Object { $_.SkillNames } | Where-Object { $_ })
+    $preserved = @($results | ForEach-Object { $_.PreserveSkillNames } | Where-Object { $_ })
     $null = Remove-OrphanedSkill -SkillRoot (
-        Join-Path $Config.paths.agentRoot '.claude\skills') -Wanted $wanted -Confirm:$false
+        Join-Path $Config.paths.agentRoot '.claude\skills') -Wanted @($wanted + $preserved) `
+        -Confirm:$false -WhatIf:$WhatIfPreference `
+        -ExpectedMarkers (Get-SkillOwnershipMap -Packs @($Config.skills))
+    $codexWanted = @($Config.skills | Where-Object enabled | ForEach-Object { $_.skills } |
+        Where-Object enabled | ForEach-Object { $_.name })
+    $null = Remove-OrphanedSkill -SkillRoot $CodexSkillRoot -Wanted $codexWanted `
+        -Confirm:$false -WhatIf:$WhatIfPreference -Client Codex `
+        -ExpectedMarkers (Get-SkillOwnershipMap -Packs @($Config.skills) -Client Codex)
 
     foreach ($r in $results) {
         $level = if ($r.Status -eq 'failed') { 'ERROR' }

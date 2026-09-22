@@ -2,6 +2,11 @@ Set-StrictMode -Version Latest
 
 $Script:ValidKinds = @('plugin-inproc', 'venv-stdio', 'venv-http',
     'gui-builtin-http', 'gui-plugin-http', 'native-sse')
+$Script:ValidCodexScanRules = @(
+    'C4-CLAUDE-SKILL-PATH', 'C4-CLAUDE-AGENT-PATH', 'C4-CLAUDE-PRECEDENCE',
+    'C4-TODOWRITE', 'C4-TASK-TOOL', 'C4-AGENT-TOOL', 'C4-SKILL-TOOL',
+    'C4-HYPHENATED-MCP'
+)
 
 function Get-ReAgentConfig {
     <#
@@ -69,7 +74,8 @@ function Test-ReAgentConfigSchema {
         # stdio servers have no port; several legitimately carry the placeholder 0.
         if ($s.transport -ne 'stdio') {
             if ($seenPorts.ContainsKey($s.port)) {
-                throw "Port $($s.port) is assigned to both '$($seenPorts[$s.port])' and '$($s.name)'."
+                throw ("Port $($s.port) is assigned to both '$($seenPorts[$s.port])' " +
+                    "and '$($s.name)'.")
             }
             $seenPorts[$s.port] = $s.name
         }
@@ -233,6 +239,66 @@ function Test-SkillPackScanExceptionsSchema {
                 'not an exception.')
         }
     }
+    if ($Pack.PSObject.Properties.Name -notcontains 'codexScanExceptions') { return }
+    foreach ($x in @($Pack.codexScanExceptions)) {
+        Test-CodexScanException -Pack $Pack -Exception $x
+    }
+}
+
+function Test-CodexScanException {
+    <#
+    .SYNOPSIS
+        Validates one narrowly scoped Codex compatibility scan exception.
+    .PARAMETER Pack
+        Owning skill pack config entry.
+    .PARAMETER Exception
+        Codex scan exception record.
+    .EXAMPLE
+        Test-CodexScanException -Pack $pack -Exception $exception
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Pack,
+        [Parameter(Mandatory)][object]$Exception
+    )
+
+    foreach ($field in @('skill', 'file', 'ruleId', 'justification')) {
+        if ($Exception.PSObject.Properties.Name -notcontains $field) {
+            throw "Skill pack '$($Pack.namespace)' has a Codex exception missing '$field'."
+        }
+        if ([string]::IsNullOrWhiteSpace([string]$Exception.$field)) {
+            throw "Skill pack '$($Pack.namespace)' has an empty Codex exception '$field'."
+        }
+    }
+    if ($Script:ValidCodexScanRules -cnotcontains [string]$Exception.ruleId) {
+        throw ("Skill pack '$($Pack.namespace)' has unknown Codex exception ruleId " +
+            "'$($Exception.ruleId)'.")
+    }
+    if (-not (Test-CodexScanExceptionPath -Path ([string]$Exception.file))) {
+        throw ("Skill pack '$($Pack.namespace)' has unsafe or non-normalized Codex " +
+            "exception file '$($Exception.file)'.")
+    }
+}
+
+function Test-CodexScanExceptionPath {
+    <#
+    .SYNOPSIS
+        Tests whether a Codex exception file is a normalized relative path.
+    .PARAMETER Path
+        Forward-slash relative file path to test.
+    .EXAMPLE
+        Test-CodexScanExceptionPath -Path 'references/notes.md'
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Path)
+
+    if ([IO.Path]::IsPathRooted($Path)) { return $false }
+    if ($Path -match '[\\:*?\[\]]') { return $false }
+    if ($Path -notmatch '^[^/]+(?:/[^/]+)*$') { return $false }
+    foreach ($part in $Path.Split('/')) {
+        if ($part -in @('.', '..')) { return $false }
+    }
+    return $true
 }
 
 function Test-SkillEntrySchema {
@@ -323,7 +389,9 @@ function Test-SingleAgentSchema {
         }
     }
 
-    $reason = if ($Agent.PSObject.Properties['disabledReason']) { "$($Agent.disabledReason)" } else { '' }
+    $reason = if ($Agent.PSObject.Properties['disabledReason']) {
+        "$($Agent.disabledReason)"
+    } else { '' }
     if (-not $Agent.enabled -and -not $reason.Trim()) {
         throw "Agent '$($Agent.name)' ships disabled with no disabledReason."
     }
@@ -409,5 +477,5 @@ function Test-McpServerTransport {
 
 Export-ModuleMember -Function Get-ReAgentConfig, Test-ReAgentConfigSchema, `
     Get-ServerPortMap, Write-PortsJson, Test-SkillPackSchema, Test-SkillEntrySchema, `
-    Test-SkillPackSourceSchema, Test-SkillPackTargetsSchema, Test-SkillPackScanExceptionsSchema, `
-    Test-AgentSchema, Test-McpServerTransport
+    Test-SkillPackSourceSchema, Test-SkillPackTargetsSchema, `
+    Test-SkillPackScanExceptionsSchema, Test-AgentSchema, Test-McpServerTransport

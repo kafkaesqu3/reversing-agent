@@ -69,6 +69,26 @@ Describe 'Codex configuration' {
         { New-CodexServerTable -Result $server -TokenRoot $TestDrive } | Should -Throw '*SSE*'
     }
 
+    It 'skips legacy SSE while registering compatible servers' {
+        $target = Join-Path $TestDrive 'mixed-transports'
+        $http = Get-CodexFixture
+        $sse = Get-CodexFixture
+        $sse.Name = 'pdbsql'
+        $sse.Transport = 'sse'
+        $sse.Port = 8770
+        $sse.Path = '/sse'
+
+        { Write-CodexConfiguration -CodexHome $target -CodexPath $script:codexPath `
+                -ServerResults @($http, $sse) -ManagedNames @($http.Name, $sse.Name) `
+                -TokenRoot $TestDrive } | Should -Not -Throw
+
+        $entries = @(Invoke-CodexConfigurationCommand -CodexHome $target `
+                -CodexPath $script:codexPath -Arguments @('mcp', 'list', '--json') |
+                ConvertFrom-Json)
+        @($entries | Where-Object { $_.name -eq 'x64dbg-x64' }).Count | Should -Be 1
+        @($entries | Where-Object { $_.name -eq 'pdbsql' }).Count | Should -Be 0
+    }
+
     It 'round trips Windows stdio paths, arguments and environment through Codex' {
         $server = Get-CodexFixture
         $server.Name = 'mcp-windbg'
@@ -101,6 +121,52 @@ Describe 'Codex configuration' {
         $checks = @(Invoke-CodexVerification -Config $config -ServerResults @($server) `
             -CodexPath $script:codexPath -CodexHome $target)
         $checks[0].Status | Should -Be 'fail'
+    }
+
+    It 'passes registration when every Codex-compatible server is present and enabled SSE is omitted' {
+        $target = Join-Path $TestDrive 'verify-mixed-transports'
+        $http = Get-CodexFixture
+        $sse = Get-CodexFixture
+        $sse.Name = 'ghidrasql'
+        $sse.Transport = 'sse'
+        $sse.Port = 8771
+        $sse.Path = '/sse'
+        Write-CodexConfiguration -CodexHome $target -CodexPath $script:codexPath `
+            -ServerResults @($http) -ManagedNames @($http.Name, $sse.Name) -TokenRoot $TestDrive
+        $config = [PSCustomObject]@{
+            paths = @{ stateRoot = $target }
+            mcpServers = @($http, $sse)
+        }
+
+        $check = Get-CodexRegistrationCheck -Config $config `
+            -ServerResults @($http, $sse) -CodexPath $script:codexPath -CodexHome $target
+
+        $check.Status | Should -Be 'pass'
+        $check.Detail | Should -Match 'ghidrasql'
+        $check.Detail | Should -Match 'legacy SSE'
+    }
+
+    It 'fails registration when an unsupported SSE server remains enabled in Codex' {
+        $target = Join-Path $TestDrive 'stale-sse-registration'
+        $null = New-Item -ItemType Directory $target
+        [IO.File]::WriteAllText((Join-Path $target 'config.toml'),
+            "[mcp_servers.'ghidrasql']`nenabled = true`nurl = `"http://127.0.0.1:8771/sse`"`n")
+        $sse = Get-CodexFixture
+        $sse.Name = 'ghidrasql'
+        $sse.Transport = 'sse'
+        $sse.Port = 8771
+        $sse.Path = '/sse'
+        $config = [PSCustomObject]@{
+            paths = @{ stateRoot = $target }
+            mcpServers = @($sse)
+        }
+
+        $check = Get-CodexRegistrationCheck -Config $config -ServerResults @($sse) `
+            -CodexPath $script:codexPath -CodexHome $target
+
+        $check.Status | Should -Be 'fail'
+        $check.Detail | Should -Match 'ghidrasql'
+        $check.Detail | Should -Match 'SSE'
     }
 
     It 'removes stale owned entries when a server is no longer installed' {

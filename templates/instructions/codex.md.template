@@ -1,0 +1,20 @@
+## Skills and specialists
+- Skills are discovered under .agents/skills and invoked as $skill-name or through /skills.
+- Specialists are discovered under .codex/agents; the main session routes work to them.
+- AGENTS.md wins over a conflicting skill or specialist instruction.
+- If a skill names an MCP tool that does not exist, STOP and report it.
+  Never substitute a similar-sounding tool.
+- A skill you expect and cannot find was disabled deliberately, for a reason recorded as
+  disabledReason in re-agent.config.json. Do not reimplement it by hand and do not work
+  around its absence silently: say which capability is missing and why you stopped.
+- Ghidra provenance: pyghidra-mcp has no SourceType. Every name YOU propose is written with an
+  `ai_` prefix. When harvesting evidence, EXCLUDE `ai_*` names — a second pass that reads its
+  own output is self-corroboration, not confirmation.
+- Ghidra mutations can silently damage unrelated functions. Bracket every mutation batch with a
+  whole-program invariant (callgraph edge count) and stop on any unaccounted change.
+
+## Codex transport limitations
+- pdbsql and ghidrasql use legacy SSE and are unavailable to Codex.
+- ghidramcp is disabled and also uses legacy SSE.
+- For x64dbg, open the matching x64dbg/x32dbg host with the target loaded.
+- For Binary Ninja, run Plugins > MCP > Start Server once per application session.
