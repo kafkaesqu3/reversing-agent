@@ -176,7 +176,7 @@ owns the parts that must never drift:
 - evidence-first reporting and hexadecimal addresses;
 - the `ai_` hypothesis naming and self-corroboration rule;
 - Ghidra mutation invariant bracketing;
-- case output under `cases/<sha256>/report.md`.
+- case output under `cases/<slug>-<shorthash>/report.md`.
 
 Client tails own only client concepts. The Claude tail names `.claude/skills`,
 `.claude/agents`, and Claude routing. The Codex tail names `.agents/skills`,

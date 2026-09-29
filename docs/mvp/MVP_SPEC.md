@@ -648,7 +648,13 @@ Generated with the safety contract baked in. Minimum content:
 
 ## Workflow
 - Deterministic tools first (imports, entropy, strings), then reasoning.
-- Write findings to cases/<sha256>/report.md. Use todos for multi-step work.
+- Name the case from the sample: prefer an inferred name (PE internal name, PDB
+  path, product/version-resource name); fall back to the given filename if none
+  is found. Slug it (lowercase, non-alphanumeric -> _, collapsed) and append the
+  first 6-8 hex chars of the sha256, e.g. cases/svchost_dropper-e678d1/. Reuse the
+  existing folder on re-analysis of the same hash regardless of slug. Record the
+  full sha256 in the case's report.md. Write findings to cases/<slug>-<shorthash>/report.md.
+  Use todos for multi-step work.
 ```
 
 ---

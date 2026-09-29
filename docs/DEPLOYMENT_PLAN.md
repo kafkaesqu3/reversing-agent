@@ -95,7 +95,7 @@ Sophisticated samples detect virtualization and go dormant. Reducing VM artifact
 │ WINDOWS FLARE VM                          ← the only provisioned │
 │                                              machine in the MVP  │
 │  Claude Code  ──.mcp.json──┐                                     │
-│  cases/<sha256>/           │  all servers bound 127.0.0.1        │
+│  cases/<slug>-<hash>/      │  all servers bound 127.0.0.1        │
 │                            ├─→ x64dbg      + MCP plugin          │
 │                            ├─→ WinDbg/cdb  + MCP wrapper         │
 │                            ├─→ Ghidra      + MCP plugin/bridge   │
@@ -115,7 +115,7 @@ The tool plane and the agent share one box; only model calls cross the boundary.
 ┌─────────────────────────────────────────────────────────────────┐
 │ AGENT HOST (WSL2 / Spark / orchestrator VM)                     │
 │   Claude Code · Codex CLI · opencode                            │
-│   cases/<sha256>/  ← case state lives here in Profile B         │
+│   cases/<slug>-<hash>/  ← case state lives here in Profile B    │
 │   .mcp.json → points at BOTH local static and remote dynamic    │
 └────────────────────────┬────────────────────────────────────────┘
                          │
@@ -490,7 +490,13 @@ In Profile B the same generator runs **on the agent host**, pointing at the VM's
 ## Workflow
 - Deterministic tools first (capa, YARA, imports, entropy), then reasoning.
 - Prefer a TTD trace over live debugging. Snapshot before any live run.
-- Write findings to cases/<sha256>/report.md. Use todos for multi-step work.
+- Name the case from the sample: prefer an inferred name (PE internal name, PDB
+  path, product/version-resource name); fall back to the given filename if none
+  is found. Slug it (lowercase, non-alphanumeric -> _, collapsed) and append the
+  first 6-8 hex chars of the sha256, e.g. cases/svchost_dropper-e678d1/. Reuse the
+  existing folder on re-analysis of the same hash regardless of slug. Record the
+  full sha256 in the case's report.md. Write findings to cases/<slug>-<shorthash>/report.md.
+  Use todos for multi-step work.
 ```
 
 **Skills to vendor** (pin every one to a commit hash — see Part 8):
@@ -719,6 +725,8 @@ param([Parameter(Mandatory)][string]$CaseId,
 # 2. Rotate ALL MCP bearer tokens — golden-image tokens are shared by every clone
 # 3. Regenerate .mcp.json (both sides) with the new tokens and this clone's IP
 # 4. Create C:\re\cases\<CaseId>\ with the standard structure
+#    (CaseId = <slug>-<shorthash>: slug inferred from the sample or its filename,
+#    shorthash = first 6-8 hex chars of the sha256 computed in step 5)
 # 5. Ingest the sample: hash it, store read-only in C:\re\samples\<sha256>, log provenance
 # 6. Pre-run capa + YARA + PE parse, write results into the case dir as ground truth
 # 7. Emit the agent-host client config
