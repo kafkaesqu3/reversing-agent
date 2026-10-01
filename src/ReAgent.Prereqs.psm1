@@ -10,6 +10,12 @@ $Script:WingetIds = @{
     jdk    = 'EclipseAdoptium.Temurin.21.JDK'
 }
 
+$Script:ChocolateyIds = @{
+    python = 'python'
+    uv     = 'uv'
+    jdk    = 'Temurin21'
+}
+
 $Script:AgentCliPackages = [ordered]@{
     codex  = '@openai/codex@latest'
     claude = '@anthropic-ai/claude-code@latest'
@@ -211,6 +217,13 @@ function Install-Prereq {
     [CmdletBinding(SupportsShouldProcess)]
     param([Parameter(Mandatory)][object]$Inventory)
 
+    $winget = Find-Executable -Name 'winget'
+    $choco = if ($winget) { $null } else { Find-Executable -Name 'choco' }
+    if (-not $winget -and -not $choco) {
+        throw ('Neither winget nor Chocolatey is available. Install Microsoft App Installer ' +
+            '(winget) or rerun the FLARE setup that provides Chocolatey, then rerun this installer.')
+    }
+
     foreach ($item in @(Get-MissingPrereq -Inventory $Inventory)) {
         if ($item -eq 'cdb') {
             throw @'
@@ -226,11 +239,19 @@ via Get-AppxPackage, so no PATH edit is needed.
         if (-not $Script:WingetIds.ContainsKey($item)) {
             throw "No install route is defined for prerequisite '$item'."
         }
-        $id = $Script:WingetIds[$item]
-        Write-ReAgentLog -Level INFO -Message "Installing '$item' ($id) via winget."
-        Invoke-CommandLine -FilePath 'winget' -Arguments @(
-            'install', '--id', $id, '--silent',
-            '--accept-package-agreements', '--accept-source-agreements')
+        if ($winget) {
+            $id = $Script:WingetIds[$item]
+            Write-ReAgentLog -Level INFO -Message "Installing '$item' ($id) via winget."
+            Invoke-CommandLine -FilePath $winget -Arguments @(
+                'install', '--id', $id, '--silent',
+                '--accept-package-agreements', '--accept-source-agreements')
+        } else {
+            $id = $Script:ChocolateyIds[$item]
+            Write-ReAgentLog -Level INFO -Message "Installing '$item' ($id) via Chocolatey."
+            Invoke-CommandLine -FilePath $choco -Arguments @(
+                'install', $id, '--yes', '--no-progress', '--limit-output')
+        }
+        Update-ProcessPath
     }
 }
 

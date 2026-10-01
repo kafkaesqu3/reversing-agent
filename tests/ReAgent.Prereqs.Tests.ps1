@@ -111,6 +111,23 @@ Describe 'Test-PrereqSatisfied' {
 }
 
 Describe 'Install-Prereq' {
+    It 'falls back to Chocolatey when winget is unavailable' {
+        Mock -ModuleName ReAgent.Prereqs Get-MissingPrereq { @('uv') }
+        Mock -ModuleName ReAgent.Prereqs Find-Executable {
+            param($Name)
+            if ($Name -eq 'choco') { return 'C:\\ProgramData\\chocolatey\\bin\\choco.exe' }
+            return $null
+        }
+        Mock -ModuleName ReAgent.Prereqs Invoke-CommandLine { }
+
+        Install-Prereq -Inventory ([PSCustomObject]@{}) -Confirm:$false
+
+        Should -Invoke -ModuleName ReAgent.Prereqs Invoke-CommandLine -ParameterFilter {
+            $FilePath -eq 'C:\\ProgramData\\chocolatey\\bin\\choco.exe' -and
+            ($Arguments -join ' ') -eq 'install uv --yes --no-progress --limit-output'
+        } -Times 1 -Exactly
+    }
+
     It 'refuses to install cdb silently and explains both routes' {
         Mock -ModuleName ReAgent.Prereqs Get-MissingPrereq { @('cdb') }
         { Install-Prereq -Inventory ([PSCustomObject]@{}) -Confirm:$false } |
