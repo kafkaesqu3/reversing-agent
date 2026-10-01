@@ -41,8 +41,9 @@ it does not assume a clean baseline) leaves you with:
 # Verify only, including tier-2 checks that need GUI tools open
 .\Install-REAgent.ps1 -VerifyOnly -Attended
 
-# Reconcile Codex by itself, without running the combined installer
-.\install-codex.ps1 -ConfigureOnly
+# The full installer provisions missing Codex and Claude Code CLIs, then
+# configures both clients in the same PowerShell session.
+.\Install-REAgent.ps1
 ```
 
 Codex supports the STDIO and Streamable HTTP entries. The legacy SSE-only `pdbsql`,

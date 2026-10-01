@@ -210,7 +210,10 @@ Declarative, so the runner is generic. Network is required throughout; there is 
 project runs a zero-warnings policy. Phases whose Test column is — have a `{ $false }` test block:
 they are cheap, derived, or must re-observe the host every run.
 
-**Claude Code is not installed by this script.** It is already present on the target and is treated as a discovered prerequisite (Phase 0), not something to provision. The script still *verifies* it — see Phase 0 and §9.
+**Codex and Claude Code are installed by this script when missing.** Before Phase 0,
+the script bootstraps Node.js LTS if needed, globally installs both CLIs with npm,
+and makes npm's global-bin directory available on the user and current-session PATH.
+Authentication remains interactive.
 
 ### Phase wrapper contract
 
@@ -249,7 +252,8 @@ Discovery, not installation. Produce an inventory object consumed by every later
 - Not a virtual machine (check SMBIOS / `Win32_ComputerSystem.Model`) — warn loudly; this script assumes a VM and RE tooling should not be installed on a host
 - PowerShell < 5.1
 - No network
-- **Claude Code absent.** It is a prerequisite, not something this script installs. Abort with an instruction to install it and re-run.
+- **Claude Code absent after bootstrap.** Abort with an instruction to confirm the
+  current analyst user can run `claude --version` and re-run.
 
 **DISCOVER and record for each: presence, version, install path.**
 

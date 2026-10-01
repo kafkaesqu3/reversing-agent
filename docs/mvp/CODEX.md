@@ -8,20 +8,9 @@ directory in Windows PowerShell 5.1 or later:
 ```
 
 A full run requires an elevated shell **under the analyst's Windows account** on
-the FLARE VM. Both Claude Code and Codex CLI must already be installed.
-Authentication remains interactive. The standalone `install-codex.ps1` does not
-require Claude Code.
-
-To reconcile Codex by itself after the services are installed, use:
-
-```powershell
-.\install-codex.ps1 -ConfigureOnly
-```
-
-This reads the recorded installation and merges its MCP entries into Codex without
-installing packages, replacing plugins, changing symbols, or restarting services.
-It can run unelevated when the analyst can read the existing tokens and write the
-report directory. Both modes run unattended live checks after registration.
+the FLARE VM. Missing Codex and Claude Code CLIs are installed with npm; the
+installer bootstraps Node.js LTS when necessary and adds npm's global-bin directory
+to the user and current-session PATH. Authentication remains interactive.
 
 ## Configuration and verification
 
@@ -30,9 +19,9 @@ The default destination is `$env:CODEX_HOME\config.toml`, or
 directory with `-CodexHome`. Override the source JSON with `-ConfigPath`.
 
 ```powershell
-.\install-codex.ps1 -WhatIf
-.\install-codex.ps1 -VerifyOnly
-.\install-codex.ps1 -VerifyOnly -Attended
+.\Install-REAgent.ps1 -WhatIf
+.\Install-REAgent.ps1 -VerifyOnly
+.\Install-REAgent.ps1 -VerifyOnly -Attended
 ```
 
 `-WhatIf` validates the source JSON and reports the operation without changing the
@@ -74,8 +63,7 @@ copy before replacement, and malformed configuration leaves the original intact.
 Changed files receive a `config.toml.<unique-id>.bak` backup. An unchanged run leaves
 the configuration and backups untouched.
 
-The standalone script reuses the main installer's service setup but does not install the
-Claude-specific skills. `Install-REAgent.ps1` remains the normal combined entry point.
+`Install-REAgent.ps1` is the sole installer and reconciles both clients together.
 
 Reports live under `paths.stateRoot` from the JSON configuration:
 
@@ -83,9 +71,9 @@ Reports live under `paths.stateRoot` from the JSON configuration:
   verification results, authentication exceptions, and manual steps.
 - `codex-verify-report.json`: registration and live tool check results.
 
-`-ConfigureOnly` and `-VerifyOnly` prefer the Codex installation manifest and fall
-back to the original `manifest.json` when no Codex manifest exists. Verification
-does not overwrite installation state. Exit codes are `0` for a completed run with
+`-VerifyOnly` prefers the Codex installation manifest and falls back to the original
+`manifest.json` when no Codex manifest exists. Verification does not overwrite
+installation state. Exit codes are `0` for a completed run with
 no failures, `1` for installation/configuration/verification failures, and `2` for
 preflight blockers. GUI checks omitted without `-Attended` are `not-testable`.
 

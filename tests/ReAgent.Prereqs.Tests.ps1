@@ -131,3 +131,79 @@ Describe 'Install-Prereq' {
         Should -Invoke -ModuleName ReAgent.Prereqs Invoke-CommandLine -Times 0 -Exactly
     }
 }
+
+Describe 'Install-AgentCli' {
+    It 'installs each missing CLI, persists its npm bin directory, and makes it available now' {
+        $script:resolved = @{ node = 'C:\\Program Files\\nodejs\\node.exe'; npm = 'C:\\Program Files\\nodejs\\npm.cmd' }
+        Mock -ModuleName ReAgent.Prereqs Find-Executable {
+            param($Name)
+            if ($script:resolved.ContainsKey($Name)) { return $script:resolved[$Name] }
+            return $null
+        }
+        Mock -ModuleName ReAgent.Prereqs Invoke-CommandLine {
+            param($FilePath, $Arguments)
+            $null = $FilePath
+            if ($Arguments -join ' ' -eq 'config get prefix') { return 'C:\\Users\\analyst\\AppData\\Roaming\\npm' }
+            if ($Arguments[0] -eq 'install') {
+                if ($Arguments[-1] -eq '@openai/codex@latest') { $script:resolved.codex = 'C:\\Users\\analyst\\AppData\\Roaming\\npm\\codex.cmd' }
+                if ($Arguments[-1] -eq '@anthropic-ai/claude-code@latest') { $script:resolved.claude = 'C:\\Users\\analyst\\AppData\\Roaming\\npm\\claude.cmd' }
+            }
+        }
+        Mock -ModuleName ReAgent.Prereqs Add-UserPathEntry { }
+
+        $installed = @(Install-AgentCli -Confirm:$false)
+
+        $installed | Should -Contain 'codex'
+        $installed | Should -Contain 'claude'
+        Should -Invoke -ModuleName ReAgent.Prereqs Invoke-CommandLine -ParameterFilter {
+            $FilePath -eq 'C:\\Program Files\\nodejs\\npm.cmd' -and
+            ($Arguments -join ' ') -eq 'install -g @openai/codex@latest'
+        } -Times 1 -Exactly
+        Should -Invoke -ModuleName ReAgent.Prereqs Invoke-CommandLine -ParameterFilter {
+            $FilePath -eq 'C:\\Program Files\\nodejs\\npm.cmd' -and
+            ($Arguments -join ' ') -eq 'install -g @anthropic-ai/claude-code@latest'
+        } -Times 1 -Exactly
+        Should -Invoke -ModuleName ReAgent.Prereqs Add-UserPathEntry -ParameterFilter {
+            $PathEntry -eq 'C:\\Users\\analyst\\AppData\\Roaming\\npm'
+        } -Times 1 -Exactly
+    }
+
+    It 'installs Node.js before the CLIs when npm is absent' {
+        $script:resolved = @{}
+        Mock -ModuleName ReAgent.Prereqs Find-Executable {
+            param($Name)
+            if ($script:resolved.ContainsKey($Name)) { return $script:resolved[$Name] }
+            return $null
+        }
+        Mock -ModuleName ReAgent.Prereqs Invoke-CommandLine {
+            param($FilePath, $Arguments)
+            if ($FilePath -eq 'winget') {
+                $script:resolved.node = 'C:\\Program Files\\nodejs\\node.exe'
+                $script:resolved.npm = 'C:\\Program Files\\nodejs\\npm.cmd'
+            }
+            if ($Arguments -join ' ' -eq 'config get prefix') { return 'C:\\Users\\analyst\\AppData\\Roaming\\npm' }
+            if ($Arguments[0] -eq 'install') {
+                if ($Arguments[-1] -eq '@openai/codex@latest') { $script:resolved.codex = 'C:\\Users\\analyst\\AppData\\Roaming\\npm\\codex.cmd' }
+                if ($Arguments[-1] -eq '@anthropic-ai/claude-code@latest') { $script:resolved.claude = 'C:\\Users\\analyst\\AppData\\Roaming\\npm\\claude.cmd' }
+            }
+        }
+        Mock -ModuleName ReAgent.Prereqs Add-UserPathEntry { }
+
+        Install-AgentCli -Confirm:$false
+
+        Should -Invoke -ModuleName ReAgent.Prereqs Invoke-CommandLine -ParameterFilter {
+            $FilePath -eq 'winget' -and ($Arguments -join ' ') -match 'OpenJS.NodeJS.LTS'
+        } -Times 1 -Exactly
+    }
+
+    It 'does nothing when both CLIs are already available' {
+        Mock -ModuleName ReAgent.Prereqs Find-Executable {
+            param($Name)
+            @{ codex = 'C:\\tools\\codex.cmd'; claude = 'C:\\tools\\claude.cmd' }[$Name]
+        }
+        Mock -ModuleName ReAgent.Prereqs Invoke-CommandLine { }
+
+        @(Install-AgentCli -Confirm:$false) | Should -BeNullOrEmpty
+        Should -Invoke -ModuleName ReAgent.Prereqs Invoke-CommandLine -Times 0 -Exactly
+    }
+}

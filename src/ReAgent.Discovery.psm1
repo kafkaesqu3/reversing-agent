@@ -506,9 +506,9 @@ function Test-Preflight {
         $blockers += 'Codex CLI was not found. Install Codex as the analyst user and confirm "codex --version" works.'
     }
     if ($Agent -eq 'Claude' -and -not $Inventory.ClaudeCode) {
-        $blockers += ('Claude Code was not found for the current user. It is a prerequisite, ' +
-            'not installed by this script. Install it, confirm "claude --version" works ' +
-            'as the analyst user, then re-run.')
+        $blockers += ('Claude Code was not found for the current user. A full installation ' +
+            'bootstraps it before preflight; confirm "claude --version" works as the analyst ' +
+            'user, then re-run.')
     }
     if ($PSVersionTable.PSVersion -lt [version]'5.1') {
         $blockers += ("PowerShell $($PSVersionTable.PSVersion) is too old. " +

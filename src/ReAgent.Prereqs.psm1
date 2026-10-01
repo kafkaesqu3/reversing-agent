@@ -10,6 +10,106 @@ $Script:WingetIds = @{
     jdk    = 'EclipseAdoptium.Temurin.21.JDK'
 }
 
+$Script:AgentCliPackages = [ordered]@{
+    codex  = '@openai/codex@latest'
+    claude = '@anthropic-ai/claude-code@latest'
+}
+
+function Update-ProcessPath {
+    <#
+    .SYNOPSIS
+        Refreshes this PowerShell process from the persisted Windows PATH values.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param([string[]]$AdditionalPath = @())
+
+    $entries = [Collections.Generic.List[string]]::new()
+    foreach ($value in @(
+            $env:Path,
+            [Environment]::GetEnvironmentVariable('Path', 'Machine'),
+            [Environment]::GetEnvironmentVariable('Path', 'User')) + $AdditionalPath) {
+        foreach ($entry in @([string]$value -split ';')) {
+            $entry = $entry.Trim()
+            if ($entry -and -not ($entries | Where-Object { $_ -eq $entry })) {
+                $entries.Add($entry)
+            }
+        }
+    }
+    if ($PSCmdlet.ShouldProcess('current PowerShell process', 'Refresh PATH')) {
+        $env:Path = $entries -join ';'
+    }
+}
+
+function Add-UserPathEntry {
+    <#
+    .SYNOPSIS
+        Adds one executable directory to the current user's PATH and this session.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$PathEntry)
+
+    $PathEntry = $PathEntry.Trim()
+    if (-not $PathEntry) { throw 'A PATH entry cannot be empty.' }
+
+    $userEntries = @([Environment]::GetEnvironmentVariable('Path', 'User') -split ';') |
+        ForEach-Object { $_.Trim() } | Where-Object { $_ }
+    if (-not ($userEntries | Where-Object { $_ -eq $PathEntry })) {
+        [Environment]::SetEnvironmentVariable('Path', (@($userEntries) + $PathEntry) -join ';', 'User')
+    }
+    Update-ProcessPath -AdditionalPath @($PathEntry)
+}
+
+function Install-AgentCli {
+    <#
+    .SYNOPSIS
+        Installs missing Codex and Claude Code CLIs for the invoking user.
+    .DESCRIPTION
+        Both CLIs are globally installed through npm. Node.js LTS is provisioned
+        through winget only if npm is absent. The npm global prefix is persisted
+        on the user PATH and merged into this process before commands are
+        resolved again, so the remainder of the installer can use them now.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
+
+    $missing = @($Script:AgentCliPackages.Keys | Where-Object {
+            -not (Find-Executable -Name $_)
+        })
+    if ($missing.Count -eq 0) { return }
+
+    $npm = Find-Executable -Name 'npm'
+    if (-not $npm) {
+        if (-not $PSCmdlet.ShouldProcess('Node.js LTS', 'Install prerequisite for Codex and Claude Code')) {
+            return
+        }
+        Write-ReAgentLog -Level INFO -Message 'Installing Node.js LTS for the agent CLIs via winget.'
+        Invoke-CommandLine -FilePath 'winget' -Arguments @(
+            'install', '--id', 'OpenJS.NodeJS.LTS', '--silent',
+            '--accept-package-agreements', '--accept-source-agreements')
+        Update-ProcessPath
+        $npm = Find-Executable -Name 'npm'
+        if (-not $npm) { throw 'Node.js installation completed, but npm is still unavailable on PATH.' }
+    }
+
+    $prefix = (@(Invoke-CommandLine -FilePath $npm -Arguments @('config', 'get', 'prefix')) |
+        Where-Object { $_ -and $_ -notmatch '^npm error' } | Select-Object -First 1)
+    if (-not $prefix) { throw 'Could not determine npm''s global install prefix.' }
+    Add-UserPathEntry -PathEntry ([string]$prefix)
+
+    $installed = @()
+    foreach ($name in $missing) {
+        if (-not $PSCmdlet.ShouldProcess($name, "Install $($Script:AgentCliPackages[$name])")) { continue }
+        Write-ReAgentLog -Level INFO -Message "Installing '$name' via npm."
+        Invoke-CommandLine -FilePath $npm -Arguments @('install', '-g', $Script:AgentCliPackages[$name])
+        Update-ProcessPath -AdditionalPath @([string]$prefix)
+        if (-not (Find-Executable -Name $name)) {
+            throw "'$name' was installed but is not available on PATH."
+        }
+        $installed += $name
+    }
+    return $installed
+}
+
 function Get-GhidraJavaMinimum {
     <#
     .SYNOPSIS
@@ -135,4 +235,4 @@ via Get-AppxPackage, so no PATH edit is needed.
 }
 
 Export-ModuleMember -Function Get-GhidraJavaMinimum, Get-MissingPrereq, `
-    Test-PrereqSatisfied, Install-Prereq
+    Test-PrereqSatisfied, Install-Prereq, Install-AgentCli, Add-UserPathEntry, Update-ProcessPath

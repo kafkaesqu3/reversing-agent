@@ -2,9 +2,10 @@
 .SYNOPSIS
     Wires Claude Code and Codex to RE tools via MCP on an existing FLARE VM.
 .DESCRIPTION
-    Adopt-and-reconcile: inventories the host, installs only what is missing, and
-    generates all agent configuration from re-agent.config.json. Idempotent - a
-    second run reports every phase skipped and regenerates byte-identical config.
+    Adopt-and-reconcile: installs missing Codex and Claude Code CLIs, inventories
+    the host, installs only other missing prerequisites, and generates all agent
+    configuration from re-agent.config.json. Idempotent - a second run reports
+    every phase skipped and regenerates byte-identical config.
 
     Phase bodies live in src\ReAgent.*.psm1. The table below is runtime execution
     order; docs/mvp/MVP_PLAN.md gives the development order, which differs
@@ -77,12 +78,18 @@ foreach ($m in $moduleNames) {
 }
 
 $config = Get-ReAgentConfig -Path $ConfigPath
-$codexCommand = Get-Command codex -ErrorAction SilentlyContinue
-$codexPath = if ($codexCommand) { $codexCommand.Source } else { '' }
 
 if (-not $PSCmdlet.ShouldProcess($env:COMPUTERNAME, 'Wire Claude Code and Codex to the RE tools via MCP')) {
     return
 }
+
+# A verification-only run must not modify the machine. A normal install
+# provisions both agent CLIs before inventory so Phase 0 sees their fresh paths.
+if (-not $VerifyOnly -and (-not $Phases -or $Phases -contains 0)) {
+    $null = Install-AgentCli -WhatIf:$WhatIfPreference
+}
+$codexCommand = Get-Command codex -ErrorAction SilentlyContinue
+$codexPath = if ($codexCommand) { $codexCommand.Source } else { '' }
 
 $null = New-Item -ItemType Directory -Path $config.paths.stateRoot -Force
 # Created elevated, so it would otherwise inherit ProgramData's defaults and

@@ -1,6 +1,6 @@
 # MVP — Agent-Wired FLARE VM
 
-**Codex extension:** `install-codex.ps1` now reuses these MCP services for Codex.
+**Codex extension:** `Install-REAgent.ps1` reuses these MCP services for Codex.
 See [CODEX.md](CODEX.md) for installation, configuration, and verification commands.
 The Claude MVP history below remains the baseline.
 
