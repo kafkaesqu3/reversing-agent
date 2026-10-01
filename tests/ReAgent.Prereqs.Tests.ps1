@@ -143,7 +143,7 @@ Describe 'Install-AgentCli' {
         Mock -ModuleName ReAgent.Prereqs Invoke-CommandLine {
             param($FilePath, $Arguments)
             $null = $FilePath
-            if ($Arguments -join ' ' -eq 'config get prefix') { return 'C:\\Users\\analyst\\AppData\\Roaming\\npm' }
+            if ($Arguments -join ' ' -eq 'prefix -g') { return 'C:\\Users\\analyst\\AppData\\Roaming\\npm' }
             if ($Arguments[0] -eq 'install') {
                 if ($Arguments[-1] -eq '@openai/codex@latest') { $script:resolved.codex = 'C:\\Users\\analyst\\AppData\\Roaming\\npm\\codex.cmd' }
                 if ($Arguments[-1] -eq '@anthropic-ai/claude-code@latest') { $script:resolved.claude = 'C:\\Users\\analyst\\AppData\\Roaming\\npm\\claude.cmd' }
@@ -181,7 +181,7 @@ Describe 'Install-AgentCli' {
                 $script:resolved.node = 'C:\\Program Files\\nodejs\\node.exe'
                 $script:resolved.npm = 'C:\\Program Files\\nodejs\\npm.cmd'
             }
-            if ($Arguments -join ' ' -eq 'config get prefix') { return 'C:\\Users\\analyst\\AppData\\Roaming\\npm' }
+            if ($Arguments -join ' ' -eq 'prefix -g') { return 'C:\\Users\\analyst\\AppData\\Roaming\\npm' }
             if ($Arguments[0] -eq 'install') {
                 if ($Arguments[-1] -eq '@openai/codex@latest') { $script:resolved.codex = 'C:\\Users\\analyst\\AppData\\Roaming\\npm\\codex.cmd' }
                 if ($Arguments[-1] -eq '@anthropic-ai/claude-code@latest') { $script:resolved.claude = 'C:\\Users\\analyst\\AppData\\Roaming\\npm\\claude.cmd' }

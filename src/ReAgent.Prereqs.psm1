@@ -91,7 +91,7 @@ function Install-AgentCli {
         if (-not $npm) { throw 'Node.js installation completed, but npm is still unavailable on PATH.' }
     }
 
-    $prefix = (@(Invoke-CommandLine -FilePath $npm -Arguments @('config', 'get', 'prefix')) |
+    $prefix = (@(Invoke-CommandLine -FilePath $npm -Arguments @('prefix', '-g')) |
         Where-Object { $_ -and $_ -notmatch '^npm error' } | Select-Object -First 1)
     if (-not $prefix) { throw 'Could not determine npm''s global install prefix.' }
     Add-UserPathEntry -PathEntry ([string]$prefix)
