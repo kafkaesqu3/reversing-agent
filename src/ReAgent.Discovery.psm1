@@ -40,7 +40,14 @@ function Find-Executable {
 
     try {
         $out = Invoke-CommandLine -FilePath 'where.exe' -Arguments @($Name)
-        $first = @($out) | Where-Object { $_ -and $_ -notmatch '^INFO:' } | Select-Object -First 1
+        $candidates = @($out) | Where-Object { $_ -and $_ -notmatch '^INFO:' }
+        # Node's Windows distribution exposes an extensionless Unix shim before
+        # npm.cmd. PowerShell cannot execute that shim through a pipeline, so
+        # prefer the first Windows-runnable result when where.exe lists both.
+        $first = @($candidates | Where-Object {
+                [IO.Path]::GetExtension([string]$_) -in @('.exe', '.cmd', '.bat', '.com', '.ps1')
+            } | Select-Object -First 1)
+        if (-not $first) { $first = @($candidates | Select-Object -First 1) }
         if ($first) { return ([string]$first).Trim() }
         return $null
     } catch {

@@ -55,6 +55,13 @@ Describe 'Find-Executable' {
         }
         Find-Executable -Name 'python' | Should -Be 'C:\ProgramData\chocolatey\bin\python.exe'
     }
+    It 'prefers a Windows-runnable shim over npm''s extensionless Unix shim' {
+        Mock -ModuleName ReAgent.Discovery Invoke-CommandLine {
+            @('C:\Program Files\nodejs\npm', 'C:\Program Files\nodejs\npm.cmd',
+                'C:\Program Files\nodejs\npm.ps1')
+        }
+        Find-Executable -Name 'npm' | Should -Be 'C:\Program Files\nodejs\npm.cmd'
+    }
     It 'ignores the INFO line where.exe emits when nothing matches' {
         Mock -ModuleName ReAgent.Discovery Invoke-CommandLine {
             'INFO: Could not find files for the given pattern(s).'
