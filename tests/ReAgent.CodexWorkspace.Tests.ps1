@@ -377,6 +377,27 @@ Describe 'Set-ManagedTextFile' {
         @(Get-TestManagedSibling -Path $path -Kind pending).Count | Should -Be 0
     }
 
+    It 'atomically updates a changed marked file without retaining a backup when disabled' {
+        $root = Join-Path $TestDrive 'updated-without-backup'
+        $null = New-Item -ItemType Directory -Path $root
+        $path = Join-Path $root 'static-analyst.toml'
+        $old = "$script:ManagedMarker`n# old`n"
+        $candidate = "$script:ManagedMarker`n# replacement`n"
+        Write-TestUtf8File -Path $path -Text $old
+
+        $result = Set-ManagedTextFile -Path $path -Text $candidate `
+            -Marker $script:ManagedMarker -BackupOnChange $false
+
+        Get-Content -LiteralPath $path -Raw | Should -Be $candidate
+        $result.Status | Should -Be 'updated'
+        $result.Changed | Should -BeTrue
+        $result.BackupPath | Should -Be ''
+        @(Get-TestManagedSibling -Path $path -Kind pending).Count | Should -Be 0
+        @(Get-TestManagedSibling -Path $path -Kind bak).Count | Should -Be 0
+        @(Get-ChildItem -LiteralPath $root -File | Where-Object { $_.FullName -ne $path }).Count |
+            Should -Be 0
+    }
+
     It 'preserves hash and timestamp when invoked twice with equal bytes' {
         $root = Join-Path $TestDrive 'unchanged'
         $null = New-Item -ItemType Directory -Path $root

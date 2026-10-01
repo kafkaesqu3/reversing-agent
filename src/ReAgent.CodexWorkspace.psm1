@@ -59,15 +59,19 @@ function Invoke-ManagedTextReplace {
         [AllowEmptyString()][string]$BackupPath = ''
     )
 
+    $replacementBackup = if ($BackupPath) { $BackupPath } else { "$PendingPath.backup" }
+    $discardReplacementBackup = -not $BackupPath
     try {
         [IO.File]::WriteAllBytes($PendingPath, $Bytes)
         if (-not $DestinationExists) {
             [IO.File]::Move($PendingPath, $Path)
         } else {
-            $backup = if ($BackupPath) { $BackupPath } else { $null }
-            [IO.File]::Replace($PendingPath, $Path, $backup)
+            [IO.File]::Replace($PendingPath, $Path, $replacementBackup)
         }
     } finally {
+        if ($discardReplacementBackup -and (Test-Path -LiteralPath $replacementBackup)) {
+            Remove-Item -LiteralPath $replacementBackup -Force
+        }
         if (Test-Path -LiteralPath $PendingPath) {
             Remove-Item -LiteralPath $PendingPath -Force
         }
